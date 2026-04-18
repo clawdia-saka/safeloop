@@ -22,13 +22,20 @@ The demo in `examples/github_pr_demo.py` shows one concrete side-effecting actio
 a fake GitHub `create_pull_request` call marked as a compensatable write. If a
 follow-up step fails, the demo triggers compensation by calling `close_pr`.
 
+Run it from the repository root:
+
+```bash
+python examples/github_pr_demo.py
+```
+
+Or import it from a Python snippet started from the repository root:
+
 ```python
 from examples.github_pr_demo import run_github_pr_demo
 
 
 def fake_create_pr(*, repo: str, title: str, body: str) -> dict[str, object]:
     return {"number": 101, "url": f"https://example.test/{repo}/pull/101"}
-
 
 
 def fake_close_pr(*, repo: str, pr_number: int) -> None:

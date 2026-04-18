@@ -1,5 +1,10 @@
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable
+import sys
+
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from safeloop.journal import JournalState
 from safeloop.types import ActionEnvelope, EffectClass
@@ -76,3 +81,24 @@ def run_github_pr_demo(
         compensation_triggered=False,
         error=None,
     )
+
+
+if __name__ == "__main__":
+    def fake_create_pr(*, repo: str, title: str, body: str) -> dict[str, object]:
+        return {"number": 101, "url": f"https://example.test/{repo}/pull/101"}
+
+    def fake_close_pr(*, repo: str, pr_number: int) -> None:
+        print(f"Closed PR #{pr_number} for {repo}")
+
+    result = run_github_pr_demo(
+        repo="nous/safeloop",
+        title="Add rollback-safe demo",
+        body="This is a demo PR.",
+        actor="builder-bot",
+        create_pr=fake_create_pr,
+        close_pr=fake_close_pr,
+        fail_after_create=True,
+    )
+
+    print(result.final_state.value)
+    print(result.compensation_triggered)

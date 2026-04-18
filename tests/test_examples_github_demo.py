@@ -33,6 +33,12 @@ def test_run_github_pr_demo_applies_create_pr_without_compensation() -> None:
     assert result.pr == {"number": 101, "url": "https://example.test/pr/101"}
     assert result.action.name == "github.create_pull_request"
     assert result.action.effect is EffectClass.COMPENSATABLE_WRITE
+    assert result.journal_states == [
+        JournalState.PROPOSED,
+        JournalState.APPROVED,
+        JournalState.EXECUTING,
+        JournalState.APPLIED,
+    ]
 
 
 

@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "safeloop"
+version = "0.1.0"
+description = "Transactional runtime skeleton"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [{ name = "Nous Research" }]
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]

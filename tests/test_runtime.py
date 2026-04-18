@@ -7,7 +7,7 @@ from safeloop.hooks import (
     ApprovalHookRegistry,
     CompensationHookRegistry,
 )
-from safeloop.journal import JournalState
+from safeloop.journal import JournalState, validate_transition
 from safeloop.runtime import ResumableExecution, Runtime
 from safeloop.types import ActionEnvelope, EffectClass
 
@@ -179,6 +179,10 @@ def test_compensation_hook_failure_marks_run_failed(tmp_path) -> None:
         JournalState.COMPENSATING,
         JournalState.FAILED,
     ]
+
+
+def test_compensating_can_fail_terminally() -> None:
+    validate_transition(JournalState.COMPENSATING, JournalState.FAILED)
 
 
 def test_resumable_state_can_be_reentered_and_continued(tmp_path) -> None:

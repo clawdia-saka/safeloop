@@ -47,10 +47,11 @@ class CompensationHookRegistry:
     def register(self, hook: CompensationHook) -> None:
         self._hooks.append(hook)
 
-    def run(self, action: ActionEnvelope, error: Exception) -> list[None]:
+    def run(self, action: ActionEnvelope, error: Exception) -> None:
         if action.effect is not EffectClass.COMPENSATABLE_WRITE:
-            return []
-        return [hook(action, error) for hook in self._hooks]
+            return
+        for hook in self._hooks:
+            hook(action, error)
 
 
 __all__ = [

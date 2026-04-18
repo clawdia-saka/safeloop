@@ -34,6 +34,19 @@ def test_approval_hook_registry_returns_allow_block_or_escalate() -> None:
         assert registry.evaluate(action) is decision
 
 
+def test_approval_hook_registry_short_circuits_on_first_non_allow() -> None:
+    action = make_action(EffectClass.REVERSIBLE_WRITE)
+    calls: list[str] = []
+
+    registry = ApprovalHookRegistry()
+    registry.register(lambda envelope: calls.append("first") or ApprovalDecision.ALLOW)
+    registry.register(lambda envelope: calls.append("second") or ApprovalDecision.BLOCK)
+    registry.register(lambda envelope: calls.append("third") or ApprovalDecision.ESCALATE)
+
+    assert registry.evaluate(action) is ApprovalDecision.BLOCK
+    assert calls == ["first", "second"]
+
+
 def test_compensation_hook_registry_runs_for_compensatable_actions() -> None:
     compensatable_action = make_action(EffectClass.COMPENSATABLE_WRITE)
     irreversible_action = make_action(EffectClass.IRREVERSIBLE_WRITE)
@@ -45,4 +58,16 @@ def test_compensation_hook_registry_runs_for_compensatable_actions() -> None:
     registry.run(compensatable_action, RuntimeError("boom"))
 
     assert calls == [("apply_change", "boom")]
-    assert registry.run(irreversible_action, RuntimeError("skip")) == []
+    assert registry.run(irreversible_action, RuntimeError("skip")) is None
+
+
+def test_compensation_hook_registry_runs_multiple_hooks_for_compensatable_actions() -> None:
+    action = make_action(EffectClass.COMPENSATABLE_WRITE)
+    calls: list[str] = []
+
+    registry = CompensationHookRegistry()
+    registry.register(lambda envelope, error: calls.append(f"first:{error}"))
+    registry.register(lambda envelope, error: calls.append(f"second:{envelope.name}"))
+
+    assert registry.run(action, RuntimeError("boom")) is None
+    assert calls == ["first:boom", "second:apply_change"]

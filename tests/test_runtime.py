@@ -138,6 +138,49 @@ def test_existing_run_rejects_different_action_identity(tmp_path) -> None:
         )
 
 
+def test_approval_hook_failure_marks_run_failed(tmp_path) -> None:
+    runtime = make_runtime(tmp_path)
+    action = make_action(EffectClass.REVERSIBLE_WRITE, key="approval-failure")
+    approvals = ApprovalHookRegistry()
+    approvals.register(lambda envelope: (_ for _ in ()).throw(RuntimeError("approval failed")))
+
+    result = runtime.run(
+        run_id="run-approval-failure",
+        action=action,
+        executor=lambda checkpoint: {"ok": True},
+        approval_hooks=approvals,
+    )
+
+    assert result.state == JournalState.FAILED
+    assert [entry.state for entry in runtime.history("run-approval-failure")] == [
+        JournalState.PROPOSED,
+        JournalState.FAILED,
+    ]
+
+
+def test_compensation_hook_failure_marks_run_failed(tmp_path) -> None:
+    runtime = make_runtime(tmp_path)
+    action = make_action(EffectClass.COMPENSATABLE_WRITE, key="comp-failure")
+    hooks = CompensationHookRegistry()
+    hooks.register(lambda envelope, error: (_ for _ in ()).throw(RuntimeError("comp failed")))
+
+    result = runtime.run(
+        run_id="run-compensation-failure",
+        action=action,
+        executor=lambda checkpoint: (_ for _ in ()).throw(RuntimeError("boom")),
+        compensation_hooks=hooks,
+    )
+
+    assert result.state == JournalState.FAILED
+    assert [entry.state for entry in runtime.history("run-compensation-failure")] == [
+        JournalState.PROPOSED,
+        JournalState.APPROVED,
+        JournalState.EXECUTING,
+        JournalState.COMPENSATING,
+        JournalState.FAILED,
+    ]
+
+
 def test_resumable_state_can_be_reentered_and_continued(tmp_path) -> None:
     runtime = make_runtime(tmp_path)
     action = make_action(EffectClass.REVERSIBLE_WRITE)

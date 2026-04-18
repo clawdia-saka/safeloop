@@ -24,14 +24,17 @@ On this branch, the strongest concrete pieces are:
 - `EffectClass`
 - `JournalState`
 - `JournalEntry`
-- journal transition validation
-- tests covering those contracts
+- file-backed local journal storage
+- approval and compensation hook registries
+- a storage-backed runtime with approval, compensation, handoff, and resumable flows
+- a local inspection API/read model
+- tests covering those contracts and their integration
 
 Runtime, storage, hooks, API, and demo work are still being hardened.
 
 ## Does the repo include a real GitHub demo today?
 
-No. This branch does not currently include a trustworthy end-to-end GitHub-style demo. Any future demo should be labeled clearly as local/reference-only unless the code truly provides live integration behavior.
+Not on this branch yet. The end-to-end GitHub-style reference flow is still outstanding for the Task 9 branch, and any future example should be labeled clearly as local/reference-only unless the code truly provides live integration behavior.
 
 ## Why use file/local language so often in the docs?
 

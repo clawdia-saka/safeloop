@@ -87,7 +87,10 @@ class Runtime:
 
         if current is None:
             self._append(run_id, action, JournalState.PROPOSED)
-            decision = self._approval_decision(action, approval_hooks)
+            try:
+                decision = self._approval_decision(action, approval_hooks)
+            except Exception:
+                return self._append(run_id, action, JournalState.FAILED)
             if decision is ApprovalDecision.BLOCK:
                 return self._append(run_id, action, JournalState.FAILED)
             self._append(run_id, action, JournalState.APPROVED)
@@ -108,7 +111,10 @@ class Runtime:
         except Exception as exc:
             if compensation_hooks is not None and action.effect is EffectClass.COMPENSATABLE_WRITE:
                 self._append(run_id, action, JournalState.COMPENSATING)
-                compensation_hooks.run(action, exc)
+                try:
+                    compensation_hooks.run(action, exc)
+                except Exception:
+                    return self._append(run_id, action, JournalState.FAILED)
                 return self._append(run_id, action, JournalState.COMPENSATED)
             return self._append(run_id, action, JournalState.FAILED)
 

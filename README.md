@@ -2,7 +2,7 @@
 
 SafeLoop is an early-stage Python project for *transactional agent execution*: a small kernel for describing risky actions explicitly, classifying their side effects, and recording their lifecycle in a journal instead of hiding everything inside a free-form agent loop.
 
-This branch is still MVP-stage. The repository already defines the core action/effect types and journal lifecycle model, but much of the runtime, storage, hooks, API, and demo surface is still being hardened. This README is intentionally narrow about what exists today.
+This branch is still MVP-stage, but it now includes the first integrated cut of the core runtime path: storage, hooks, runtime, and a local inspection API. The repository is still being hardened, and some surfaces—especially docs, comparison material, and an end-to-end demo—are still incomplete. This README is intentionally narrow about what exists today.
 
 ## Why this exists now
 
@@ -122,18 +122,19 @@ Implemented now:
 - effect class enum
 - journal state enum
 - journal transition validation
-- basic package exports
-- tests for those contracts
+- file-backed local journal storage
+- approval and compensation hook registries
+- storage-backed runtime execution with approval, compensation, and resume behavior
+- local inspection API/read model
+- tests covering those contracts
 
-Still placeholder or incomplete on this branch:
+Still incomplete on this branch:
 
-- runtime implementation
-- storage implementation
-- hooks implementation
-- public API implementation
-- end-to-end local demo
+- comparison/case-study docs are still being expanded
+- the end-to-end demo/reference flow is not yet merged into this branch
+- import/packaging ergonomics are aimed at local development first, not packaged distribution polish
 
-That means this repo is currently strongest as a *positioned skeleton with concrete core contracts*, not yet as a full transactional execution system.
+That means this repo is currently strongest as an *integrated local MVP kernel with honest limits*, not yet as a finished transactional execution platform.
 
 ## Quickstart
 
@@ -151,22 +152,19 @@ pytest -q
 
 ### Minimal contract check
 
-This repo does not yet ship a meaningful end-to-end demo on this branch, but you can inspect the current primitives directly:
+You can validate the current integrated branch surface directly from the repository root:
 
 ```bash
-python - <<'PY'
-from safeloop import ActionEnvelope, EffectClass, Runtime
-from safeloop.journal import JournalEntry, JournalState
-
-print(ActionEnvelope.__name__)
-print(EffectClass.REVERSIBLE_WRITE.value)
-print(JournalState.EXECUTING.value)
-print(Runtime.__name__)
-print(JournalEntry(run_id="run-1", action_id="act-1", state=JournalState.PROPOSED))
-PY
+python -c "from safeloop.runtime import Runtime; print('ok')"
 ```
 
-Expected result: imports succeed, enum values are visible, and a journal entry can be instantiated.
+Expected result: prints `ok`.
+
+You can also run the full suite:
+
+```bash
+pytest -q
+```
 
 ### Demo status
 
@@ -178,11 +176,11 @@ Current module layout:
 
 - `src/safeloop/types.py` — `ActionEnvelope`, `EffectClass`
 - `src/safeloop/journal.py` — `JournalState`, `JournalEntry`, transition validation
-- `src/safeloop/runtime.py` — runtime placeholder to be hardened
-- `src/safeloop/storage.py` — storage placeholder to be hardened
-- `src/safeloop/hooks.py` — hooks placeholder to be hardened
-- `src/safeloop/api.py` — API placeholder to be hardened
-- `tests/` — current contract coverage for types, journal states, and smoke imports
+- `src/safeloop/storage.py` — file-backed journal storage
+- `src/safeloop/hooks.py` — approval and compensation hook registries
+- `src/safeloop/runtime.py` — storage-backed runtime execution
+- `src/safeloop/api.py` — local inspection API/read model
+- `tests/` — contract and integration coverage for storage, hooks, runtime, API, journal, and smoke imports
 
 ## Explicit non-goals and MVP limits
 

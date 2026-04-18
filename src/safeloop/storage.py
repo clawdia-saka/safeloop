@@ -5,7 +5,13 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from pydantic import ValidationError
+
 from safeloop.journal import JournalEntry
+
+
+class JournalStorageError(ValueError):
+    """Raised when persisted journal data cannot be read safely."""
 
 
 class LocalJournalStorage:
@@ -19,13 +25,13 @@ class LocalJournalStorage:
             handle.write("\n")
 
     def read(self, run_id: str) -> list[JournalEntry]:
-        return [entry for entry in self._iter_entries() if entry.run_id == run_id]
+        return [entry for entry in self._load_entries() if entry.run_id == run_id]
 
     def list_run_ids(self) -> list[str]:
         run_ids: list[str] = []
         seen_run_ids: set[str] = set()
 
-        for entry in self._iter_entries():
+        for entry in self._load_entries():
             if entry.run_id in seen_run_ids:
                 continue
             seen_run_ids.add(entry.run_id)
@@ -33,16 +39,22 @@ class LocalJournalStorage:
 
         return run_ids
 
-    def _iter_entries(self) -> list[JournalEntry]:
+    def _load_entries(self) -> list[JournalEntry]:
         if not self.path.exists():
             return []
 
         entries: list[JournalEntry] = []
         with self.path.open(encoding="utf-8") as handle:
-            for line in handle:
+            for line_number, line in enumerate(handle, start=1):
                 record = line.strip()
                 if not record:
                     continue
-                entries.append(JournalEntry.model_validate(json.loads(record)))
+                try:
+                    payload = json.loads(record)
+                    entries.append(JournalEntry.model_validate(payload))
+                except (json.JSONDecodeError, ValidationError) as exc:
+                    raise JournalStorageError(
+                        f"Malformed journal entry in {self.path} at line {line_number}: {exc}"
+                    ) from exc
 
         return entries

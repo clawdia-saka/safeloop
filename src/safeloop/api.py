@@ -24,8 +24,8 @@ class RunViewer:
 
     def list_runs(self) -> list[RunSummary]:
         latest_by_run: dict[str, JournalEntry] = {}
-        for entry in self._entries:
-            latest_by_run[entry.run_id] = entry
+        for entry in reversed(self._entries):
+            latest_by_run.setdefault(entry.run_id, entry)
 
         return [
             RunSummary(

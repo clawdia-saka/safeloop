@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from safeloop.journal import JournalState
 from safeloop.runtime import ResumableExecution, Runtime
 from safeloop.types import ActionEnvelope, EffectClass
@@ -69,22 +71,42 @@ def test_irreversible_action_escalates_when_approval_demands_it() -> None:
     runtime = Runtime()
     action = make_action(EffectClass.IRREVERSIBLE_WRITE)
     executed: list[object | None] = []
+    approvals: list[ActionEnvelope] = []
 
     result = runtime.run(
         run_id="run-handoff",
         action=action,
         executor=lambda checkpoint: executed.append(checkpoint),
-        approval_hook=lambda envelope: "handoff",
+        approval_hook=lambda envelope: approvals.append(envelope) or "handoff",
     )
 
     assert result.state == JournalState.HANDED_OFF
+    assert approvals == [action]
     assert executed == []
     assert [entry.state for entry in runtime.history("run-handoff")] == [
         JournalState.PROPOSED,
         JournalState.APPROVED,
-        JournalState.EXECUTING,
         JournalState.HANDED_OFF,
     ]
+
+
+def test_existing_run_rejects_different_action_identity() -> None:
+    runtime = Runtime()
+    original_action = make_action(EffectClass.REVERSIBLE_WRITE)
+    different_action = original_action.model_copy(update={"idempotency_key": "different-key"})
+
+    runtime.run(
+        run_id="run-identity",
+        action=original_action,
+        executor=lambda checkpoint: {"ok": True},
+    )
+
+    with pytest.raises(ValueError, match="already bound to action"):
+        runtime.run(
+            run_id="run-identity",
+            action=different_action,
+            executor=lambda checkpoint: {"ok": True},
+        )
 
 
 def test_resumable_state_can_be_reentered_and_continued() -> None:

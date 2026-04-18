@@ -42,19 +42,24 @@ class Runtime:
         compensation_hook: CompensationHook | None = None,
     ) -> JournalEntry:
         current = self._current(run_id)
+        if current is not None and current.action_id != action.idempotency_key:
+            raise ValueError(
+                f"run_id {run_id!r} is already bound to action {current.action_id!r}"
+            )
+
         if current is None:
             self._append(run_id, action, JournalState.PROPOSED)
+            if action.effect != EffectClass.READ_ONLY and approval_hook is not None:
+                decision = approval_hook(action)
+                if decision == "handoff":
+                    self._append(run_id, action, JournalState.APPROVED)
+                    return self._append_handed_off(run_id, action)
             self._append(run_id, action, JournalState.APPROVED)
             current = self._append(run_id, action, JournalState.EXECUTING)
         elif current.state == JournalState.RESUMABLE:
             current = self._append(run_id, action, JournalState.EXECUTING)
         else:
             return current
-
-        if action.effect != EffectClass.READ_ONLY and approval_hook is not None:
-            decision = approval_hook(action)
-            if decision == "handoff":
-                return self._append(run_id, action, JournalState.HANDED_OFF)
 
         checkpoint = self._checkpoints.get(run_id)
         try:
@@ -82,5 +87,15 @@ class Runtime:
         if history:
             validate_transition(history[-1].state, state)
         entry = JournalEntry(run_id=run_id, action_id=action.idempotency_key, state=state)
+        history.append(entry)
+        return entry
+
+    def _append_handed_off(self, run_id: str, action: ActionEnvelope) -> JournalEntry:
+        history = self._journal.setdefault(run_id, [])
+        entry = JournalEntry(
+            run_id=run_id,
+            action_id=action.idempotency_key,
+            state=JournalState.HANDED_OFF,
+        )
         history.append(entry)
         return entry

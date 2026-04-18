@@ -90,6 +90,22 @@ def test_irreversible_action_escalates_when_approval_demands_it() -> None:
     ]
 
 
+def test_handoff_path_uses_validated_journal_transition() -> None:
+    runtime = Runtime()
+    action = make_action(EffectClass.IRREVERSIBLE_WRITE)
+
+    result = runtime.run(
+        run_id="run-handoff-validated",
+        action=action,
+        executor=lambda checkpoint: {"ok": True},
+        approval_hook=lambda envelope: "handoff",
+    )
+
+    assert result.state == JournalState.HANDED_OFF
+    assert runtime.history("run-handoff-validated")[-1].state == JournalState.HANDED_OFF
+    assert runtime.checkpoint_for("run-handoff-validated") is None
+
+
 def test_existing_run_rejects_different_action_identity() -> None:
     runtime = Runtime()
     original_action = make_action(EffectClass.REVERSIBLE_WRITE)
@@ -134,7 +150,7 @@ def test_resumable_state_can_be_reentered_and_continued() -> None:
     assert first_result.state == JournalState.RESUMABLE
     assert second_result.state == JournalState.APPLIED
     assert checkpoints == [None, {"step": 1}]
-    assert runtime.checkpoint_for("run-resume") == {"step": 1}
+    assert runtime.checkpoint_for("run-resume") is None
     assert [entry.state for entry in runtime.history("run-resume")] == [
         JournalState.PROPOSED,
         JournalState.APPROVED,
@@ -143,3 +159,16 @@ def test_resumable_state_can_be_reentered_and_continued() -> None:
         JournalState.EXECUTING,
         JournalState.APPLIED,
     ]
+
+
+def test_checkpoint_is_cleared_after_initial_apply() -> None:
+    runtime = Runtime()
+    action = make_action(EffectClass.REVERSIBLE_WRITE)
+
+    runtime.run(
+        run_id="run-apply",
+        action=action,
+        executor=lambda checkpoint: {"ok": checkpoint is None},
+    )
+
+    assert runtime.checkpoint_for("run-apply") is None

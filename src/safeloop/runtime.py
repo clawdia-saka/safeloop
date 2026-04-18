@@ -53,7 +53,7 @@ class Runtime:
                 decision = approval_hook(action)
                 if decision == "handoff":
                     self._append(run_id, action, JournalState.APPROVED)
-                    return self._append_handed_off(run_id, action)
+                    return self._append(run_id, action, JournalState.HANDED_OFF)
             self._append(run_id, action, JournalState.APPROVED)
             current = self._append(run_id, action, JournalState.EXECUTING)
         elif current.state == JournalState.RESUMABLE:
@@ -74,6 +74,7 @@ class Runtime:
                 return self._append(run_id, action, JournalState.COMPENSATED)
             return self._append(run_id, action, JournalState.FAILED)
 
+        self._checkpoints.pop(run_id, None)
         return self._append(run_id, action, JournalState.APPLIED)
 
     def _current(self, run_id: str) -> JournalEntry | None:
@@ -90,12 +91,4 @@ class Runtime:
         history.append(entry)
         return entry
 
-    def _append_handed_off(self, run_id: str, action: ActionEnvelope) -> JournalEntry:
-        history = self._journal.setdefault(run_id, [])
-        entry = JournalEntry(
-            run_id=run_id,
-            action_id=action.idempotency_key,
-            state=JournalState.HANDED_OFF,
-        )
-        history.append(entry)
-        return entry
+

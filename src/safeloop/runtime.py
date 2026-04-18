@@ -1,13 +1,20 @@
+"""Runtime primitives backed by journal storage."""
+
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable
 
+from safeloop.hooks import (
+    ApprovalDecision,
+    ApprovalHookRegistry,
+    CompensationHookRegistry,
+)
 from safeloop.journal import JournalEntry, JournalState, validate_transition
+from safeloop.storage import LocalJournalStorage
 from safeloop.types import ActionEnvelope, EffectClass
 
-ApprovalHook = Callable[[ActionEnvelope], str]
-CompensationHook = Callable[[ActionEnvelope, Exception], None]
 Executor = Callable[[object | None], Any]
 
 
@@ -19,18 +26,49 @@ class ResumableExecution(Exception):
         self.checkpoint = checkpoint
 
 
-@dataclass(slots=True)
-class Runtime:
-    """Minimal in-process action runtime with journaling and resume support."""
+@dataclass(frozen=True, slots=True)
+class RunRecord:
+    run_id: str
+    action_id: str
+    state: JournalState
+    journal: list[JournalEntry]
 
-    _journal: dict[str, list[JournalEntry]] = field(default_factory=dict)
-    _checkpoints: dict[str, object] = field(default_factory=dict)
+
+class Runtime:
+    """Minimal in-process runtime with persistent journaling."""
+
+    def __init__(self, storage: LocalJournalStorage | str | Path) -> None:
+        if isinstance(storage, LocalJournalStorage):
+            self.storage = storage
+        else:
+            self.storage = LocalJournalStorage(storage)
+        self._checkpoints: dict[str, object] = {}
 
     def history(self, run_id: str) -> list[JournalEntry]:
-        return list(self._journal.get(run_id, []))
+        return self.storage.read(run_id)
 
     def checkpoint_for(self, run_id: str) -> object | None:
         return self._checkpoints.get(run_id)
+
+    def list_runs(self) -> list[RunRecord]:
+        records: list[RunRecord] = []
+        for run_id in self.storage.list_run_ids():
+            record = self.get_run(run_id)
+            if record is not None:
+                records.append(record)
+        return records
+
+    def get_run(self, run_id: str) -> RunRecord | None:
+        journal = self.history(run_id)
+        if not journal:
+            return None
+        latest = journal[-1]
+        return RunRecord(
+            run_id=latest.run_id,
+            action_id=latest.action_id,
+            state=latest.state,
+            journal=journal,
+        )
 
     def run(
         self,
@@ -38,8 +76,8 @@ class Runtime:
         run_id: str,
         action: ActionEnvelope,
         executor: Executor,
-        approval_hook: ApprovalHook | None = None,
-        compensation_hook: CompensationHook | None = None,
+        approval_hooks: ApprovalHookRegistry | None = None,
+        compensation_hooks: CompensationHookRegistry | None = None,
     ) -> JournalEntry:
         current = self._current(run_id)
         if current is not None and current.action_id != action.idempotency_key:
@@ -49,15 +87,18 @@ class Runtime:
 
         if current is None:
             self._append(run_id, action, JournalState.PROPOSED)
-            if action.effect != EffectClass.READ_ONLY and approval_hook is not None:
-                decision = approval_hook(action)
-                if decision == "handoff":
-                    self._append(run_id, action, JournalState.APPROVED)
-                    return self._append(run_id, action, JournalState.HANDED_OFF)
+            try:
+                decision = self._approval_decision(action, approval_hooks)
+            except Exception:
+                return self._append(run_id, action, JournalState.FAILED)
+            if decision is ApprovalDecision.BLOCK:
+                return self._append(run_id, action, JournalState.FAILED)
             self._append(run_id, action, JournalState.APPROVED)
-            current = self._append(run_id, action, JournalState.EXECUTING)
+            if decision is ApprovalDecision.ESCALATE:
+                return self._append(run_id, action, JournalState.HANDED_OFF)
+            self._append(run_id, action, JournalState.EXECUTING)
         elif current.state == JournalState.RESUMABLE:
-            current = self._append(run_id, action, JournalState.EXECUTING)
+            self._append(run_id, action, JournalState.EXECUTING)
         else:
             return current
 
@@ -68,27 +109,37 @@ class Runtime:
             self._checkpoints[run_id] = exc.checkpoint
             return self._append(run_id, action, JournalState.RESUMABLE)
         except Exception as exc:
-            if compensation_hook is not None and action.effect == EffectClass.COMPENSATABLE_WRITE:
+            if compensation_hooks is not None and action.effect is EffectClass.COMPENSATABLE_WRITE:
                 self._append(run_id, action, JournalState.COMPENSATING)
-                compensation_hook(action, exc)
+                try:
+                    compensation_hooks.run(action, exc)
+                except Exception:
+                    return self._append(run_id, action, JournalState.FAILED)
                 return self._append(run_id, action, JournalState.COMPENSATED)
             return self._append(run_id, action, JournalState.FAILED)
 
         self._checkpoints.pop(run_id, None)
         return self._append(run_id, action, JournalState.APPLIED)
 
+    def _approval_decision(
+        self,
+        action: ActionEnvelope,
+        approval_hooks: ApprovalHookRegistry | None,
+    ) -> ApprovalDecision:
+        if action.effect is EffectClass.READ_ONLY or approval_hooks is None:
+            return ApprovalDecision.ALLOW
+        return approval_hooks.evaluate(action)
+
     def _current(self, run_id: str) -> JournalEntry | None:
-        history = self._journal.get(run_id)
+        history = self.history(run_id)
         if not history:
             return None
         return history[-1]
 
     def _append(self, run_id: str, action: ActionEnvelope, state: JournalState) -> JournalEntry:
-        history = self._journal.setdefault(run_id, [])
+        history = self.history(run_id)
         if history:
             validate_transition(history[-1].state, state)
         entry = JournalEntry(run_id=run_id, action_id=action.idempotency_key, state=state)
-        history.append(entry)
+        self.storage.append(entry)
         return entry
-
-

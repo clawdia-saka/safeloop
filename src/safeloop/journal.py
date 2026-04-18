@@ -16,7 +16,7 @@ class JournalState(str, Enum):
 
 
 _ALLOWED_TRANSITIONS: dict[JournalState, set[JournalState]] = {
-    JournalState.PROPOSED: {JournalState.APPROVED},
+    JournalState.PROPOSED: {JournalState.APPROVED, JournalState.FAILED},
     JournalState.APPROVED: {JournalState.EXECUTING, JournalState.HANDED_OFF},
     JournalState.EXECUTING: {
         JournalState.APPLIED,
@@ -25,7 +25,10 @@ _ALLOWED_TRANSITIONS: dict[JournalState, set[JournalState]] = {
         JournalState.RESUMABLE,
         JournalState.HANDED_OFF,
     },
-    JournalState.COMPENSATING: {JournalState.COMPENSATED},
+    JournalState.COMPENSATING: {
+        JournalState.COMPENSATED,
+        JournalState.FAILED,
+    },
     JournalState.RESUMABLE: {JournalState.EXECUTING},
     JournalState.APPLIED: set(),
     JournalState.COMPENSATED: set(),

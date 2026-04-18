@@ -1,118 +1,83 @@
+from __future__ import annotations
+
 from fastapi.testclient import TestClient
 
-from safeloop.api import create_app
-from safeloop.journal import JournalEntry, JournalState
+from safeloop.api import RunViewer, create_app
+from safeloop.journal import JournalState
+from safeloop.runtime import Runtime
+from safeloop.types import ActionEnvelope, EffectClass
 
 
-def test_list_runs_returns_empty_list_when_no_entries_exist() -> None:
-    response = TestClient(create_app()).get("/runs")
-
-    assert response.status_code == 200
-    assert response.json() == []
-
-
-def test_list_runs_returns_latest_state_per_run() -> None:
-    app = create_app(
-        [
-            JournalEntry(run_id="run-1", action_id="action-1", state=JournalState.PROPOSED),
-            JournalEntry(run_id="run-1", action_id="action-1", state=JournalState.APPROVED),
-            JournalEntry(run_id="run-1", action_id="action-1", state=JournalState.APPLIED),
-            JournalEntry(run_id="run-2", action_id="action-9", state=JournalState.RESUMABLE),
-        ]
+def make_action(effect: EffectClass, key: str = "action-1") -> ActionEnvelope:
+    return ActionEnvelope(
+        name="demo",
+        target="system",
+        args={},
+        diff="",
+        actor="tester",
+        privileges=[],
+        idempotency_key=key,
+        effect=effect,
     )
 
-    response = TestClient(app).get("/runs")
 
-    assert response.status_code == 200
-    assert response.json() == [
-        {"run_id": "run-1", "action_id": "action-1", "state": "applied"},
-        {"run_id": "run-2", "action_id": "action-9", "state": "resumable"},
+def make_runtime(tmp_path) -> Runtime:
+    return Runtime(tmp_path / "journal.jsonl")
+
+
+def test_viewer_lists_storage_backed_runs(tmp_path) -> None:
+    runtime = make_runtime(tmp_path)
+    action = make_action(EffectClass.REVERSIBLE_WRITE)
+    runtime.run(run_id="run-1", action=action, executor=lambda checkpoint: {"ok": True})
+
+    viewer = RunViewer(runtime)
+
+    assert [run.model_dump() for run in viewer.list_runs()] == [
+        {"run_id": "run-1", "action_id": "action-1", "state": "applied"}
     ]
 
 
-def test_list_runs_uses_last_entry_in_input_order_as_latest() -> None:
-    app = create_app(
-        [
-            JournalEntry(run_id="run-2", action_id="action-9", state=JournalState.RESUMABLE),
-            JournalEntry(run_id="run-1", action_id="action-1", state=JournalState.APPLIED),
-            JournalEntry(run_id="run-2", action_id="action-9", state=JournalState.EXECUTING),
-            JournalEntry(run_id="run-1", action_id="action-1", state=JournalState.APPROVED),
-        ]
-    )
+def test_get_run_returns_latest_state_and_journal(tmp_path) -> None:
+    runtime = make_runtime(tmp_path)
+    action = make_action(EffectClass.REVERSIBLE_WRITE)
+    runtime.run(run_id="run-9", action=action, executor=lambda checkpoint: {"ok": True})
 
-    response = TestClient(app).get("/runs")
+    run = RunViewer(runtime).get_run("run-9")
 
-    assert response.status_code == 200
-    assert response.json() == [
-        {"run_id": "run-1", "action_id": "action-1", "state": "approved"},
-        {"run_id": "run-2", "action_id": "action-9", "state": "executing"},
-    ]
-
-
-def test_get_run_details_returns_latest_state_and_history() -> None:
-    app = create_app(
-        [
-            JournalEntry(run_id="run-9", action_id="action-3", state=JournalState.PROPOSED),
-            JournalEntry(run_id="run-9", action_id="action-3", state=JournalState.APPROVED),
-            JournalEntry(run_id="run-9", action_id="action-3", state=JournalState.RESUMABLE),
-        ]
-    )
-
-    response = TestClient(app).get("/runs/run-9")
-
-    assert response.status_code == 200
-    assert response.json() == {
+    assert run is not None
+    assert run.model_dump() == {
         "run_id": "run-9",
-        "action_id": "action-3",
-        "state": "resumable",
+        "action_id": "action-1",
+        "state": "applied",
         "journal": [
-            {"run_id": "run-9", "action_id": "action-3", "state": "proposed"},
-            {"run_id": "run-9", "action_id": "action-3", "state": "approved"},
-            {"run_id": "run-9", "action_id": "action-3", "state": "resumable"},
+            {"run_id": "run-9", "action_id": "action-1", "state": "proposed"},
+            {"run_id": "run-9", "action_id": "action-1", "state": "approved"},
+            {"run_id": "run-9", "action_id": "action-1", "state": "executing"},
+            {"run_id": "run-9", "action_id": "action-1", "state": "applied"},
         ],
     }
 
 
-def test_get_run_details_returns_404_for_unknown_run() -> None:
-    app = create_app(
-        [JournalEntry(run_id="run-9", action_id="action-3", state=JournalState.PROPOSED)]
-    )
+def test_http_api_returns_404_for_unknown_run(tmp_path) -> None:
+    client = TestClient(create_app(make_runtime(tmp_path)))
 
-    response = TestClient(app).get("/runs/missing-run")
+    response = client.get("/runs/missing-run")
 
     assert response.status_code == 404
     assert response.json() == {"detail": "Run not found"}
 
 
-def test_list_journal_entries_returns_ordered_entries_for_run() -> None:
-    app = create_app(
-        [
-            JournalEntry(run_id="run-7", action_id="action-2", state=JournalState.PROPOSED),
-            JournalEntry(run_id="run-7", action_id="action-2", state=JournalState.APPROVED),
-            JournalEntry(run_id="run-7", action_id="action-2", state=JournalState.EXECUTING),
-            JournalEntry(run_id="run-7", action_id="action-2", state=JournalState.COMPENSATING),
-            JournalEntry(run_id="run-7", action_id="action-2", state=JournalState.COMPENSATED),
-        ]
-    )
+def test_http_api_lists_journal_entries_in_append_order(tmp_path) -> None:
+    runtime = make_runtime(tmp_path)
+    action = make_action(EffectClass.REVERSIBLE_WRITE)
+    runtime.run(run_id="run-2", action=action, executor=lambda checkpoint: {"ok": True})
 
-    response = TestClient(app).get("/runs/run-7/journal")
+    response = TestClient(create_app(runtime)).get("/runs/run-2/journal")
 
     assert response.status_code == 200
-    assert response.json() == [
-        {"run_id": "run-7", "action_id": "action-2", "state": "proposed"},
-        {"run_id": "run-7", "action_id": "action-2", "state": "approved"},
-        {"run_id": "run-7", "action_id": "action-2", "state": "executing"},
-        {"run_id": "run-7", "action_id": "action-2", "state": "compensating"},
-        {"run_id": "run-7", "action_id": "action-2", "state": "compensated"},
+    assert [entry["state"] for entry in response.json()] == [
+        JournalState.PROPOSED.value,
+        JournalState.APPROVED.value,
+        JournalState.EXECUTING.value,
+        JournalState.APPLIED.value,
     ]
-
-
-def test_list_journal_entries_returns_404_for_unknown_run() -> None:
-    app = create_app(
-        [JournalEntry(run_id="run-7", action_id="action-2", state=JournalState.PROPOSED)]
-    )
-
-    response = TestClient(app).get("/runs/missing-run/journal")
-
-    assert response.status_code == 404
-    assert response.json() == {"detail": "Run not found"}

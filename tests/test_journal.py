@@ -45,7 +45,9 @@ def test_journal_entry_requires_all_fields() -> None:
     ("current_state", "next_state"),
     [
         (JournalState.PROPOSED, JournalState.APPROVED),
+        (JournalState.PROPOSED, JournalState.FAILED),
         (JournalState.APPROVED, JournalState.EXECUTING),
+        (JournalState.APPROVED, JournalState.HANDED_OFF),
         (JournalState.EXECUTING, JournalState.APPLIED),
         (JournalState.EXECUTING, JournalState.COMPENSATING),
         (JournalState.EXECUTING, JournalState.FAILED),

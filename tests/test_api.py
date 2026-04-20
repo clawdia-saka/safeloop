@@ -4,7 +4,7 @@ from fastapi.testclient import TestClient
 
 from safeloop.api import RunViewer, create_app
 from safeloop.journal import JournalState
-from safeloop.runtime import Runtime
+from safeloop.runtime import ResumableExecution, Runtime
 from safeloop.types import ActionEnvelope, EffectClass
 
 
@@ -49,6 +49,7 @@ def test_get_run_returns_latest_state_and_journal(tmp_path) -> None:
         "run_id": "run-9",
         "action_id": "action-1",
         "state": "applied",
+        "has_checkpoint": False,
         "journal": [
             {"run_id": "run-9", "action_id": "action-1", "state": "proposed"},
             {"run_id": "run-9", "action_id": "action-1", "state": "approved"},
@@ -81,3 +82,24 @@ def test_http_api_lists_journal_entries_in_append_order(tmp_path) -> None:
         JournalState.EXECUTING.value,
         JournalState.APPLIED.value,
     ]
+
+
+def test_get_run_reports_has_checkpoint_for_runtime_backed_viewer(tmp_path) -> None:
+    runtime = make_runtime(tmp_path)
+    action = make_action(EffectClass.REVERSIBLE_WRITE)
+
+    runtime.run(
+        run_id="run-checkpoint",
+        action=action,
+        executor=lambda checkpoint: (_ for _ in ()).throw(ResumableExecution({"step": 1})),
+    )
+
+    runtime_backed = RunViewer(runtime).get_run("run-checkpoint")
+    storage_backed = RunViewer(runtime.storage).get_run("run-checkpoint")
+
+    assert runtime_backed is not None
+    assert storage_backed is not None
+    assert runtime_backed.model_dump()["has_checkpoint"] is True
+    assert storage_backed.model_dump()["has_checkpoint"] is False
+    assert runtime_backed.model_dump()["state"] == storage_backed.model_dump()["state"] == "resumable"
+    assert runtime_backed.model_dump()["journal"] == storage_backed.model_dump()["journal"]

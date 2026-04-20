@@ -18,6 +18,7 @@ class RunSummary(BaseModel):
 
 
 class RunDetail(RunSummary):
+    has_checkpoint: bool
     journal: list[dict[str, str]]
 
 
@@ -37,6 +38,7 @@ class RunViewer:
             return None
         return RunDetail(
             **self._summary(record).model_dump(),
+            has_checkpoint=self.runtime.checkpoint_for(run_id) is not None,
             journal=[entry.model_dump(mode="json") for entry in record.journal],
         )
 

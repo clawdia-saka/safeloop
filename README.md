@@ -199,6 +199,7 @@ The project is better described as "early infrastructure for bounded, inspectabl
 
 ## Supporting docs
 
+- `docs/state-machine-and-journal-schema.md` — current state machine, transition rules, and journal schema summary
 - `docs/faq.md` — concise criticism-aware FAQ for first-time readers
 - `docs/plans/2026-04-18-task-9-hardening-plan.md` — Task 9 plan for technical and positioning hardening
 - `docs/notes/task-9-positioning-hardening-outline.md` — messaging guardrails used to shape this README

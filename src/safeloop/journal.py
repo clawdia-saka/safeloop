@@ -23,7 +23,6 @@ _ALLOWED_TRANSITIONS: dict[JournalState, set[JournalState]] = {
         JournalState.COMPENSATING,
         JournalState.FAILED,
         JournalState.RESUMABLE,
-        JournalState.HANDED_OFF,
     },
     JournalState.COMPENSATING: {
         JournalState.COMPENSATED,

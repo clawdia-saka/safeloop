@@ -43,3 +43,13 @@ Because the project should not imply hosted or production control-plane capabili
 ## What should a first-time reader take away?
 
 SafeLoop is an honest attempt to reduce blast radius in agent action execution by making actions typed, effects explicit, and lifecycle state journaled. It is promising infrastructure, not a finished safety guarantee.
+
+## What does `handed_off` mean?
+
+`handed_off` is a pre-execution terminal state. It means an approval hook escalated the action to an operator boundary before the executor ran.
+
+This is different from `failed`:
+- `failed` means the run could not proceed automatically
+- `handed_off` means SafeLoop intentionally stopped and left the next step to an operator
+
+For the current MVP, SafeLoop does not auto-run compensation around `handed_off`, and it does not treat `handed_off` as a resumable paused execution state.

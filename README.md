@@ -97,6 +97,7 @@ The intended lifecycle is criticism-aware:
 - compensation is **not** time travel; it is an explicit best-effort cleanup path
 - resumability should avoid blind reruns, not encourage them
 - terminal states should be honest about whether a run applied, compensated, failed, or was handed off
+- `handed_off` means approval escalated the action to an operator before execution began; it is not a paused in-flight execution state
 
 ### 5. Recovery
 

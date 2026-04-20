@@ -97,6 +97,62 @@ def test_escalated_action_hands_off_before_execution(tmp_path) -> None:
     ]
 
 
+def test_escalated_action_does_not_trigger_compensation(tmp_path) -> None:
+    runtime = make_runtime(tmp_path)
+    action = make_action(EffectClass.COMPENSATABLE_WRITE, key="handoff-no-comp")
+    approvals = ApprovalHookRegistry()
+    approvals.register(lambda envelope: ApprovalDecision.ESCALATE)
+    compensations: list[str] = []
+    hooks = CompensationHookRegistry()
+    hooks.register(lambda envelope, error: compensations.append(str(error)))
+
+    result = runtime.run(
+        run_id="run-handoff-no-comp",
+        action=action,
+        executor=lambda checkpoint: (_ for _ in ()).throw(RuntimeError("should not run")),
+        approval_hooks=approvals,
+        compensation_hooks=hooks,
+    )
+
+    assert result.state == JournalState.HANDED_OFF
+    assert compensations == []
+    assert [entry.state for entry in runtime.history("run-handoff-no-comp")] == [
+        JournalState.PROPOSED,
+        JournalState.APPROVED,
+        JournalState.HANDED_OFF,
+    ]
+
+
+def test_handed_off_run_is_terminal_and_not_resumed(tmp_path) -> None:
+    runtime = make_runtime(tmp_path)
+    action = make_action(EffectClass.IRREVERSIBLE_WRITE, key="handoff-terminal")
+    approvals = ApprovalHookRegistry()
+    approvals.register(lambda envelope: ApprovalDecision.ESCALATE)
+    executions: list[object | None] = []
+
+    first = runtime.run(
+        run_id="run-handoff-terminal",
+        action=action,
+        executor=lambda checkpoint: executions.append(checkpoint) or {"ok": True},
+        approval_hooks=approvals,
+    )
+    second = runtime.run(
+        run_id="run-handoff-terminal",
+        action=action,
+        executor=lambda checkpoint: executions.append(checkpoint) or {"ok": True},
+        approval_hooks=approvals,
+    )
+
+    assert first.state == JournalState.HANDED_OFF
+    assert second.state == JournalState.HANDED_OFF
+    assert executions == []
+    assert [entry.state for entry in runtime.history("run-handoff-terminal")] == [
+        JournalState.PROPOSED,
+        JournalState.APPROVED,
+        JournalState.HANDED_OFF,
+    ]
+
+
 def test_blocked_action_fails_before_execution(tmp_path) -> None:
     runtime = make_runtime(tmp_path)
     action = make_action(EffectClass.REVERSIBLE_WRITE)

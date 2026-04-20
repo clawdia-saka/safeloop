@@ -52,7 +52,6 @@ def test_journal_entry_requires_all_fields() -> None:
         (JournalState.EXECUTING, JournalState.COMPENSATING),
         (JournalState.EXECUTING, JournalState.FAILED),
         (JournalState.EXECUTING, JournalState.RESUMABLE),
-        (JournalState.EXECUTING, JournalState.HANDED_OFF),
         (JournalState.COMPENSATING, JournalState.COMPENSATED),
         (JournalState.RESUMABLE, JournalState.EXECUTING),
     ],
@@ -69,6 +68,7 @@ def test_validate_transition_accepts_valid_transitions(
     [
         (JournalState.PROPOSED, JournalState.APPLIED),
         (JournalState.APPROVED, JournalState.COMPENSATED),
+        (JournalState.EXECUTING, JournalState.HANDED_OFF),
         (JournalState.APPLIED, JournalState.EXECUTING),
         (JournalState.FAILED, JournalState.EXECUTING),
         (JournalState.HANDED_OFF, JournalState.EXECUTING),

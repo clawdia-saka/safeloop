@@ -2,7 +2,7 @@
 
 ## What SafeLoop is trying to be
 
-SafeLoop is a **recovery-first execution safety layer** for side-effecting agent actions.
+SafeLoop is a **local execution kernel for explicit recovery semantics** around side-effecting agent actions.
 It is not trying to replace every workflow or orchestration tool. Its narrow goal is to make risky actions:
 
 - typed before execution
@@ -42,6 +42,19 @@ SafeLoop adds structure around that moment:
 
 Retries alone do not answer those questions.
 
+## Recovery terms that should not be conflated
+
+SafeLoop intentionally uses more than one recovery term because they are *not* interchangeable:
+
+| Term | Narrow meaning in the current MVP |
+| --- | --- |
+| `reversible_write` | The action is expected to support a genuine reverse operation. This is the closest SafeLoop gets to a real rollback-style claim. |
+| `compensatable_write` | The action has a defined compensation hook for cleanup after execution failure. This is weaker than reversal. |
+| `compensated` | The compensation hook completed. It records cleanup success, not proof that every side effect was erased. |
+| `compensation_failed` | Cleanup was attempted and failed. This is a more specific and more alarming state than generic `failed`. |
+
+If you want a one-line rule: **reversible** suggests “undo the write,” while **compensatable** suggests “run the defined cleanup path and record honestly how that went.”
+
 ## SafeLoop vs “just add guardrails”
 
 Guardrails help before or around execution.
@@ -51,7 +64,7 @@ SafeLoop is strongest at execution-state truth after something starts happening:
 - journaling
 - terminal state clarity
 - compensation tracking
-- resume checkpoints
+- resume checkpoints (live runtime only; not durable cross-process checkpoint persistence)
 
 It does not make model output safe by itself.
 
@@ -71,9 +84,9 @@ It does **not** claim:
 - distributed durability
 - production control-plane maturity
 - full policy UI / enterprise RBAC
-- perfect rollback
+- unqualified rollback guarantees
 - broad connector coverage
 
 The strongest current claim is narrower:
 
-> SafeLoop makes agent-side effects more legible, more recoverable, and easier to reason about than an unstructured tool loop.
+> SafeLoop makes agent-side effects more legible, easier to inspect, and easier to reason about in recovery terms than an unstructured tool loop.

@@ -58,6 +58,46 @@ def _runtime_for(storage_path: str | Path | None) -> tuple[Runtime, TemporaryDir
     return Runtime(Path(storage_path)), None
 
 
+def run_ambiguous_side_effect_demo(*, storage_path: str | Path | None = None) -> BoundaryDemoResult:
+    """Show an applied run whose observer-facing effects still need conservative interpretation."""
+    runtime, tempdir = _runtime_for(storage_path)
+    action = _make_action(
+        name="demo.ambiguous_side_effect",
+        key="boundary-demo:ambiguous-side-effect",
+        effect=EffectClass.REVERSIBLE_WRITE,
+    )
+    executed = False
+
+    def executor(checkpoint: object | None) -> dict[str, object]:
+        nonlocal executed
+        executed = True
+        assert checkpoint is None
+        return {
+            "cache_invalidated": True,
+            "note": "external observers may still need to reconcile the write",
+        }
+
+    final_entry = runtime.run(
+        run_id=action.idempotency_key,
+        action=action,
+        executor=executor,
+    )
+    journal_states = [entry.state for entry in runtime.history(action.idempotency_key)]
+    result = BoundaryDemoResult(
+        scenario="ambiguous_side_effect",
+        classification="boundary",
+        action=action,
+        journal_states=journal_states,
+        final_state=final_entry.state,
+        final_reason=final_entry.reason,
+        error=final_entry.error,
+        executor_called=executed,
+    )
+    if tempdir is not None:
+        tempdir.cleanup()
+    return result
+
+
 def run_handoff_demo(*, storage_path: str | Path | None = None) -> BoundaryDemoResult:
     runtime, tempdir = _runtime_for(storage_path)
     action = _make_action(
@@ -253,6 +293,7 @@ def describe_unsupported_rollback_expectation() -> BoundaryReference:
 
 if __name__ == "__main__":
     for result in (
+        run_ambiguous_side_effect_demo(),
         run_handoff_demo(),
         run_compensation_failed_demo(),
         run_resumable_demo(),

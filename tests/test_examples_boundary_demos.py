@@ -7,6 +7,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from examples.boundary_demos import (
     describe_unsupported_rollback_expectation,
+    run_ambiguous_side_effect_demo,
     run_compensation_failed_demo,
     run_handoff_demo,
     run_repeated_resume_demo,
@@ -14,6 +15,22 @@ from examples.boundary_demos import (
 )
 from safeloop.api import RunViewer, create_app
 from safeloop.journal import JournalReason, JournalState
+
+
+def test_run_ambiguous_side_effect_demo_keeps_applied_truth_but_surfaces_side_effect_risk() -> None:
+    result = run_ambiguous_side_effect_demo()
+
+    assert result.classification == "boundary"
+    assert result.final_state is JournalState.APPLIED
+    assert result.final_reason is None
+    assert result.executor_called is True
+    assert result.error is None
+    assert result.journal_states == [
+        JournalState.PROPOSED,
+        JournalState.APPROVED,
+        JournalState.EXECUTING,
+        JournalState.APPLIED,
+    ]
 
 
 def test_run_handoff_demo_stops_before_execution() -> None:

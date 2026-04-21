@@ -13,6 +13,7 @@ The point of this split is to keep the GitHub case study concrete while still ma
 | --- | --- | --- | --- |
 | Success / applied | `run_github_pr_demo(..., fail_after_create=False)` | `in_scope` | Normal runtime-backed side-effecting execution finishes cleanly. |
 | Compensation / compensated | `run_github_pr_demo(..., fail_after_create=True)` | `in_scope` | A compensatable action can fail after side effects begin and still complete the defined cleanup path. |
+| Ambiguous side effect / applied | `run_ambiguous_side_effect_demo()` | `boundary` | A run can still finish as `applied` while the viewer/API conservatively keeps `side_effects_possible` visible for observer-facing ambiguity. |
 | Handoff / handed_off | `run_handoff_demo()` | `boundary` | The honest outcome may be to stop before execution and hand control to an operator/external system. |
 | Compensation failure / compensation_failed | `run_compensation_failed_demo()` | `boundary` | Cleanup itself can fail; SafeLoop should say that explicitly instead of flattening everything into generic failure. |
 | Resumable / resumable -> applied | `run_resumable_demo()` | `boundary` | A run can pause, hold checkpoint state in the live runtime, and later resume without pretending the first attempt never happened. |
@@ -28,6 +29,7 @@ What they should help a reader answer is:
 - did SafeLoop stop before execution?
 - did cleanup succeed?
 - did cleanup fail?
+- can an applied run still surface conservative side-effect risk when observers may need reconciliation?
 - is resume possible only in the live runtime that still holds the checkpoint?
 
 ## Reader guidance

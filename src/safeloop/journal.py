@@ -10,6 +10,7 @@ class JournalState(str, Enum):
     APPLIED = "applied"
     COMPENSATING = "compensating"
     COMPENSATED = "compensated"
+    COMPENSATION_FAILED = "compensation_failed"
     FAILED = "failed"
     RESUMABLE = "resumable"
     HANDED_OFF = "handed_off"
@@ -23,24 +24,34 @@ _ALLOWED_TRANSITIONS: dict[JournalState, set[JournalState]] = {
         JournalState.COMPENSATING,
         JournalState.FAILED,
         JournalState.RESUMABLE,
-        JournalState.HANDED_OFF,
     },
     JournalState.COMPENSATING: {
         JournalState.COMPENSATED,
-        JournalState.FAILED,
+        JournalState.COMPENSATION_FAILED,
     },
     JournalState.RESUMABLE: {JournalState.EXECUTING},
     JournalState.APPLIED: set(),
     JournalState.COMPENSATED: set(),
+    JournalState.COMPENSATION_FAILED: set(),
     JournalState.FAILED: set(),
     JournalState.HANDED_OFF: set(),
 }
+
+
+class JournalReason(str, Enum):
+    APPROVAL_ERROR = "approval_error"
+    APPROVAL_BLOCK = "approval_block"
+    HANDOFF_REQUESTED = "handoff_requested"
+    EXECUTION_ERROR = "execution_error"
+    COMPENSATION_ERROR = "compensation_error"
 
 
 class JournalEntry(BaseModel):
     run_id: str
     action_id: str
     state: JournalState
+    reason: JournalReason | str | None = None
+    error: str | None = None
 
 
 def validate_transition(current_state: JournalState, next_state: JournalState) -> None:

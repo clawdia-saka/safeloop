@@ -11,6 +11,7 @@ EXPECTED_STATES = {
     "applied",
     "compensating",
     "compensated",
+    "compensation_failed",
     "failed",
     "resumable",
     "handed_off",
@@ -52,8 +53,8 @@ def test_journal_entry_requires_all_fields() -> None:
         (JournalState.EXECUTING, JournalState.COMPENSATING),
         (JournalState.EXECUTING, JournalState.FAILED),
         (JournalState.EXECUTING, JournalState.RESUMABLE),
-        (JournalState.EXECUTING, JournalState.HANDED_OFF),
         (JournalState.COMPENSATING, JournalState.COMPENSATED),
+        (JournalState.COMPENSATING, JournalState.COMPENSATION_FAILED),
         (JournalState.RESUMABLE, JournalState.EXECUTING),
     ],
 )
@@ -72,6 +73,7 @@ def test_validate_transition_accepts_valid_transitions(
         (JournalState.APPLIED, JournalState.EXECUTING),
         (JournalState.FAILED, JournalState.EXECUTING),
         (JournalState.HANDED_OFF, JournalState.EXECUTING),
+        (JournalState.EXECUTING, JournalState.HANDED_OFF),
         (JournalState.COMPENSATED, JournalState.APPLIED),
     ],
 )

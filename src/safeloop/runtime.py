@@ -11,7 +11,7 @@ from safeloop.hooks import (
     ApprovalHookRegistry,
     CompensationHookRegistry,
 )
-from safeloop.journal import JournalEntry, JournalState, validate_transition
+from safeloop.journal import JournalEntry, JournalReason, JournalState, validate_transition
 from safeloop.storage import LocalJournalStorage
 from safeloop.types import ActionEnvelope, EffectClass
 
@@ -89,15 +89,33 @@ class Runtime:
             self._append(run_id, action, JournalState.PROPOSED)
             try:
                 decision = self._approval_decision(action, approval_hooks)
-            except Exception:
-                return self._append(run_id, action, JournalState.FAILED)
+            except Exception as exc:
+                return self._append(
+                    run_id,
+                    action,
+                    JournalState.FAILED,
+                    reason=JournalReason.APPROVAL_ERROR,
+                    error=str(exc),
+                )
             if decision is ApprovalDecision.BLOCK:
-                return self._append(run_id, action, JournalState.FAILED)
+                return self._append(run_id, action, JournalState.FAILED, reason=JournalReason.APPROVAL_BLOCK)
             self._append(run_id, action, JournalState.APPROVED)
             if decision is ApprovalDecision.ESCALATE:
-                return self._append(run_id, action, JournalState.HANDED_OFF)
+                return self._append(
+                    run_id,
+                    action,
+                    JournalState.HANDED_OFF,
+                    reason=JournalReason.HANDOFF_REQUESTED,
+                )
             self._append(run_id, action, JournalState.EXECUTING)
         elif current.state == JournalState.RESUMABLE:
+            checkpoint = self._checkpoints.get(run_id)
+            if checkpoint is None:
+                # The persisted journal says the run paused earlier, but this
+                # runtime instance no longer has the live checkpoint payload
+                # needed to resume safely. Keep the run idempotently resumable
+                # in the journal without blindly re-executing from None.
+                return current
             self._append(run_id, action, JournalState.EXECUTING)
         else:
             return current
@@ -110,13 +128,34 @@ class Runtime:
             return self._append(run_id, action, JournalState.RESUMABLE)
         except Exception as exc:
             if compensation_hooks is not None and action.effect is EffectClass.COMPENSATABLE_WRITE:
-                self._append(run_id, action, JournalState.COMPENSATING)
+                self._append(
+                    run_id,
+                    action,
+                    JournalState.COMPENSATING,
+                    reason=JournalReason.EXECUTION_ERROR,
+                    error=str(exc),
+                )
                 try:
                     compensation_hooks.run(action, exc)
-                except Exception:
-                    return self._append(run_id, action, JournalState.FAILED)
+                except Exception as compensation_exc:
+                    self._checkpoints.pop(run_id, None)
+                    return self._append(
+                        run_id,
+                        action,
+                        JournalState.COMPENSATION_FAILED,
+                        reason=JournalReason.COMPENSATION_ERROR,
+                        error=str(compensation_exc),
+                    )
+                self._checkpoints.pop(run_id, None)
                 return self._append(run_id, action, JournalState.COMPENSATED)
-            return self._append(run_id, action, JournalState.FAILED)
+            self._checkpoints.pop(run_id, None)
+            return self._append(
+                run_id,
+                action,
+                JournalState.FAILED,
+                reason=JournalReason.EXECUTION_ERROR,
+                error=str(exc),
+            )
 
         self._checkpoints.pop(run_id, None)
         return self._append(run_id, action, JournalState.APPLIED)
@@ -136,10 +175,24 @@ class Runtime:
             return None
         return history[-1]
 
-    def _append(self, run_id: str, action: ActionEnvelope, state: JournalState) -> JournalEntry:
+    def _append(
+        self,
+        run_id: str,
+        action: ActionEnvelope,
+        state: JournalState,
+        *,
+        reason: JournalReason | None = None,
+        error: str | None = None,
+    ) -> JournalEntry:
         history = self.history(run_id)
         if history:
             validate_transition(history[-1].state, state)
-        entry = JournalEntry(run_id=run_id, action_id=action.idempotency_key, state=state)
+        entry = JournalEntry(
+            run_id=run_id,
+            action_id=action.idempotency_key,
+            state=state,
+            reason=reason,
+            error=error,
+        )
         self.storage.append(entry)
         return entry

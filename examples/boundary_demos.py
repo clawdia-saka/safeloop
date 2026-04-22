@@ -27,6 +27,14 @@ class BoundaryDemoResult:
     has_checkpoint_after_resume: bool = False
 
 
+@dataclass(frozen=True)
+class BoundaryReference:
+    scenario: str
+    classification: str
+    summary: str
+    doc_paths: list[str]
+
+
 ApprovalHook = Callable[[ActionEnvelope], ApprovalDecision]
 
 
@@ -174,6 +182,22 @@ def run_resumable_demo(*, storage_path: str | Path | None = None) -> BoundaryDem
     if tempdir is not None:
         tempdir.cleanup()
     return result
+
+
+def describe_unsupported_rollback_expectation() -> BoundaryReference:
+    return BoundaryReference(
+        scenario="unsupported_rollback_expectation",
+        classification="unsupported",
+        summary=(
+            "Compensation should not be misread as perfect rollback or "
+            "as-if-never-happened recovery."
+        ),
+        doc_paths=[
+            "docs/case-studies/boundary-scenarios.md",
+            "docs/faq.md",
+            "docs/case-studies/github-pr-demo.md",
+        ],
+    )
 
 
 if __name__ == "__main__":

@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from examples.boundary_demos import (
+    describe_unsupported_rollback_expectation,
     run_compensation_failed_demo,
     run_handoff_demo,
     run_resumable_demo,
@@ -78,3 +79,21 @@ def test_boundary_demo_persists_runtime_truth_for_viewer_and_api(tmp_path) -> No
     assert viewer_run.journal[-1].reason == JournalReason.HANDOFF_REQUESTED.value
     assert api_response.status_code == 200
     assert api_response.json() == viewer_run.model_dump(mode="json", exclude_none=True)
+
+
+def test_describe_unsupported_rollback_expectation_points_to_docs_only_surface() -> None:
+    result = describe_unsupported_rollback_expectation()
+    root = Path(__file__).resolve().parents[1]
+
+    assert result.scenario == "unsupported_rollback_expectation"
+    assert result.classification == "unsupported"
+    assert result.doc_paths == [
+        "docs/case-studies/boundary-scenarios.md",
+        "docs/faq.md",
+        "docs/case-studies/github-pr-demo.md",
+    ]
+    assert "Compensation should not be misread as perfect rollback" in result.summary
+
+    for relative_path in result.doc_paths:
+        doc_text = (root / relative_path).read_text()
+        assert "rollback" in doc_text.lower()

@@ -10,12 +10,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from examples.boundary_demos import (
     run_compensation_failed_demo,
     run_handoff_demo,
+    run_repeated_resume_demo,
     run_resumable_demo,
 )
 from safeloop.api import BoundaryAnnotation, RunViewer, ScopeAnnotation, create_app, derive_annotations
 from safeloop.journal import JournalReason, JournalState
-from safeloop.runtime import ResumableExecution, Runtime
-from safeloop.types import ActionEnvelope, EffectClass
+from safeloop.runtime import Runtime
 
 
 def test_regression_compensation_failed_keeps_cleanup_uncertainty_and_side_effects(tmp_path) -> None:
@@ -72,67 +72,40 @@ def test_regression_handoff_stays_pre_execution_operator_boundary(tmp_path) -> N
 
 def test_regression_repeated_resume_keeps_checkpoint_truth_local_only(tmp_path) -> None:
     storage_path = tmp_path / "journal.jsonl"
-    runtime = Runtime(storage_path)
-    action = ActionEnvelope(
-        name="demo.resumable_boundary",
-        target="local-demo",
-        args={},
-        diff="Boundary demo: resumable",
-        actor="builder-bot",
-        privileges=["demo:write"],
-        idempotency_key="boundary-demo:resumable-regression",
-        effect=EffectClass.REVERSIBLE_WRITE,
-    )
+    result = run_repeated_resume_demo(storage_path=storage_path)
 
-    def pause_then_resume(checkpoint: object | None) -> dict[str, object]:
-        if checkpoint is None:
-            raise ResumableExecution({"step": 1})
-        return {"ok": checkpoint == {"step": 1}}
+    runtime_view = RunViewer(Runtime(storage_path)).get_run("boundary-demo:repeated-resume")
+    storage_view = RunViewer(storage_path).get_run("boundary-demo:repeated-resume")
+    api_response = TestClient(create_app(storage_path)).get("/runs/boundary-demo:repeated-resume")
 
-    first = runtime.run(
-        run_id=action.idempotency_key,
-        action=action,
-        executor=pause_then_resume,
-    )
-
-    runtime_view = RunViewer(runtime).get_run(action.idempotency_key)
-    storage_view = RunViewer(storage_path).get_run(action.idempotency_key)
-
-    assert first.state is JournalState.RESUMABLE
+    assert result.final_state is JournalState.APPLIED
+    assert result.has_checkpoint_before_resume is True
+    assert result.has_checkpoint_after_resume is False
     assert runtime_view is not None and storage_view is not None
-    assert runtime_view.state == storage_view.state == JournalState.RESUMABLE
-    assert runtime_view.scope == storage_view.scope == ScopeAnnotation.BOUNDARY_CASE
+    assert runtime_view.state == storage_view.state == JournalState.APPLIED
+    assert runtime_view.scope == storage_view.scope == ScopeAnnotation.INSIDE_MVP_SCOPE
     assert runtime_view.boundaries == storage_view.boundaries == [
-        BoundaryAnnotation.CHECKPOINT_RECORDED,
         BoundaryAnnotation.SIDE_EFFECTS_POSSIBLE,
+        BoundaryAnnotation.TERMINAL,
     ]
-    assert runtime_view.has_checkpoint is True
+    assert runtime_view.has_checkpoint is False
     assert storage_view.has_checkpoint is False
-
-    second = runtime.run(
-        run_id=action.idempotency_key,
-        action=action,
-        executor=pause_then_resume,
-    )
-    terminal_view = RunViewer(storage_path).get_run(action.idempotency_key)
-
-    assert second.state is JournalState.APPLIED
-    assert terminal_view is not None
-    assert [entry.state for entry in runtime.history(action.idempotency_key)] == [
+    assert api_response.status_code == 200
+    assert api_response.json()["boundaries"] == [
+        BoundaryAnnotation.SIDE_EFFECTS_POSSIBLE.value,
+        BoundaryAnnotation.TERMINAL.value,
+    ]
+    assert api_response.json()["has_checkpoint"] is False
+    assert [entry.state for entry in storage_view.journal] == [
         JournalState.PROPOSED,
         JournalState.APPROVED,
         JournalState.EXECUTING,
         JournalState.RESUMABLE,
         JournalState.EXECUTING,
+        JournalState.RESUMABLE,
+        JournalState.EXECUTING,
         JournalState.APPLIED,
     ]
-    assert terminal_view.state == JournalState.APPLIED
-    assert terminal_view.scope is ScopeAnnotation.INSIDE_MVP_SCOPE
-    assert terminal_view.boundaries == [
-        BoundaryAnnotation.SIDE_EFFECTS_POSSIBLE,
-        BoundaryAnnotation.TERMINAL,
-    ]
-    assert terminal_view.has_checkpoint is False
 
 
 def test_regression_unsupported_rollback_expectation_stays_docs_only() -> None:

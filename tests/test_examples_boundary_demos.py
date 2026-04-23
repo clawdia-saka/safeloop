@@ -8,6 +8,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from examples.boundary_demos import (
     run_compensation_failed_demo,
     run_handoff_demo,
+    run_repeated_resume_demo,
     run_resumable_demo,
 )
 from safeloop.api import RunViewer, create_app
@@ -78,3 +79,24 @@ def test_boundary_demo_persists_runtime_truth_for_viewer_and_api(tmp_path) -> No
     assert viewer_run.journal[-1].reason == JournalReason.HANDOFF_REQUESTED.value
     assert api_response.status_code == 200
     assert api_response.json() == viewer_run.model_dump(mode="json", exclude_none=True)
+
+
+def test_run_repeated_resume_demo_exposes_two_resume_checkpoints_before_completion() -> None:
+    result = run_repeated_resume_demo()
+
+    assert result.classification == "boundary"
+    assert result.final_state is JournalState.APPLIED
+    assert result.final_reason is None
+    assert result.executor_called is True
+    assert result.has_checkpoint_before_resume is True
+    assert result.has_checkpoint_after_resume is False
+    assert result.journal_states == [
+        JournalState.PROPOSED,
+        JournalState.APPROVED,
+        JournalState.EXECUTING,
+        JournalState.RESUMABLE,
+        JournalState.EXECUTING,
+        JournalState.RESUMABLE,
+        JournalState.EXECUTING,
+        JournalState.APPLIED,
+    ]

@@ -8,7 +8,8 @@ SafeLoop should expose a small, deterministic semantic duplicate guard that can 
 - Fingerprints are stable for equivalent whitespace/case/punctuation variants.
 - Names are intentionally excluded so renamed replays of the same semantic motif are still duplicates.
 - The guard tracks a run-wide fingerprint ledger and reports whether each newly observed scenario is novel.
-- The default ledger is unbounded so early-run fingerprints are not forgotten later in the same run; callers with strict memory budgets may opt into explicit FIFO eviction.
+- The default ledger is intentionally unbounded for the lifetime of one guard/run so early-run fingerprints are not forgotten later in the same run. This is per-run state owned by the caller, not process-global daemon memory.
+- `max_fingerprints` is an optional active FIFO bound for callers with strict memory budgets. When callers choose a bounded active ledger, they should not expect bounded memory to also provide true all-time duplicate detection.
 - This PR exposes the reusable guard in the main package; wiring it into the non-git overnight-lite sweeper is intentionally outside this repository change.
 
 ## Acceptance criteria

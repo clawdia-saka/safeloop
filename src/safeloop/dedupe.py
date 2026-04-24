@@ -54,10 +54,16 @@ class DedupeObservation:
 class ScenarioDedupeGuard:
     """Track semantic fingerprints across a large scenario-sweeper run.
 
-    By default the ledger is unbounded so early-run fingerprints are not
-    forgotten later in the same run. Callers with strict memory budgets can set
-    ``max_fingerprints`` to opt into FIFO eviction explicitly. Observations are
-    protected by a small lock so threaded sweepers cannot corrupt counters.
+    By default the ledger is intentionally unbounded for the lifetime of one
+    guard/run so early-run fingerprints are not forgotten later in that run.
+    This is caller-owned per-run state, not process-global daemon memory.
+
+    ``max_fingerprints`` bounds only the active FIFO ledger for callers with
+    strict memory budgets. Choosing that bound is an explicit tradeoff: bounded
+    active memory should not be interpreted as true all-time duplicate memory.
+
+    Observations are protected by a small lock so threaded sweepers cannot
+    corrupt counters.
     """
 
     def __init__(self, *, max_fingerprints: int | None = None) -> None:

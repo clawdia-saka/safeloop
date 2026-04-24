@@ -44,6 +44,44 @@ def test_global_guard_rejects_duplicate_churn_beyond_recent_window() -> None:
     assert duplicate.total_evicted_at_observation == 0
 
 
+def test_guard_tracks_mixed_novel_and_duplicate_churn() -> None:
+    guard = ScenarioDedupeGuard()
+    anchors = [
+        scenario(name=f"anchor_{index}", goal=f"Anchor semantic goal {index}", why=f"Anchor reason {index}")
+        for index in range(50)
+    ]
+
+    first_observations = [guard.observe(anchor) for anchor in anchors]
+    assert all(observation.is_novel for observation in first_observations)
+
+    for cycle in range(20):
+        for index, anchor in enumerate(anchors):
+            duplicate = guard.observe(
+                {
+                    **anchor,
+                    "name": f"renamed_replay_{cycle}_{index}",
+                    "goal": f" anchor SEMANTIC goal {index}! ",
+                    "why": f"Anchor reason {index}.",
+                }
+            )
+            assert not duplicate.is_novel
+            assert duplicate.first_seen_index == index
+            assert duplicate.seen_count == cycle + 2
+
+        novel = guard.observe(
+            scenario(
+                name=f"novel_{cycle}",
+                goal=f"Fresh mixed-churn edge {cycle}",
+                why=f"Keep novel traffic interleaved with duplicate churn {cycle}",
+            )
+        )
+        assert novel.is_novel
+
+    assert guard.observed_count == 1_070
+    assert guard.duplicate_count == 1_000
+    assert guard.evicted_count == 0
+
+
 def test_guard_allows_distinct_semantic_motifs() -> None:
     guard = ScenarioDedupeGuard()
     assert guard.observe(scenario(kind="handoff", goal="Escalate before execution")).is_novel

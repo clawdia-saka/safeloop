@@ -1,4 +1,5 @@
 from safeloop.api import RunViewer, create_app
+from safeloop.dedupe import DedupeObservation, ScenarioDedupeGuard, semantic_fingerprint
 from safeloop.hooks import (
     ApprovalDecision,
     ApprovalHookRegistry,
@@ -11,6 +12,7 @@ from safeloop.types import ActionEnvelope, EffectClass
 __all__ = [
     "ActionEnvelope",
     "ApprovalDecision",
+    "DedupeObservation",
     "ApprovalHookRegistry",
     "CompensationHookRegistry",
     "create_app",
@@ -21,4 +23,6 @@ __all__ = [
     "RunRecord",
     "Runtime",
     "RunViewer",
+    "ScenarioDedupeGuard",
+    "semantic_fingerprint",
 ]

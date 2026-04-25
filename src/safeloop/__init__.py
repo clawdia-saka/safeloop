@@ -6,6 +6,7 @@ from safeloop.hooks import (
     CompensationHookRegistry,
 )
 from safeloop.runtime import ResumableExecution, RunRecord, Runtime
+from safeloop.scorecard import summarize_scores
 from safeloop.storage import JournalStorageError, LocalJournalStorage
 from safeloop.types import ActionEnvelope, EffectClass
 
@@ -25,4 +26,5 @@ __all__ = [
     "RunViewer",
     "ScenarioDedupeGuard",
     "semantic_fingerprint",
+    "summarize_scores",
 ]

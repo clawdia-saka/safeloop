@@ -16,6 +16,7 @@ The point of this split is to keep the GitHub case study concrete while still ma
 | Handoff / handed_off | `run_handoff_demo()` | `boundary` | The honest outcome may be to stop before execution and hand control to an operator/external system. |
 | Compensation failure / compensation_failed | `run_compensation_failed_demo()` | `boundary` | Cleanup itself can fail; SafeLoop should say that explicitly instead of flattening everything into generic failure. |
 | Resumable / resumable -> applied | `run_resumable_demo()` | `boundary` | A run can pause, hold checkpoint state in the live runtime, and later resume without pretending the first attempt never happened. |
+| Repeated resume / resumable -> resumable -> applied | `run_repeated_resume_demo()` | `boundary` | Some runs need more than one checkpointed retry; the journal should show each resumable stop instead of flattening them into a single retry story. |
 | Unsupported rollback expectation | see [`docs/faq.md`](../faq.md) and [`github-pr-demo.md`](github-pr-demo.md) | `unsupported` | Compensation should not be misread as perfect rollback or “as-if-never-happened” recovery. |
 
 ## Why these are examples instead of a state catalog

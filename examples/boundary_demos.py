@@ -176,11 +176,63 @@ def run_resumable_demo(*, storage_path: str | Path | None = None) -> BoundaryDem
     return result
 
 
+def run_repeated_resume_demo(*, storage_path: str | Path | None = None) -> BoundaryDemoResult:
+    runtime, tempdir = _runtime_for(storage_path)
+    action = _make_action(
+        name="demo.repeated_resume_boundary",
+        key="boundary-demo:repeated-resume",
+        effect=EffectClass.REVERSIBLE_WRITE,
+    )
+    executed_checkpoints: list[object | None] = []
+
+    def pause_twice_then_apply(checkpoint: object | None) -> dict[str, object]:
+        executed_checkpoints.append(checkpoint)
+        if checkpoint is None:
+            raise ResumableExecution({"step": 1})
+        if checkpoint == {"step": 1}:
+            raise ResumableExecution({"step": 2})
+        return {"ok": checkpoint == {"step": 2}}
+
+    first_entry = runtime.run(
+        run_id=action.idempotency_key,
+        action=action,
+        executor=pause_twice_then_apply,
+    )
+    second_entry = runtime.run(
+        run_id=action.idempotency_key,
+        action=action,
+        executor=pause_twice_then_apply,
+    )
+    has_checkpoint_before_resume = runtime.checkpoint_for(action.idempotency_key) is not None
+    final_entry = runtime.run(
+        run_id=action.idempotency_key,
+        action=action,
+        executor=pause_twice_then_apply,
+    )
+    journal_states = [entry.state for entry in runtime.history(action.idempotency_key)]
+    result = BoundaryDemoResult(
+        scenario="repeated_resume",
+        classification="boundary",
+        action=action,
+        journal_states=journal_states,
+        final_state=final_entry.state,
+        final_reason=final_entry.reason,
+        error=first_entry.error or second_entry.error or final_entry.error,
+        executor_called=bool(executed_checkpoints),
+        has_checkpoint_before_resume=has_checkpoint_before_resume,
+        has_checkpoint_after_resume=runtime.checkpoint_for(action.idempotency_key) is not None,
+    )
+    if tempdir is not None:
+        tempdir.cleanup()
+    return result
+
+
 if __name__ == "__main__":
     for result in (
         run_handoff_demo(),
         run_compensation_failed_demo(),
         run_resumable_demo(),
+        run_repeated_resume_demo(),
     ):
         print(
             result.scenario,

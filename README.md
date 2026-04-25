@@ -159,7 +159,7 @@ Implemented now:
 - storage-backed runtime execution with approval, compensation, handoff, and resume behavior
 - local inspection API/read model
 - a local GitHub-style reference demo that executes through the real runtime and persists journal history for viewer/API inspection
-- runnable boundary demos for handoff, compensation failure, and resumable execution
+- runnable boundary demos for handoff, compensation failure, resumable execution, and repeated resume
 - tests covering those contracts
 
 Still incomplete on this branch:
@@ -208,7 +208,7 @@ What they prove today:
 - the demos execute through the real `Runtime`
 - journal history is persisted to local storage
 - the resulting runs can be inspected through `RunViewer` and the HTTP API
-- success, compensation, handoff, compensation-failure, and resumable paths all share the same runtime-owned truth
+- success, compensation, handoff, compensation-failure, resumable, and repeated-resume paths all share the same runtime-owned truth
 - docs now classify examples as `in_scope`, `boundary`, or `unsupported` in [`docs/case-studies/boundary-scenarios.md`](docs/case-studies/boundary-scenarios.md)
 
 What they do **not** prove:

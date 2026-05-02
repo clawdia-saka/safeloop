@@ -104,10 +104,11 @@ See [`../examples/control-plane-local-demo/README.md`](../examples/control-plane
 
 ## Next / PR-linked work
 
-These items are intentionally documented as next work unless and until separately merged:
+These items are intentionally documented as next work unless and until separately merged. The primary direction is now agent-native rather than HTTP- or Telegram-first; see [`roadmap.md`](roadmap.md) and [`specs/agent-native-operator-packet.md`](specs/agent-native-operator-packet.md).
 
-- Lifecycle transition APIs for approval request/approve/reject/expire flows.
-- External anchor JSONL export and verification using `external_anchors`.
-- Dashboard v2 / hosted UI and authenticated browser workflow.
-- Production secret rotation and pluggable identity providers.
-- Tighter integration between approvals and SafeLoop resume/rollback operations.
+- 0.1.5 release alignment for the runtime-enforced approval lifecycle and static-dashboard-as-artifact positioning.
+- 0.2.0 agent-native operator packets: `review-packet.md`, `suggested-agent-prompt.md`, machine-readable evidence, manifest hashes, and strict verdict import.
+- Agent prompt exporters for Hermes, Claude Code, Codex, and OpenClaw.
+- Operator inbox CLI for pending approvals and evidence review.
+- Optional later transports: localhost HTTP viewer or Telegram ChatOps, both reusing the same packet/verdict/lifecycle code paths rather than becoming separate approval authorities.
+- Production secret rotation and pluggable identity providers, after the local packet flow is proven.

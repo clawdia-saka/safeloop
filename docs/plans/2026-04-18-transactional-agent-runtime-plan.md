@@ -26,17 +26,18 @@
 - richer approval/risk interface
 - idempotency handling
 - partial retry / resume UX
-- Slack/Telegram notifications
-- browser/API connector examples
+- agent-native operator packets for OpenClaw/Hermes/Codex/Claude Code review
+- browser/API connector examples as reference surfaces, not primary operator UX
 - better run search + filtering
 
-### 90 Day Product — Reliability Control Plane
-- org/workspace model
-- RBAC / policy UI
-- hosted audit store
-- approval routing / escalation
+### 90 Day Product — Agent-Native Operator Plane
+- packet manifest + tamper-evident evidence bundles
+- strict verdict import with RBAC, HMAC/signature checks, expiry, and replay protection
+- CLI operator inbox for pending approvals and evidence review
+- target-specific prompt exporters for common coding/review agents
+- optional localhost HTTP or Telegram transports only after the packet/verdict path is stable
 - reliability analytics / incident review
-- hosted connectors / secret isolation
+- hosted connectors / secret isolation as later hardening work
 
 ---
 

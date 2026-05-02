@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 
 from safeloop.agent_watchdog import timeline_summary, undo, verify_run, watch_run
+from safeloop.control_plane.anchor_audit import audit_control_plane_anchors
 from safeloop.local_anchor import verify_local_anchor
 
 
@@ -31,6 +32,12 @@ def main(argv: list[str] | None = None) -> int:
     v.add_argument("run_dir")
     va = sub.add_parser("verify-anchor")
     va.add_argument("run_dir")
+    ca = sub.add_parser("audit-control-plane-anchors")
+    ca.add_argument("--db", required=True)
+    ca.add_argument("--anchors", required=True)
+    ca.add_argument("--output-dir", required=True)
+    ca.add_argument("--artifact", action="append", default=[])
+    ca.add_argument("--artifact-base")
     t = sub.add_parser("timeline")
     t.add_argument("run_dir")
     t.add_argument("--json", action="store_true")
@@ -73,6 +80,17 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if result["status"] in {"valid", "warning"} else 1
     if args.cmd == "verify-anchor":
         result = verify_local_anchor(Path(args.run_dir))
+        print(json.dumps(result, indent=2))
+        return 0 if result["status"] == "valid" else 1
+    if args.cmd == "audit-control-plane-anchors":
+        result = audit_control_plane_anchors(
+            Path(args.db),
+            Path(args.anchors),
+            output_dir=Path(args.output_dir),
+            artifacts=[Path(p) for p in args.artifact],
+            artifact_base=Path(args.artifact_base) if args.artifact_base else None,
+        )
+        print("SafeLoop control-plane tamper-evident local audit")
         print(json.dumps(result, indent=2))
         return 0 if result["status"] == "valid" else 1
     if args.cmd == "timeline":

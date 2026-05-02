@@ -122,3 +122,5 @@ python -m build --wheel
 ```
 
 For the 0.0.3 watchdog contract, see [`docs/safeloop-0.0.3-agent-watchdog-rc.md`](docs/safeloop-0.0.3-agent-watchdog-rc.md). For release notes and deltas from 0.0.1/0.0.2, see [`docs/release-notes-0.0.3.md`](docs/release-notes-0.0.3.md).
+
+For the 0.1.0 local control-plane MVP, see [`docs/control-plane.md`](docs/control-plane.md), [`docs/approval-lifecycle.md`](docs/approval-lifecycle.md), [`docs/control-plane-threat-model.md`](docs/control-plane-threat-model.md), and [`docs/release-notes-0.1.0.md`](docs/release-notes-0.1.0.md). A local demo is in [`examples/control-plane-local-demo/`](examples/control-plane-local-demo/).

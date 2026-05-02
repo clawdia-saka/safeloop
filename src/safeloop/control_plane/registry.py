@@ -8,7 +8,18 @@ import sqlite3
 from typing import Literal
 
 RegistryRole = Literal["admin", "operator", "viewer"]
-ApprovalStatus = Literal["pending", "approved", "rejected", "expired"]
+ApprovalStatus = Literal[
+    "pending",
+    "approved",
+    "rejected",
+    "expired",
+    "REQUESTED",
+    "APPROVED",
+    "REJECTED",
+    "EXECUTED",
+    "EXPIRED",
+    "REVOKED",
+]
 
 
 @dataclass(frozen=True)
@@ -57,7 +68,7 @@ class ControlPlaneRegistry:
     workflow lifecycle beyond create/get/list and event append/read helpers.
     """
 
-    _SCHEMA_VERSION = 2
+    _SCHEMA_VERSION = 3
 
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
@@ -266,7 +277,7 @@ def init_control_plane_registry(path: str | Path) -> None:
                 requested_by TEXT NOT NULL,
                 action TEXT NOT NULL,
                 subject TEXT NOT NULL,
-                status TEXT NOT NULL CHECK (status IN ('pending', 'approved', 'rejected', 'expired')),
+                status TEXT NOT NULL CHECK (status IN ('pending', 'approved', 'rejected', 'expired', 'REQUESTED', 'APPROVED', 'REJECTED', 'EXECUTED', 'EXPIRED', 'REVOKED')),
                 signed_payload TEXT NOT NULL,
                 signature TEXT NOT NULL,
                 created_at TEXT NOT NULL
@@ -299,6 +310,7 @@ def init_control_plane_registry(path: str | Path) -> None:
                 f"registry supports schema_version={ControlPlaneRegistry._SCHEMA_VERSION}"
             )
         _migrate_approval_requests_to_approvals(conn)
+        _migrate_approvals_status_constraint(conn)
         conn.execute(
             """
             INSERT INTO control_plane_metadata(key, value) VALUES (?, ?)
@@ -333,3 +345,38 @@ def _migrate_approval_requests_to_approvals(conn: sqlite3.Connection) -> None:
         FROM approval_requests
         """
     )
+
+
+def _migrate_approvals_status_constraint(conn: sqlite3.Connection) -> None:
+    """Rebuild v2 approvals table so lifecycle statuses persist fail-closed."""
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'approvals'"
+    ).fetchone()
+    if row is None or "EXECUTED" in (row[0] or ""):
+        return
+
+    conn.execute("PRAGMA foreign_keys = OFF")
+    conn.executescript(
+        """
+        CREATE TABLE approvals_new (
+            approval_id TEXT PRIMARY KEY,
+            requested_by TEXT NOT NULL,
+            action TEXT NOT NULL,
+            subject TEXT NOT NULL,
+            status TEXT NOT NULL CHECK (status IN ('pending', 'approved', 'rejected', 'expired', 'REQUESTED', 'APPROVED', 'REJECTED', 'EXECUTED', 'EXPIRED', 'REVOKED')),
+            signed_payload TEXT NOT NULL,
+            signature TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        INSERT INTO approvals_new(
+            approval_id, requested_by, action, subject, status,
+            signed_payload, signature, created_at
+        )
+        SELECT approval_id, requested_by, action, subject, status,
+               signed_payload, signature, created_at
+        FROM approvals;
+        DROP TABLE approvals;
+        ALTER TABLE approvals_new RENAME TO approvals;
+        """
+    )
+    conn.execute("PRAGMA foreign_keys = ON")

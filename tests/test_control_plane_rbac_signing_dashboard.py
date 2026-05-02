@@ -11,7 +11,7 @@ from safeloop.control_plane.auth import (
     require_permission,
 )
 from safeloop.control_plane.authorized import record_approval_as, upsert_user_as
-from safeloop.control_plane.dashboard import render_static_dashboard
+from safeloop.control_plane.dashboard import render_static_dashboard, render_static_dashboard_v2
 from safeloop.control_plane.registry import ApprovalRecord, ControlPlaneRegistry, RegistryUser
 from safeloop.control_plane.signing import sign_approval_record, verify_approval_record
 
@@ -143,3 +143,59 @@ def test_static_dashboard_renders_registry_and_escapes_dynamic_fields(tmp_path: 
     assert 'onclick="alert(1)' not in html
     assert 'onmouseover="alert(1)' not in html
     assert "<script>" not in html
+
+
+def test_static_dashboard_v2_renders_adapter_dict_fields_and_fail_closed_warnings() -> None:
+    html = render_static_dashboard_v2(
+        users=[{"user_id": "viewer", "role": "viewer", "display_name": "View & Only"}],
+        approvals=[
+            {
+                "id": "appr-dict",
+                "status": "pending",
+                "operator": "ops-1",
+                "action": "resume_run",
+                "subject": "runs/run-123",
+                "signature": "sha256=abc123",
+                "anchor_id": "ledger:42",
+                "createdAt": "2026-05-03T04:00:00Z",
+            },
+            {
+                "approval_id": "appr-missing",
+                "operator": "ops-2",
+                "subject": "runs/run-456",
+            },
+        ],
+    )
+
+    assert "appr-dict" in html
+    assert "ops-1" in html
+    assert "sha256=abc123" in html
+    assert "ledger:42" in html
+    assert "Pending approvals: 1" in html
+    assert "appr-missing: missing status; render-only controls disabled" in html
+    assert "appr-missing: missing signature; treat as unverified" in html
+    assert "Fail-closed warnings" in html
+
+
+def test_static_dashboard_v2_escapes_xss_payloads_in_list_and_detail() -> None:
+    payload = '<img src=x onerror="alert(1)"><script>alert(2)</script>'
+    html = render_static_dashboard_v2(
+        users=[{"user_id": payload, "role": "viewer", "display_name": payload}],
+        approvals=[
+            {
+                "approval_id": payload,
+                "status": "pending",
+                "operator": payload,
+                "action": payload,
+                "subject": payload,
+                "signature": "sha256=<bad>",
+                "anchor": payload,
+            }
+        ],
+    )
+
+    assert "&lt;img src=x onerror=&quot;alert(1)&quot;&gt;" in html
+    assert "sha256=&lt;bad&gt;" in html
+    assert "<script>" not in html
+    assert "<img src=x" not in html
+    assert 'onerror="alert(1)"' not in html

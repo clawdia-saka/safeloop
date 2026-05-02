@@ -4,11 +4,14 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "safeloop"
-version = "0.1.0"
-description = "Transactional runtime skeleton"
+version = "0.0.3"
+description = "Local watchdog and tamper-evident timeline for long-running AI agents"
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [{ name = "Nous Research" }]
+
+[project.scripts]
+safeloop = "safeloop.cli:main"
 
 [tool.setuptools]
 package-dir = { "" = "src" }

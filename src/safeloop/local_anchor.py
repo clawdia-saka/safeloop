@@ -1,0 +1,112 @@
+"""Canonical local anchor and artifact hash helpers.
+
+These helpers are intentionally local-only: they bind a SafeLoop approval
+payload, run metadata, journal, and artifacts to deterministic sha256 digests
+without depending on any remote service or control-plane API.
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+from typing import Any
+
+_HASH_PREFIX = "sha256:"
+
+
+def canonical_json_bytes(payload: Any) -> bytes:
+    """Return deterministic UTF-8 JSON bytes for hashable payloads."""
+    return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+
+
+def canonical_sha256(payload: Any) -> str:
+    """Hash a JSON-serializable payload using SafeLoop canonical JSON."""
+    return _HASH_PREFIX + hashlib.sha256(canonical_json_bytes(payload)).hexdigest()
+
+
+def approval_payload_hash(payload: dict[str, Any]) -> str:
+    """Canonical sha256 binding for a human/agent approval payload."""
+    return canonical_sha256(payload)
+
+
+def artifact_hash(path: Path) -> str:
+    """Hash artifact bytes exactly as stored on disk."""
+    return _HASH_PREFIX + hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def journal_hash(path: Path) -> str:
+    """Hash a JSONL journal deterministically by canonicalizing each event line.
+
+    Blank lines are ignored. This catches event field tampering while remaining
+    stable across JSON object key order in individual journal lines.
+    """
+    events = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    return canonical_sha256(events)
+
+
+def run_artifact_hashes(run_dir: Path) -> dict[str, str]:
+    """Return hashes for all local run artifacts except verification/anchor output."""
+    hashes: dict[str, str] = {}
+    for path in sorted(p for p in run_dir.rglob("*") if p.is_file()):
+        rel = path.relative_to(run_dir).as_posix()
+        if (
+            rel == "local-anchor.json"
+            or rel == "rollback-plan.json"
+            or rel.startswith("verification/")
+            or rel.endswith("/undo-preflight.json")
+            or rel.endswith("/undo-result.json")
+        ):
+            continue
+        hashes[rel] = artifact_hash(path)
+    return hashes
+
+
+def create_local_anchor(run_dir: Path, approval_payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Create and persist a local anchor binding a run to its artifacts."""
+    anchor = {
+        "schema_version": "local-anchor.v1",
+        "approval_payload_hash": approval_payload_hash(approval_payload or {}),
+        "run_hash": artifact_hash(run_dir / "run.json"),
+        "journal_hash": journal_hash(run_dir / "timeline.jsonl"),
+        "artifact_hashes": run_artifact_hashes(run_dir),
+    }
+    anchor["anchor_hash"] = canonical_sha256(anchor)
+    (run_dir / "local-anchor.json").write_text(json.dumps(anchor, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return anchor
+
+
+def verify_local_anchor(run_dir: Path) -> dict[str, Any]:
+    """Verify local-anchor.json still matches run metadata, journal, and artifacts."""
+    issues: list[str] = []
+    anchor_path = run_dir / "local-anchor.json"
+    if not anchor_path.exists():
+        return {"schema_version": "local-anchor-verification.v1", "status": "missing", "issues": ["missing local-anchor.json"]}
+
+    anchor = json.loads(anchor_path.read_text(encoding="utf-8"))
+    stored_hash = anchor.get("anchor_hash")
+    without_hash = dict(anchor)
+    without_hash.pop("anchor_hash", None)
+    if stored_hash != canonical_sha256(without_hash):
+        issues.append("anchor hash mismatch")
+    if anchor.get("run_hash") != artifact_hash(run_dir / "run.json"):
+        issues.append("run hash mismatch")
+    if anchor.get("journal_hash") != journal_hash(run_dir / "timeline.jsonl"):
+        issues.append("journal hash mismatch")
+
+    actual_artifacts = run_artifact_hashes(run_dir)
+    expected_artifacts = anchor.get("artifact_hashes", {})
+    for rel, digest in expected_artifacts.items():
+        actual = actual_artifacts.get(rel)
+        if actual is None:
+            issues.append(f"missing artifact {rel}")
+        elif actual != digest:
+            issues.append(f"artifact hash mismatch {rel}")
+    for rel in sorted(set(actual_artifacts) - set(expected_artifacts)):
+        issues.append(f"unbound artifact {rel}")
+
+    return {
+        "schema_version": "local-anchor-verification.v1",
+        "status": "invalid" if issues else "valid",
+        "issues": issues,
+        "anchor_hash": stored_hash,
+    }

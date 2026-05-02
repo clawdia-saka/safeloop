@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 
 from safeloop.agent_watchdog import timeline_summary, undo, verify_run, watch_run
+from safeloop.local_anchor import verify_local_anchor
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -28,6 +29,8 @@ def main(argv: list[str] | None = None) -> int:
     watch.add_argument("command", nargs=argparse.REMAINDER)
     v = sub.add_parser("verify-artifacts")
     v.add_argument("run_dir")
+    va = sub.add_parser("verify-anchor")
+    va.add_argument("run_dir")
     t = sub.add_parser("timeline")
     t.add_argument("run_dir")
     t.add_argument("--json", action="store_true")
@@ -68,6 +71,10 @@ def main(argv: list[str] | None = None) -> int:
         result = verify_run(Path(args.run_dir))
         print(json.dumps(result, indent=2))
         return 0 if result["status"] in {"valid", "warning"} else 1
+    if args.cmd == "verify-anchor":
+        result = verify_local_anchor(Path(args.run_dir))
+        print(json.dumps(result, indent=2))
+        return 0 if result["status"] == "valid" else 1
     if args.cmd == "timeline":
         summary = timeline_summary(Path(args.run_dir))
         if args.checkpoint:

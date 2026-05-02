@@ -12,6 +12,8 @@ from pathlib import Path
 from threading import Thread
 from typing import Any, TextIO
 
+from safeloop.local_anchor import create_local_anchor, verify_local_anchor
+
 
 def now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -360,6 +362,7 @@ def watch_run(
     prev = append_event(timeline, seq, "run_closed", {"status": status}, prev)
     run.update({"ended_at": now(), "status": status, "exit_code": proc.returncode, "checkpoint_count": checkpoint_count, "latest_event_hash": prev, "final_event_hash": prev, "capture_status": "complete"})
     atomic_json(run_dir / "run.json", run)
+    create_local_anchor(run_dir)
     return int(proc.returncode or 0), run_dir
 
 
@@ -421,6 +424,11 @@ def verify_run(run_dir: Path) -> dict[str, Any]:
                     issues.append(f"restore blob missing {cp.name}/{rel_blob}")
         if (run_dir / "side-effects.jsonl").exists() and not (run_dir / "side-effects.jsonl").read_text(encoding="utf-8").strip():
             pass
+        anchor_result = verify_local_anchor(run_dir)
+        if anchor_result["status"] == "missing":
+            warnings.extend(anchor_result["issues"])
+        elif anchor_result["status"] != "valid":
+            issues.extend(anchor_result["issues"])
     except Exception as exc:
         issues.append(f"verification error: {exc}")
     status = "invalid" if issues else ("warning" if warnings else "valid")
@@ -490,6 +498,7 @@ def undo(run_dir: Path, run_id: str, checkpoint_id: str, apply: bool = False) ->
         run["latest_event_hash"] = new_hash
         run["final_event_hash"] = new_hash
         atomic_json(run_dir / "run.json", run)
+        create_local_anchor(run_dir)
         return result
     return pre
 

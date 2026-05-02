@@ -18,6 +18,14 @@ def main(argv: list[str] | None = None) -> int:
     w.add_argument("--debounce-ms", type=int, default=750)
     w.add_argument("--max-interval-sec", type=int, default=0)
     w.add_argument("command", nargs=argparse.REMAINDER)
+    watch = sub.add_parser("watch")
+    watch.add_argument("--loop", action="store_true", help="Run local watchdog loop (0.0.4 alias for watch-run)")
+    watch.add_argument("--task-id", required=True)
+    watch.add_argument("--repo", required=True)
+    watch.add_argument("--run-root")
+    watch.add_argument("--debounce-ms", type=int, default=750)
+    watch.add_argument("--max-interval-sec", type=int, default=0)
+    watch.add_argument("command", nargs=argparse.REMAINDER)
     v = sub.add_parser("verify-artifacts")
     v.add_argument("run_dir")
     t = sub.add_parser("timeline")
@@ -33,7 +41,10 @@ def main(argv: list[str] | None = None) -> int:
     g.add_argument("--apply", action="store_true")
     args = parser.parse_args(argv)
 
-    if args.cmd == "watch-run":
+    if args.cmd in {"watch-run", "watch"}:
+        if args.cmd == "watch" and not args.loop:
+            print("watch requires --loop", file=sys.stderr)
+            return 2
         cmd = args.command[1:] if args.command and args.command[0] == "--" else args.command
         if not cmd:
             print("watch-run requires command after --", file=sys.stderr)

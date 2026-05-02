@@ -14,7 +14,7 @@ Agents can run for minutes or hours and leave operators asking:
 - can a checkpoint be locally undone?
 - did anything external happen that needs manual compensation?
 
-SafeLoop 0.0.3 focuses on a local watchdog/reversible-timeline workflow for those questions.
+SafeLoop 0.0.4 begins hardening the local watchdog/reversible-timeline workflow for those questions.
 
 ## Demo commands
 
@@ -27,10 +27,12 @@ python -m pip install -e .
 Run an agent under the watchdog:
 
 ```bash
-python -m safeloop.cli watch-run \
+python -m safeloop.cli watch --loop \
   --task-id demo \
   --repo /path/to/repo \
   -- python agent.py
+
+# `watch-run` remains available as a compatibility alias.
 ```
 
 The command prints the run directory, normally under `~/.safeloop/runs/<run-id>/` unless `--run-root` is provided.
@@ -59,7 +61,7 @@ bash examples/watchdog_demo.sh
 
 ## What it does today
 
-SafeLoop 0.0.3 RC writes a local run artifact packet:
+SafeLoop 0.0.4 reliability sprint writes a local run artifact packet:
 
 ```text
 RUN_DIR/
@@ -85,10 +87,10 @@ RUN_DIR/
 
 Implemented surfaces:
 
-- `watch-run`: executes a command in a repo, captures stdout/stderr, records process result, creates monotonic checkpoints for changed repo state, and binds artifacts into a timeline hash chain.
-- Artifact contract: `run.json`, `timeline.jsonl`, checkpoint metadata, `restore-manifest.json` with `schema_version: restore-manifest.v2`, and an always-present `side-effects.jsonl` placeholder.
-- Checkpoint parent binding: each checkpoint records parent, previous state digest, and current state digest.
-- `verify-artifacts`: checks timeline hash chain, bound artifact digests, checkpoint parent chain, process-result digest, and run final hash; writes `verification/verify-artifacts-result.json`.
+- `watch --loop` (`watch-run` compatibility alias): executes a command in a repo, captures stdout/stderr, records process result, creates run-local monotonic checkpoints for changed repo state, and binds artifacts into both checkpoint metadata and the timeline hash chain.
+- Artifact contract: `run.json`, `timeline.jsonl`, checkpoint metadata, `restore-manifest.json` with `schema_version: restore-manifest.v2`, complete command capture files, and an always-present `side-effects.jsonl` placeholder.
+- Checkpoint parent binding: each checkpoint records parent, sequence, allocation mode, previous state digest, current state digest, and artifact digests.
+- `verify-artifacts`: checks timeline hash chain, bound artifact digests, checkpoint parent chain, process-result digest, command capture completeness, invalid partial finalization, and run final hash; writes `verification/verify-artifacts-result.json`.
 - `timeline`: prints run status, command metadata, checkpoint table, undo status, side-effect status, and latest hash.
 - `undo`: demo-ready dry-run/apply UX for covered local file creations, including operator-readable artifact paths for `undo-preflight.json`, `rollback-plan.json`, and `undo-result.json`.
 - Existing runtime boundary demos, including repeated resume, remain documented as local lifecycle examples alongside the watchdog RC.

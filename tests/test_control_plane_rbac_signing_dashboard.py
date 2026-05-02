@@ -177,6 +177,59 @@ def test_static_dashboard_v2_renders_adapter_dict_fields_and_fail_closed_warning
     assert "Fail-closed warnings" in html
 
 
+def test_static_dashboard_v2_operator_snapshot_counts_links_evidence_and_blockers() -> None:
+    html = render_static_dashboard_v2(
+        approvals=[
+            {
+                "approval_id": "appr-pending",
+                "status": "pending",
+                "operator": "ops",
+                "action": "resume_run",
+                "subject": "runs/run-123",
+                "signature": "sha256=ok",
+                "approval_url": "file:///safe/approvals/appr-pending.json",
+                "run_url": "https://example.invalid/runs/run-123?x=1&y=2",
+                "checkpoint_url": "file:///safe/checkpoints/ckpt-9.json",
+                "artifact_url": "file:///safe/artifacts/art-7.tgz",
+                "approval_evidence": "signed by ops",
+                "run_evidence": "run ledger row 123",
+                "checkpoint_evidence": "ckpt hash abc",
+                "artifact_evidence": "artifact sha256 def",
+                "rollback_tier": "tier-2",
+                "rollback_blockers": ["pending migration", "open tickets"],
+                "side_effect_status": "dry-run only",
+                "anchor_verification_status": "verified",
+                "why_blocked": ["awaiting approver", "business hours only"],
+            },
+            {"approval_id": "appr-approved", "status": "approved", "action": "resume_run", "subject": "runs/a", "signature": "sha256=a"},
+            {"approval_id": "appr-rejected", "status": "rejected", "action": "resume_run", "subject": "runs/r", "signature": "sha256=r"},
+            {"approval_id": "appr-expired", "status": "EXPIRED", "action": "resume_run", "subject": "runs/e", "signature": "sha256=e"},
+            {"approval_id": "appr-revoked", "status": "REVOKED", "action": "resume_run", "subject": "runs/v", "signature": "sha256=v"},
+        ]
+    )
+
+    assert "Pending approvals: 1" in html
+    assert "Approved approvals: 1" in html
+    assert "Rejected approvals: 1" in html
+    assert "Expired approvals: 1" in html
+    assert "Revoked approvals: 1" in html
+    assert '<a href="file:///safe/approvals/appr-pending.json">approval</a>' in html
+    assert '<a href="https://example.invalid/runs/run-123?x=1&amp;y=2">run</a>' in html
+    assert '<a href="file:///safe/checkpoints/ckpt-9.json">checkpoint</a>' in html
+    assert '<a href="file:///safe/artifacts/art-7.tgz">artifact</a>' in html
+    assert "signed by ops" in html
+    assert "run ledger row 123" in html
+    assert "ckpt hash abc" in html
+    assert "artifact sha256 def" in html
+    assert "tier-2" in html
+    assert "pending migration" in html
+    assert "open tickets" in html
+    assert "dry-run only" in html
+    assert "verified" in html
+    assert "awaiting approver" in html
+    assert "business hours only" in html
+
+
 def test_static_dashboard_v2_escapes_xss_payloads_in_list_and_detail() -> None:
     payload = '<img src=x onerror="alert(1)"><script>alert(2)</script>'
     html = render_static_dashboard_v2(
@@ -199,3 +252,27 @@ def test_static_dashboard_v2_escapes_xss_payloads_in_list_and_detail() -> None:
     assert "<script>" not in html
     assert "<img src=x" not in html
     assert 'onerror="alert(1)"' not in html
+
+
+
+def test_static_dashboard_v2_blocks_dangerous_evidence_link_schemes() -> None:
+    html = render_static_dashboard_v2(
+        approvals=[
+            {
+                "approval_id": "appr-js-link",
+                "status": "approved",
+                "action": "resume_run",
+                "subject": "runs/run-123",
+                "signature": "sha256=ok",
+                "approval_url": "javascript:alert(1)",
+                "run_url": "data:text/html,<script>alert(1)</script>",
+                "artifact_url": "https://example.invalid/artifact.json",
+            }
+        ]
+    )
+
+    assert 'href="javascript:alert(1)"' not in html
+    assert 'href="data:text/html' not in html
+    assert "blocked unsafe approval link" in html
+    assert "blocked unsafe run link" in html
+    assert '<a href="https://example.invalid/artifact.json">artifact</a>' in html

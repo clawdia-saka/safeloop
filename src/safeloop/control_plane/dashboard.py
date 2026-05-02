@@ -6,11 +6,13 @@ from collections.abc import Iterable, Mapping
 from dataclasses import asdict, is_dataclass
 from html import escape
 from typing import Any
+from urllib.parse import urlparse
 
 from safeloop.control_plane.registry import ControlPlaneRegistry
 
 _REQUIRED_APPROVAL_FIELDS = ("approval_id", "status", "action", "subject")
 _WARNING_STATUSES = {"missing", "unknown", "invalid", "unsigned", "unverified"}
+_COUNT_STATUSES = ("pending", "approved", "rejected", "expired", "revoked")
 
 
 def render_static_dashboard(registry: ControlPlaneRegistry) -> str:
@@ -21,7 +23,7 @@ def render_static_dashboard(registry: ControlPlaneRegistry) -> str:
     """
     users = [_record_to_dict(user) for user in _safe_call(registry, "list_users")]
     approvals = [_normalize_approval(record) for record in _safe_call(registry, "list_approvals")]
-    pending_count = sum(1 for approval in approvals if approval.get("status") == "pending")
+    pending_count = sum(1 for approval in approvals if _status_key(approval.get("status")) == "pending")
     return render_static_dashboard_v2(users=users, approvals=approvals, pending_count=pending_count)
 
 
@@ -39,8 +41,11 @@ def render_static_dashboard_v2(
     """
     user_records = [_record_to_dict(user) for user in users]
     approval_records = [_normalize_approval(record) for record in approvals]
+    status_counts = _approval_status_counts(approval_records)
     if pending_count is None:
-        pending_count = sum(1 for approval in approval_records if approval.get("status") == "pending")
+        pending_count = status_counts["pending"]
+    else:
+        status_counts["pending"] = pending_count
 
     user_rows = "\n".join(_render_user_row(user) for user in user_records)
     approval_rows = "\n".join(_render_approval_row(approval) for approval in approval_records)
@@ -56,7 +61,8 @@ def render_static_dashboard_v2(
 </head>
 <body>
   <h1>SafeLoop Control Plane</h1>
-  <p>Local static demo snapshot. Pending approvals: {_html(pending_count)}</p>
+  <p>Local static demo snapshot. Pending approvals: {_html(status_counts['pending'])}</p>
+  {_render_status_counts(status_counts)}
   {warning_block}
   <h2>Users</h2>
   <table>
@@ -109,13 +115,27 @@ def _normalize_approval(record: Any) -> dict[str, Any]:
     for field in _REQUIRED_APPROVAL_FIELDS:
         if not data.get(field):
             warnings.append(f"{approval_id}: missing {field}; render-only controls disabled")
-    status = str(data.get("status") or "missing").lower()
+    status = _status_key(data.get("status")) or "missing"
     if status in _WARNING_STATUSES:
         warnings.append(f"{approval_id}: status is {status}; treat as not actionable")
     if not data.get("signature") and not data.get("signed_payload"):
         warnings.append(f"{approval_id}: missing signature; treat as unverified")
     data["warnings"] = warnings
     return data
+
+
+def _status_key(status: Any) -> str:
+    status_text = str(status or "").strip().lower()
+    return "pending" if status_text == "requested" else status_text
+
+
+def _approval_status_counts(approvals: Iterable[Mapping[str, Any]]) -> dict[str, int]:
+    counts = {status: 0 for status in _COUNT_STATUSES}
+    for approval in approvals:
+        status = _status_key(approval.get("status"))
+        if status in counts:
+            counts[status] += 1
+    return counts
 
 
 def _render_user_row(user: Mapping[str, Any]) -> str:
@@ -145,18 +165,87 @@ def _render_approval_row(approval: Mapping[str, Any]) -> str:
 
 
 def _render_approval_detail(approval: Mapping[str, Any]) -> str:
-    fields = ("approval_id", "status", "operator", "action", "subject", "signature", "anchor")
+    fields = (
+        "approval_id",
+        "status",
+        "operator",
+        "action",
+        "subject",
+        "signature",
+        "anchor",
+        "approval_evidence",
+        "run_evidence",
+        "checkpoint_evidence",
+        "artifact_evidence",
+        "rollback_tier",
+        "side_effect_status",
+        "anchor_verification_status",
+    )
     items = "\n".join(
         f"    <li><strong>{_html(field)}</strong>: {_html(approval.get(field))}</li>" for field in fields
     )
+    links = _render_evidence_links(approval)
+    rollback_blockers = _render_value_list("Rollback blockers", approval.get("rollback_blockers"))
+    why_blocked = _render_value_list("Why blocked", approval.get("why_blocked") or approval.get("why_blocked_reasons"))
     warnings = "\n".join(f"    <li>{_html(warning)}</li>" for warning in approval.get("warnings", []))
     warning_section = f"\n  <p>Fail-closed warnings:</p>\n  <ul>\n{warnings}\n  </ul>" if warnings else ""
     return f"""<section class="approval-detail">
   <h3>Approval {_html(approval.get('approval_id'))}</h3>
   <ul>
 {items}
-  </ul>{warning_section}
+  </ul>{links}{rollback_blockers}{why_blocked}{warning_section}
 </section>"""
+
+
+def _render_status_counts(status_counts: Mapping[str, int]) -> str:
+    items = "\n".join(
+        f"    <li>{_html(status.title())} approvals: {_html(status_counts.get(status, 0))}</li>"
+        for status in _COUNT_STATUSES
+    )
+    return f"""<section aria-label="Approval status counts">
+  <h2>Approval status counts</h2>
+  <ul>
+{items}
+  </ul>
+</section>"""
+
+
+def _render_evidence_links(approval: Mapping[str, Any]) -> str:
+    parts: list[str] = []
+    for label in ("approval", "run", "checkpoint", "artifact"):
+        url = approval.get(f"{label}_url") or approval.get(f"{label}_link") or approval.get(f"{label}_href")
+        if not url:
+            continue
+        if _safe_href(url):
+            parts.append(f'<li><a href="{_html(url)}">{_html(label)}</a></li>')
+        else:
+            parts.append(f"<li>blocked unsafe {_html(label)} link: {_html(url)}</li>")
+    if not parts:
+        return ""
+    return "\n  <p>Evidence links:</p>\n  <ul>\n    " + "\n    ".join(parts) + "\n  </ul>"
+
+
+def _safe_href(url: Any) -> bool:
+    parsed = urlparse(str(url).strip())
+    return parsed.scheme in {"", "http", "https", "file"}
+
+
+def _render_value_list(label: str, value: Any) -> str:
+    values = _as_list(value)
+    if not values:
+        return ""
+    items = "\n".join(f"    <li>{_html(item)}</li>" for item in values)
+    return f"\n  <p>{_html(label)}:</p>\n  <ul>\n{items}\n  </ul>"
+
+
+def _as_list(value: Any) -> list[Any]:
+    if value is None or value == "":
+        return []
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, Iterable) and not isinstance(value, (bytes, bytearray, Mapping)):
+        return list(value)
+    return [value]
 
 
 def _render_warnings(warnings: list[str]) -> str:

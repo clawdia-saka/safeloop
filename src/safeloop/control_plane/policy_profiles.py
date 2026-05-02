@@ -126,7 +126,9 @@ def enforce_policy(
             raise PolicyDenied("approval required")
         if approval.status != action_policy.approval_status:
             raise PolicyDenied(f"approval status {approval.status} does not match required {action_policy.approval_status}")
-        if signing_key is not None and not verify_approval_record(approval, signing_key):
+        if signing_key is None:
+            raise PolicyDenied("approval signing_key required")
+        if not verify_approval_record(approval, signing_key):
             raise PolicyDenied("approval signature invalid")
         if approval.action != action:
             raise PolicyDenied("approval action mismatch")

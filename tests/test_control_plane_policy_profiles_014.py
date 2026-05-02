@@ -13,6 +13,7 @@ from safeloop.control_plane.policy_profiles import (
     enforce_policy,
     load_policy_profiles,
 )
+from safeloop.control_plane.registry import ApprovalRecord
 
 KEY = b"policy-profile-test-key"
 T0 = datetime(2026, 5, 3, 5, 0, tzinfo=timezone.utc)
@@ -145,3 +146,51 @@ def test_e2e_guarded_auto_undo_and_external_dispatch_policies(tmp_path) -> None:
 
     with pytest.raises(PolicyDenied, match="role"):
         enforce_policy(profiles, policy="external_dispatch", action="dispatch_webhook", principal=Principal("ops", "operator"), approval=dispatch, requested_by="admin", subject="webhooks/w1", now=T0 + timedelta(seconds=2), signing_key=KEY)
+
+
+def test_approval_policy_requires_signing_key_and_rejects_forged_approved_record() -> None:
+    profiles = PolicyProfileSet.from_dict(
+        {
+            "version": "0.1.4",
+            "profiles": {
+                "guarded_auto_undo": {
+                    "actions": {
+                        "rollback": {
+                            "require_role": "operator",
+                            "permission": "resume",
+                            "approval_status": "APPROVED",
+                        }
+                    }
+                }
+            },
+        }
+    )
+    forged = ApprovalRecord(
+        approval_id="forged",
+        requested_by="ops",
+        action="rollback",
+        subject="runs/r1",
+        status="APPROVED",
+        signed_payload="",
+        signature="bad",
+        created_at=T0.isoformat(),
+    )
+
+    with pytest.raises(PolicyDenied, match="signing_key required"):
+        enforce_policy(
+            profiles,
+            policy="guarded_auto_undo",
+            action="rollback",
+            principal=Principal("ops", "operator"),
+            approval=forged,
+        )
+
+    with pytest.raises(PolicyDenied, match="signature invalid"):
+        enforce_policy(
+            profiles,
+            policy="guarded_auto_undo",
+            action="rollback",
+            principal=Principal("ops", "operator"),
+            approval=forged,
+            signing_key=KEY,
+        )

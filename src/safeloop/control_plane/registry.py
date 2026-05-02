@@ -30,8 +30,32 @@ class ApprovalRecord:
     created_at: str
 
 
+@dataclass(frozen=True)
+class ApprovalEvent:
+    event_id: str
+    approval_id: str
+    event_type: str
+    actor: str
+    payload: str
+    created_at: str
+
+
+@dataclass(frozen=True)
+class OperatorTokenRecord:
+    token_hash: str
+    salt: str
+    user_id: str
+    role: RegistryRole
+
+
 class ControlPlaneRegistry:
-    """Small SQLite registry isolated from runtime journal storage."""
+    """Small SQLite registry isolated from runtime journal storage.
+
+    The registry stores only the control-plane slice needed by local demos/tests:
+    operators/users, hashed bearer-token metadata, approval requests, and an
+    append-only approval event/audit log. It intentionally does not implement a
+    workflow lifecycle beyond create/get/list and event append/read helpers.
+    """
 
     _SCHEMA_VERSION = 1
 
@@ -39,61 +63,8 @@ class ControlPlaneRegistry:
         self.path = Path(path)
 
     def initialize(self) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        with self._connect() as conn:
-            conn.executescript(
-                """
-                CREATE TABLE IF NOT EXISTS control_plane_metadata (
-                    key TEXT PRIMARY KEY,
-                    value TEXT NOT NULL
-                );
-
-                CREATE TABLE IF NOT EXISTS users (
-                    user_id TEXT PRIMARY KEY,
-                    role TEXT NOT NULL CHECK (role IN ('admin', 'operator', 'viewer')),
-                    display_name TEXT
-                );
-
-                CREATE TABLE IF NOT EXISTS approval_requests (
-                    approval_id TEXT PRIMARY KEY,
-                    requested_by TEXT NOT NULL,
-                    action TEXT NOT NULL,
-                    subject TEXT NOT NULL,
-                    status TEXT NOT NULL CHECK (status IN ('pending', 'approved', 'rejected', 'expired')),
-                    signed_payload TEXT NOT NULL,
-                    signature TEXT NOT NULL,
-                    created_at TEXT NOT NULL
-                );
-
-                CREATE TABLE IF NOT EXISTS external_anchors (
-                    anchor_id TEXT PRIMARY KEY,
-                    kind TEXT NOT NULL,
-                    payload TEXT NOT NULL,
-                    created_at TEXT NOT NULL
-                );
-                """
-            )
-            row = conn.execute(
-                "SELECT value FROM control_plane_metadata WHERE key = ?",
-                ("schema_version",),
-            ).fetchone()
-            if row is None:
-                conn.execute(
-                    "INSERT INTO control_plane_metadata(key, value) VALUES (?, ?)",
-                    ("schema_version", str(self._SCHEMA_VERSION)),
-                )
-            else:
-                current_version = int(row[0])
-                if current_version > self._SCHEMA_VERSION:
-                    raise RuntimeError(
-                        f"unsupported future schema_version={current_version}; "
-                        f"registry supports schema_version={self._SCHEMA_VERSION}"
-                    )
-                if current_version < self._SCHEMA_VERSION:
-                    raise RuntimeError(
-                        f"unsupported old schema_version={current_version}; "
-                        "explicit migration is required"
-                    )
+        init_control_plane_registry(self.path)
+        self._assert_supported_schema()
 
     def schema_version(self) -> int:
         with self._connect() as conn:
@@ -128,11 +99,32 @@ class ControlPlaneRegistry:
             ).fetchall()
         return [RegistryUser(user_id=row[0], role=row[1], display_name=row[2]) for row in rows]
 
-    def record_approval(self, approval: ApprovalRecord) -> None:
+    def upsert_operator_token(self, token: OperatorTokenRecord) -> None:
+        """Persist hashed token metadata compatible with LocalTokenStore."""
         with self._connect() as conn:
             conn.execute(
                 """
-                INSERT INTO approval_requests(
+                INSERT INTO local_tokens(token_hash, salt, user_id, role) VALUES (?, ?, ?, ?)
+                ON CONFLICT(token_hash) DO UPDATE SET
+                    salt = excluded.salt,
+                    user_id = excluded.user_id,
+                    role = excluded.role
+                """,
+                (token.token_hash, token.salt, token.user_id, token.role),
+            )
+
+    def list_operator_tokens(self) -> list[OperatorTokenRecord]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT token_hash, salt, user_id, role FROM local_tokens ORDER BY user_id ASC, token_hash ASC"
+            ).fetchall()
+        return [OperatorTokenRecord(row[0], row[1], row[2], row[3]) for row in rows]
+
+    def create_approval(self, approval: ApprovalRecord) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO approvals(
                     approval_id, requested_by, action, subject, status,
                     signed_payload, signature, created_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -149,13 +141,17 @@ class ControlPlaneRegistry:
                 ),
             )
 
+    def record_approval(self, approval: ApprovalRecord) -> None:
+        """Backward-compatible alias for the local demo API."""
+        self.create_approval(approval)
+
     def get_approval(self, approval_id: str) -> ApprovalRecord | None:
         with self._connect() as conn:
             row = conn.execute(
                 """
                 SELECT approval_id, requested_by, action, subject, status,
                        signed_payload, signature, created_at
-                FROM approval_requests WHERE approval_id = ?
+                FROM approvals WHERE approval_id = ?
                 """,
                 (approval_id,),
             ).fetchone()
@@ -165,7 +161,7 @@ class ControlPlaneRegistry:
         sql = """
             SELECT approval_id, requested_by, action, subject, status,
                    signed_payload, signature, created_at
-            FROM approval_requests
+            FROM approvals
         """
         params: tuple[str, ...] = ()
         if status is not None:
@@ -176,10 +172,54 @@ class ControlPlaneRegistry:
             rows = conn.execute(sql, params).fetchall()
         return [self._approval_from_row(row) for row in rows]
 
+    def append_approval_event(self, event: ApprovalEvent) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO approval_events(
+                    event_id, approval_id, event_type, actor, payload, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    event.event_id,
+                    event.approval_id,
+                    event.event_type,
+                    event.actor,
+                    event.payload,
+                    event.created_at,
+                ),
+            )
+
+    def list_approval_events(self, approval_id: str | None = None) -> list[ApprovalEvent]:
+        sql = """
+            SELECT event_id, approval_id, event_type, actor, payload, created_at
+            FROM approval_events
+        """
+        params: tuple[str, ...] = ()
+        if approval_id is not None:
+            sql += " WHERE approval_id = ?"
+            params = (approval_id,)
+        sql += " ORDER BY created_at ASC, event_id ASC"
+        with self._connect() as conn:
+            rows = conn.execute(sql, params).fetchall()
+        return [ApprovalEvent(row[0], row[1], row[2], row[3], row[4], row[5]) for row in rows]
+
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.path)
         conn.execute("PRAGMA foreign_keys = ON")
         return conn
+
+    def _assert_supported_schema(self) -> None:
+        version = self.schema_version()
+        if version > self._SCHEMA_VERSION:
+            raise RuntimeError(
+                f"unsupported future schema_version={version}; "
+                f"registry supports schema_version={self._SCHEMA_VERSION}"
+            )
+        if version < self._SCHEMA_VERSION:
+            raise RuntimeError(
+                f"unsupported old schema_version={version}; explicit migration is required"
+            )
 
     @staticmethod
     def _approval_from_row(row: sqlite3.Row | tuple[str, ...]) -> ApprovalRecord:
@@ -192,4 +232,65 @@ class ControlPlaneRegistry:
             signed_payload=row[5],
             signature=row[6],
             created_at=row[7],
+        )
+
+
+def init_control_plane_registry(path: str | Path) -> None:
+    """Create the SQLite control-plane schema if it does not already exist."""
+    db_path = Path(path)
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS control_plane_metadata (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS users (
+                user_id TEXT PRIMARY KEY,
+                role TEXT NOT NULL CHECK (role IN ('admin', 'operator', 'viewer')),
+                display_name TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS local_tokens (
+                token_hash TEXT PRIMARY KEY,
+                salt TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                role TEXT NOT NULL CHECK (role IN ('admin', 'operator', 'viewer'))
+            );
+
+            CREATE TABLE IF NOT EXISTS approvals (
+                approval_id TEXT PRIMARY KEY,
+                requested_by TEXT NOT NULL,
+                action TEXT NOT NULL,
+                subject TEXT NOT NULL,
+                status TEXT NOT NULL CHECK (status IN ('pending', 'approved', 'rejected', 'expired')),
+                signed_payload TEXT NOT NULL,
+                signature TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS approval_events (
+                event_id TEXT PRIMARY KEY,
+                approval_id TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                actor TEXT NOT NULL,
+                payload TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (approval_id) REFERENCES approvals(approval_id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS external_anchors (
+                anchor_id TEXT PRIMARY KEY,
+                kind TEXT NOT NULL,
+                payload TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+            """
+        )
+        conn.execute(
+            "INSERT OR IGNORE INTO control_plane_metadata(key, value) VALUES (?, ?)",
+            ("schema_version", str(ControlPlaneRegistry._SCHEMA_VERSION)),
         )

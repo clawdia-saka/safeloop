@@ -42,7 +42,30 @@ def test_watch_loop_cli_alias_uses_monotonic_checkpoint_ids(tmp_path: Path) -> N
     checkpoints = sorted((run_dir / "checkpoints").glob("cp-*"))
     assert [cp.name for cp in checkpoints] == ["cp-0001", "cp-0002"]
     assert [read_json(cp / "checkpoint.json")["checkpoint_seq"] for cp in checkpoints] == [1, 2]
-    assert [read_json(cp / "checkpoint.json")["allocated_by"] for cp in checkpoints] == ["monotonic-run-local", "monotonic-run-local"]
+    assert [read_json(cp / "checkpoint.json")["allocated_by"] for cp in checkpoints] == ["monotonic-repo-task", "monotonic-repo-task"]
+
+
+def test_checkpoint_ids_are_monotonic_across_runs_for_same_repo_task(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    run_root = tmp_path / "runs"
+    agent = repo / "agent.py"
+
+    agent.write_text("from pathlib import Path\nPath('one.txt').write_text('1')\n", encoding="utf-8")
+    first = run_cli("watch-run", "--task-id", "reuse", "--repo", str(repo), "--run-root", str(run_root), "--debounce-ms", "10", "--", sys.executable, "agent.py")
+    assert first.returncode == 0, first.stderr
+
+    agent.write_text("from pathlib import Path\nPath('two.txt').write_text('2')\n", encoding="utf-8")
+    second = run_cli("watch-run", "--task-id", "reuse", "--repo", str(repo), "--run-root", str(run_root), "--debounce-ms", "10", "--", sys.executable, "agent.py")
+    assert second.returncode == 0, second.stderr
+
+    first_cp = run_dir_from(first.stdout) / "checkpoints" / "cp-0001" / "checkpoint.json"
+    second_run_dir = run_dir_from(second.stdout)
+    second_checkpoints = sorted((second_run_dir / "checkpoints").glob("cp-*"))
+    assert [cp.name for cp in second_checkpoints] == ["cp-0002"]
+    assert read_json(first_cp)["allocated_by"] == "monotonic-repo-task"
+    assert read_json(second_checkpoints[0] / "checkpoint.json")["checkpoint_seq"] == 2
+    assert read_json(second_checkpoints[0] / "checkpoint.json")["monotonic_scope"] == "repo_task_cross_run"
 
 
 def test_checkpoint_artifact_hash_binding_is_recorded_in_checkpoint(tmp_path: Path) -> None:

@@ -168,6 +168,8 @@ def create_checkpoint(
     run_dir: Path,
     repo: Path,
     cid: str,
+    checkpoint_seq: int,
+    allocated_by: str,
     parent: str | None,
     before: dict[str, str],
     after: dict[str, str],
@@ -182,8 +184,9 @@ def create_checkpoint(
     checkpoint = {
         "schema_version": "checkpoint.v1",
         "checkpoint_id": cid,
-        "checkpoint_seq": int(cid.removeprefix("cp-")),
-        "allocated_by": "monotonic-run-local",
+        "checkpoint_seq": checkpoint_seq,
+        "allocated_by": allocated_by,
+        "monotonic_scope": "repo_task_cross_run",
         "parent_checkpoint_id": parent,
         "previous_state_digest": state_digest(before),
         "current_state_digest": state_digest(after),
@@ -211,6 +214,35 @@ def create_checkpoint(
         for name in ["manifest.json", "diff.patch", "restore-manifest.json", "summary.md"]
     }
     atomic_json(cp / "checkpoint.json", checkpoint)
+
+
+def _monotonic_ledger_path(run_root: Path, repo: Path, task_id: str) -> Path:
+    repo_key = hashlib.sha256(str(repo.resolve()).encode("utf-8")).hexdigest()
+    return run_root / ".safeloop" / "monotonic-checkpoints" / repo_key / f"{safe_task_slug(task_id)}.json"
+
+
+def allocate_checkpoint_seq(run_root: Path, repo: Path, task_id: str, run_id: str) -> int:
+    """Allocate a checkpoint sequence that never reuses numbers for repo/task.
+
+    The ledger intentionally lives under the configured run root so repeated
+    invocations for the same repo + task avoid cp-id reuse across separate run
+    directories while remaining local and inspectable.
+    """
+    ledger = _monotonic_ledger_path(run_root, repo, task_id)
+    current = 0
+    if ledger.exists():
+        payload = json.loads(ledger.read_text(encoding="utf-8"))
+        current = int(payload.get("last_checkpoint_seq", 0))
+    next_seq = current + 1
+    atomic_json(ledger, {
+        "schema_version": "monotonic-checkpoint-ledger.v1",
+        "repo": str(repo.resolve()),
+        "task_id": task_id,
+        "last_checkpoint_seq": next_seq,
+        "last_run_id": run_id,
+        "updated_at": now(),
+    })
+    return next_seq
 
 
 def _drain_pipe(pipe: TextIO | None, output_path: Path) -> None:
@@ -301,8 +333,9 @@ def watch_run(
         if not force and pending_since is not None and now_mono - pending_since < debounce_sec:
             return
         checkpoint_count += 1
-        cid = f"cp-{checkpoint_count:04d}"
-        create_checkpoint(run_dir, repo, cid, parent, last_snap, current, last_bytes)
+        checkpoint_seq = allocate_checkpoint_seq(run_root_path, repo, task_id, run_id)
+        cid = f"cp-{checkpoint_seq:04d}"
+        create_checkpoint(run_dir, repo, cid, checkpoint_seq, "monotonic-repo-task", parent, last_snap, current, last_bytes)
         cp = run_dir / "checkpoints" / cid
         digests = {name: sha_file(cp / name) for name in ["checkpoint.json", "manifest.json", "diff.patch", "restore-manifest.json", "summary.md"]}
         prev = append_event(timeline, seq, "checkpoint_created", {"checkpoint_id": cid, "parent_checkpoint_id": parent, "artifact_digests": digests}, prev)

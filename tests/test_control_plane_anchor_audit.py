@@ -121,3 +121,18 @@ def test_control_plane_anchor_audit_cli_writes_reports(tmp_path):
     assert "tamper-evident local audit" in completed.stdout
     assert (audit_dir / "control-plane-audit.json").exists()
     assert (audit_dir / "control-plane-audit.md").exists()
+
+
+
+def test_control_plane_anchor_audit_rejects_missing_record_hash(tmp_path):
+    db_path = _registry(tmp_path)
+    records = expected_anchor_records(db_path)
+    degraded = [dict(record) for record in records]
+    degraded[0].pop("record_hash")
+    anchors = tmp_path / "anchors.jsonl"
+    write_anchor_jsonl(anchors, degraded)
+
+    result = audit_control_plane_anchors(db_path, anchors, output_dir=tmp_path / "audit")
+
+    assert result["status"] == "invalid"
+    assert "missing record hash approval:appr-1" in result["issues"]

@@ -6,6 +6,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import asdict, is_dataclass
 from html import escape
 from typing import Any
+from urllib.parse import urlparse
 
 from safeloop.control_plane.registry import ControlPlaneRegistry
 
@@ -213,11 +214,20 @@ def _render_evidence_links(approval: Mapping[str, Any]) -> str:
     parts: list[str] = []
     for label in ("approval", "run", "checkpoint", "artifact"):
         url = approval.get(f"{label}_url") or approval.get(f"{label}_link") or approval.get(f"{label}_href")
-        if url:
+        if not url:
+            continue
+        if _safe_href(url):
             parts.append(f'<li><a href="{_html(url)}">{_html(label)}</a></li>')
+        else:
+            parts.append(f"<li>blocked unsafe {_html(label)} link: {_html(url)}</li>")
     if not parts:
         return ""
     return "\n  <p>Evidence links:</p>\n  <ul>\n    " + "\n    ".join(parts) + "\n  </ul>"
+
+
+def _safe_href(url: Any) -> bool:
+    parsed = urlparse(str(url).strip())
+    return parsed.scheme in {"", "http", "https", "file"}
 
 
 def _render_value_list(label: str, value: Any) -> str:

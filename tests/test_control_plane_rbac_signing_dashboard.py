@@ -252,3 +252,27 @@ def test_static_dashboard_v2_escapes_xss_payloads_in_list_and_detail() -> None:
     assert "<script>" not in html
     assert "<img src=x" not in html
     assert 'onerror="alert(1)"' not in html
+
+
+
+def test_static_dashboard_v2_blocks_dangerous_evidence_link_schemes() -> None:
+    html = render_static_dashboard_v2(
+        approvals=[
+            {
+                "approval_id": "appr-js-link",
+                "status": "approved",
+                "action": "resume_run",
+                "subject": "runs/run-123",
+                "signature": "sha256=ok",
+                "approval_url": "javascript:alert(1)",
+                "run_url": "data:text/html,<script>alert(1)</script>",
+                "artifact_url": "https://example.invalid/artifact.json",
+            }
+        ]
+    )
+
+    assert 'href="javascript:alert(1)"' not in html
+    assert 'href="data:text/html' not in html
+    assert "blocked unsafe approval link" in html
+    assert "blocked unsafe run link" in html
+    assert '<a href="https://example.invalid/artifact.json">artifact</a>' in html

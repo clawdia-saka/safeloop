@@ -146,7 +146,9 @@ def audit_control_plane_anchors(
         stored_record_hash = record.get("record_hash")
         without_hash = dict(record)
         without_hash.pop("record_hash", None)
-        if stored_record_hash and stored_record_hash != canonical_sha256(without_hash):
+        if not isinstance(stored_record_hash, str) or not stored_record_hash:
+            issues.append(f"missing record hash {key[0]}:{key[1]}")
+        elif stored_record_hash != canonical_sha256(without_hash):
             issues.append(f"record hash mismatch {key[0]}:{key[1]}")
     for key, expected_record in expected_by_key.items():
         observed_record = observed_by_key.get(key)

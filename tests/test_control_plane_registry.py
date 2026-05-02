@@ -21,7 +21,7 @@ def test_registry_initializes_sqlite_file_with_expected_schema(tmp_path: Path) -
     registry.initialize()
 
     assert db_path.exists()
-    assert registry.schema_version() == 3
+    assert registry.schema_version() == 4
     assert registry.table_names() == {
         "approval_events",
         "approvals",
@@ -39,13 +39,13 @@ def test_registry_initialization_does_not_downgrade_newer_schema(tmp_path: Path)
     with sqlite3.connect(db_path) as conn:
         conn.execute(
             "UPDATE control_plane_metadata SET value = ? WHERE key = ?",
-            ("4", "schema_version"),
+            ("5", "schema_version"),
         )
 
-    with pytest.raises(RuntimeError, match="unsupported future schema_version=4"):
+    with pytest.raises(RuntimeError, match="unsupported future schema_version=5"):
         registry.initialize()
 
-    assert registry.schema_version() == 4
+    assert registry.schema_version() == 5
 
 
 def test_registry_migrates_v1_approval_requests_to_v2_approvals(tmp_path: Path) -> None:
@@ -99,7 +99,7 @@ def test_registry_migrates_v1_approval_requests_to_v2_approvals(tmp_path: Path) 
     registry = ControlPlaneRegistry(db_path)
     registry.initialize()
 
-    assert registry.schema_version() == 3
+    assert registry.schema_version() == 4
     assert registry.get_approval("appr-old") == old
     assert "approval_requests" in registry.table_names()
     assert "approvals" in registry.table_names()
@@ -139,7 +139,7 @@ def test_registry_migrates_v2_approvals_status_constraint_for_lifecycle(tmp_path
     )
     registry.create_approval(lifecycle_approval)
 
-    assert registry.schema_version() == 3
+    assert registry.schema_version() == 4
     assert registry.get_approval("appr-life") == lifecycle_approval
 
 

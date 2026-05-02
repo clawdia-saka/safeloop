@@ -16,7 +16,7 @@ from safeloop.control_plane.signing import verify_approval_record
 SUPPORTED_VERSION = "0.1.4"
 _VALID_ROLES = ("viewer", "operator", "admin")
 _ROLE_RANK = {role: index for index, role in enumerate(_VALID_ROLES)}
-_VALID_STATUSES = {"REQUESTED", "APPROVED", "REJECTED", "EXECUTED", "EXPIRED", "REVOKED"}
+_VALID_STATUSES = {"REQUESTED", "APPROVED", "IN_FLIGHT", "REJECTED", "EXECUTED", "EXPIRED", "REVOKED"}
 
 
 class PolicyConfigError(ValueError):

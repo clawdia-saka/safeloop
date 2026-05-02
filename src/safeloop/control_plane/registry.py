@@ -57,7 +57,7 @@ class ControlPlaneRegistry:
     workflow lifecycle beyond create/get/list and event append/read helpers.
     """
 
-    _SCHEMA_VERSION = 1
+    _SCHEMA_VERSION = 2
 
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
@@ -290,7 +290,46 @@ def init_control_plane_registry(path: str | Path) -> None:
             );
             """
         )
+        existing_version = conn.execute(
+            "SELECT value FROM control_plane_metadata WHERE key = ?", ("schema_version",)
+        ).fetchone()
+        if existing_version is not None and int(existing_version[0]) > ControlPlaneRegistry._SCHEMA_VERSION:
+            raise RuntimeError(
+                f"unsupported future schema_version={int(existing_version[0])}; "
+                f"registry supports schema_version={ControlPlaneRegistry._SCHEMA_VERSION}"
+            )
+        _migrate_approval_requests_to_approvals(conn)
         conn.execute(
-            "INSERT OR IGNORE INTO control_plane_metadata(key, value) VALUES (?, ?)",
+            """
+            INSERT INTO control_plane_metadata(key, value) VALUES (?, ?)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value
+            """,
             ("schema_version", str(ControlPlaneRegistry._SCHEMA_VERSION)),
         )
+
+
+def _table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
+    return (
+        conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            (table_name,),
+        ).fetchone()
+        is not None
+    )
+
+
+def _migrate_approval_requests_to_approvals(conn: sqlite3.Connection) -> None:
+    """Copy v1 approval_requests rows into the v2 approvals table."""
+    if not _table_exists(conn, "approval_requests"):
+        return
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO approvals(
+            approval_id, requested_by, action, subject, status,
+            signed_payload, signature, created_at
+        )
+        SELECT approval_id, requested_by, action, subject, status,
+               signed_payload, signature, created_at
+        FROM approval_requests
+        """
+    )

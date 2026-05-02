@@ -21,7 +21,7 @@ def test_registry_initializes_sqlite_file_with_expected_schema(tmp_path: Path) -
     registry.initialize()
 
     assert db_path.exists()
-    assert registry.schema_version() == 2
+    assert registry.schema_version() == 3
     assert registry.table_names() == {
         "approval_events",
         "approvals",
@@ -39,13 +39,13 @@ def test_registry_initialization_does_not_downgrade_newer_schema(tmp_path: Path)
     with sqlite3.connect(db_path) as conn:
         conn.execute(
             "UPDATE control_plane_metadata SET value = ? WHERE key = ?",
-            ("3", "schema_version"),
+            ("4", "schema_version"),
         )
 
-    with pytest.raises(RuntimeError, match="unsupported future schema_version=3"):
+    with pytest.raises(RuntimeError, match="unsupported future schema_version=4"):
         registry.initialize()
 
-    assert registry.schema_version() == 3
+    assert registry.schema_version() == 4
 
 
 def test_registry_migrates_v1_approval_requests_to_v2_approvals(tmp_path: Path) -> None:
@@ -99,10 +99,48 @@ def test_registry_migrates_v1_approval_requests_to_v2_approvals(tmp_path: Path) 
     registry = ControlPlaneRegistry(db_path)
     registry.initialize()
 
-    assert registry.schema_version() == 2
+    assert registry.schema_version() == 3
     assert registry.get_approval("appr-old") == old
     assert "approval_requests" in registry.table_names()
     assert "approvals" in registry.table_names()
+
+
+def test_registry_migrates_v2_approvals_status_constraint_for_lifecycle(tmp_path: Path) -> None:
+    db_path = tmp_path / "control-plane.sqlite3"
+    with sqlite3.connect(db_path) as conn:
+        conn.executescript(
+            """
+            CREATE TABLE control_plane_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+            INSERT INTO control_plane_metadata(key, value) VALUES ('schema_version', '2');
+            CREATE TABLE approvals (
+                approval_id TEXT PRIMARY KEY,
+                requested_by TEXT NOT NULL,
+                action TEXT NOT NULL,
+                subject TEXT NOT NULL,
+                status TEXT NOT NULL CHECK (status IN ('pending', 'approved', 'rejected', 'expired')),
+                signed_payload TEXT NOT NULL,
+                signature TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+            """
+        )
+
+    registry = ControlPlaneRegistry(db_path)
+    registry.initialize()
+    lifecycle_approval = ApprovalRecord(
+        approval_id="appr-life",
+        requested_by="ops",
+        action="resume_run",
+        subject="run-life",
+        status="REQUESTED",
+        signed_payload="{}",
+        signature="sha256=life",
+        created_at="2026-05-03T03:00:00Z",
+    )
+    registry.create_approval(lifecycle_approval)
+
+    assert registry.schema_version() == 3
+    assert registry.get_approval("appr-life") == lifecycle_approval
 
 
 def test_registry_upserts_and_lists_users_by_stable_role_order(tmp_path: Path) -> None:

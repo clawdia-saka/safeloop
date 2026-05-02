@@ -1,7 +1,12 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 import pytest
 
+from safeloop.control_plane.lifecycle import ApprovalLifecycleStore, EXECUTED, IN_FLIGHT
+from safeloop.control_plane.registry import ApprovalRecord, ControlPlaneRegistry
+from safeloop.control_plane.signing import sign_approval_record
 from safeloop.hooks import (
     ApprovalDecision,
     ApprovalHookRegistry,
@@ -47,6 +52,141 @@ def test_read_only_action_executes_without_approval(tmp_path) -> None:
     assert result.state == JournalState.APPLIED
     assert seen == []
     assert executions == [None]
+
+
+def test_control_plane_gate_blocks_write_without_approval_before_execution(tmp_path) -> None:
+    runtime = make_runtime(tmp_path)
+    lifecycle = ApprovalLifecycleStore(b"runtime-gate-test-key")
+    action = make_action(EffectClass.REVERSIBLE_WRITE, key="runtime-gated-missing")
+    executions: list[object | None] = []
+
+    result = runtime.run(
+        run_id="run-runtime-gated-missing",
+        action=action,
+        executor=lambda checkpoint: executions.append(checkpoint),
+        control_plane_approvals=lifecycle,
+        approval_key=b"runtime-gate-test-key",
+    )
+
+    assert result.state == JournalState.FAILED
+    assert result.reason == JournalReason.APPROVAL_BLOCK
+    assert "approval_id missing" in (result.error or "")
+    assert executions == []
+    assert [entry.state for entry in runtime.history("run-runtime-gated-missing")] == [
+        JournalState.PROPOSED,
+        JournalState.FAILED,
+    ]
+
+
+def test_control_plane_gate_consumes_valid_approval_before_write_execution(tmp_path) -> None:
+    key = b"runtime-gate-test-key"
+    now = datetime(2026, 5, 3, 5, 30, tzinfo=timezone.utc)
+    runtime = make_runtime(tmp_path)
+    lifecycle = ApprovalLifecycleStore(key)
+    lifecycle.approve(
+        lifecycle.request(
+            approval_id="approval-runtime-1",
+            requested_by="tester",
+            action="demo",
+            subject="system",
+            created_at=now,
+        ).approval_id,
+        now=now,
+    )
+    action = make_action(EffectClass.REVERSIBLE_WRITE, key="runtime-gated-approved")
+    executions: list[object | None] = []
+
+    result = runtime.run(
+        run_id="run-runtime-gated-approved",
+        action=action,
+        executor=lambda checkpoint: executions.append(checkpoint),
+        control_plane_approvals=lifecycle,
+        approval_id="approval-runtime-1",
+        approval_key=key,
+        approval_now=now,
+    )
+
+    assert result.state == JournalState.APPLIED
+    assert executions == [None]
+    assert lifecycle.get("approval-runtime-1").status == EXECUTED
+    assert [entry.state for entry in runtime.history("run-runtime-gated-approved")] == [
+        JournalState.PROPOSED,
+        JournalState.APPROVED,
+        JournalState.EXECUTING,
+        JournalState.APPLIED,
+    ]
+
+
+def test_control_plane_gate_does_not_consume_approval_when_executor_fails(tmp_path) -> None:
+    key = b"runtime-gate-test-key"
+    now = datetime(2026, 5, 3, 5, 35, tzinfo=timezone.utc)
+    runtime = make_runtime(tmp_path)
+    lifecycle = ApprovalLifecycleStore(key)
+    lifecycle.approve(
+        lifecycle.request(
+            approval_id="approval-runtime-fail",
+            requested_by="tester",
+            action="demo",
+            subject="system",
+            created_at=now,
+        ).approval_id,
+        now=now,
+    )
+    action = make_action(EffectClass.REVERSIBLE_WRITE, key="runtime-gated-fails")
+
+    result = runtime.run(
+        run_id="run-runtime-gated-fails",
+        action=action,
+        executor=lambda checkpoint: (_ for _ in ()).throw(RuntimeError("boom")),
+        control_plane_approvals=lifecycle,
+        approval_id="approval-runtime-fail",
+        approval_key=key,
+        approval_now=now,
+    )
+
+    assert result.state == JournalState.FAILED
+    assert result.reason == JournalReason.EXECUTION_ERROR
+    assert lifecycle.get("approval-runtime-fail").status == IN_FLIGHT
+
+
+def test_runtime_enforcement_rejects_lookup_only_registry_to_avoid_replay(tmp_path) -> None:
+    key = b"runtime-gate-test-key"
+    now = datetime(2026, 5, 3, 5, 40, tzinfo=timezone.utc)
+    registry = ControlPlaneRegistry(tmp_path / "control-plane.db")
+    registry.initialize()
+    registry.create_approval(
+        sign_approval_record(
+            ApprovalRecord(
+                approval_id="registry-approval",
+                requested_by="tester",
+                action="demo",
+                subject="system",
+                status="APPROVED",
+                signed_payload="",
+                signature="",
+                created_at=now.isoformat(),
+            ),
+            key,
+        )
+    )
+    runtime = make_runtime(tmp_path)
+    action = make_action(EffectClass.REVERSIBLE_WRITE, key="runtime-registry-replay")
+    executions: list[object | None] = []
+
+    result = runtime.run(
+        run_id="run-runtime-registry-replay",
+        action=action,
+        executor=lambda checkpoint: executions.append(checkpoint),
+        control_plane_approvals=registry,
+        approval_id="registry-approval",
+        approval_key=key,
+        approval_now=now,
+    )
+
+    assert result.state == JournalState.FAILED
+    assert result.reason == JournalReason.APPROVAL_BLOCK
+    assert "lifecycle approval store" in (result.error or "")
+    assert executions == []
 
 
 def test_compensatable_action_can_fail_and_call_compensation(tmp_path) -> None:

@@ -15,6 +15,7 @@ from safeloop.control_plane.signing import sign_approval_record, verify_approval
 
 REQUESTED = "REQUESTED"
 APPROVED = "APPROVED"
+IN_FLIGHT = "IN_FLIGHT"
 REJECTED = "REJECTED"
 EXECUTED = "EXECUTED"
 EXPIRED = "EXPIRED"
@@ -99,6 +100,79 @@ class ApprovalLifecycleStore:
         if stored.subject != subject:
             raise ApprovalValidationError("approval subject mismatch")
         return stored
+
+    def reserve_for_execution(
+        self,
+        presented: ApprovalRecord,
+        *,
+        requested_by: str,
+        action: str,
+        subject: str,
+        now: datetime,
+    ) -> ApprovalRecord:
+        approved = self.validate_for_execution(
+            presented,
+            requested_by=requested_by,
+            action=action,
+            subject=subject,
+            now=now,
+        )
+        return self._store_signed(replace(approved, status=IN_FLIGHT))  # type: ignore[arg-type]
+
+    def validate_in_flight_for_resume(
+        self,
+        presented: ApprovalRecord,
+        *,
+        action: str,
+        subject: str,
+        now: datetime,
+    ) -> ApprovalRecord:
+        stored = self._records.get(presented.approval_id)
+        if stored is None:
+            raise ApprovalValidationError("unknown approval")
+        if stored != presented:
+            raise ApprovalValidationError("approval is stale or tampered")
+        if not verify_approval_record(stored, self._key):
+            raise ApprovalValidationError("invalid approval signature")
+        if _is_expired(stored, now, self._ttl):
+            self._store_signed(replace(stored, status=EXPIRED))  # type: ignore[arg-type]
+            raise ApprovalValidationError("approval expired")
+        if stored.status != IN_FLIGHT:
+            raise ApprovalValidationError(f"approval status is not in-flight: {stored.status}")
+        if stored.action != action:
+            raise ApprovalValidationError("approval action mismatch")
+        if stored.subject != subject:
+            raise ApprovalValidationError("approval subject mismatch")
+        return stored
+
+    def complete_execution(
+        self,
+        presented: ApprovalRecord,
+        *,
+        requested_by: str,
+        action: str,
+        subject: str,
+        now: datetime,
+    ) -> ApprovalRecord:
+        stored = self._records.get(presented.approval_id)
+        if stored is None:
+            raise ApprovalValidationError("unknown approval")
+        if stored != presented:
+            raise ApprovalValidationError("approval is stale or tampered")
+        if not verify_approval_record(stored, self._key):
+            raise ApprovalValidationError("invalid approval signature")
+        if _is_expired(stored, now, self._ttl):
+            self._store_signed(replace(stored, status=EXPIRED))  # type: ignore[arg-type]
+            raise ApprovalValidationError("approval expired")
+        if stored.status != IN_FLIGHT:
+            raise ApprovalValidationError(f"approval status is not in-flight: {stored.status}")
+        if stored.requested_by != requested_by:
+            raise ApprovalValidationError("approval requester mismatch")
+        if stored.action != action:
+            raise ApprovalValidationError("approval action mismatch")
+        if stored.subject != subject:
+            raise ApprovalValidationError("approval subject mismatch")
+        return self._store_signed(replace(stored, status=EXECUTED))  # type: ignore[arg-type]
 
     def execute_once(
         self,

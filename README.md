@@ -35,25 +35,26 @@ python -m safeloop.cli watch-run \
 
 The command prints the run directory, normally under `~/.safeloop/runs/<run-id>/` unless `--run-root` is provided.
 
-Inspect the timeline:
+Inspect the timeline, verify the tamper-evident artifact packet, then dry-run local undo:
 
 ```bash
 python -m safeloop.cli timeline RUN_DIR
 python -m safeloop.cli timeline RUN_DIR --json
 python -m safeloop.cli timeline RUN_DIR --checkpoint cp-0001
+python -m safeloop.cli verify-artifacts RUN_DIR
+python -m safeloop.cli undo RUN_DIR RUN_ID cp-0001 --dry-run
 ```
 
-Dry-run and apply local undo:
+Apply local undo only after reviewing the dry-run output:
 
 ```bash
-python -m safeloop.cli undo RUN_DIR RUN_ID cp-0001 --dry-run
 python -m safeloop.cli undo RUN_DIR RUN_ID cp-0001 --apply
 ```
 
-Verify artifact integrity:
+Or run the checked-in demo script for the release packet flow (`watch-run` → `timeline` → `verify-artifacts` → `undo --dry-run`):
 
 ```bash
-python -m safeloop.cli verify-artifacts RUN_DIR
+bash examples/watchdog_demo.sh
 ```
 
 ## What it does today
@@ -118,4 +119,4 @@ Build a wheel:
 python -m build --wheel
 ```
 
-For the 0.0.3 watchdog contract, see [`docs/safeloop-0.0.3-agent-watchdog-rc.md`](docs/safeloop-0.0.3-agent-watchdog-rc.md).
+For the 0.0.3 watchdog contract, see [`docs/safeloop-0.0.3-agent-watchdog-rc.md`](docs/safeloop-0.0.3-agent-watchdog-rc.md). For release notes and deltas from 0.0.1/0.0.2, see [`docs/release-notes-0.0.3.md`](docs/release-notes-0.0.3.md).

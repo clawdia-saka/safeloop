@@ -3,7 +3,7 @@
 ## Positioning
 
 SafeLoop is a non-blocking watchdog and reversible timeline for long-running AI agents.
-It records local side effects, checkpoints repo changes, verifies artifact integrity, supports exact local undo, and hands off irreversible external actions as compensation plans.
+It records local file side effects, checkpoints repo changes, verifies tamper-evident artifact integrity, supports exact local undo for covered file changes, and records external side effects as tracked/not auto-reversed in this RC.
 
 ## Release line
 

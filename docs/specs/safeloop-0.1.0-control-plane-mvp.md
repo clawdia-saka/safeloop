@@ -1,6 +1,6 @@
 # SafeLoop 0.1.0 Control Plane MVP Spec
 
-Status: draft implementation slice for `feat/safeloop-010-control-plane-mvp`.
+Status: implemented local-demo foundation after PRs #38 and #39.
 
 ## Goals
 
@@ -18,14 +18,22 @@ MVP capabilities:
 5. **Static dashboard MVP** that renders escaped control-plane state and includes
    explicit XSS regression coverage.
 
-## Non-goals for this branch
+## Current implementation boundary
 
-- No network service, daemon, or shared runtime lock is introduced.
-- No mutation of existing journal/runtime storage schemas.
-- No PR automation from this branch.
-- The first production slice intentionally implements only the SQLite registry;
-  HMAC validation, JSONL anchoring, and dashboard rendering remain test-scaffold
-  candidates for follow-up slices.
+Implemented in the local-demo foundation:
+
+- SQLite registry schema for users, approval requests, and reserved anchors.
+- Fail-closed local RBAC helpers for `admin`, `operator`, and `viewer`.
+- HMAC-SHA256 helpers for canonical approval payload signing and verification.
+- Static escaped dashboard snapshot for users and approval requests.
+
+Still follow-up / out of scope for the current slice:
+
+- Network service, daemon, or shared runtime lock.
+- Mutation of existing journal/runtime storage schemas.
+- PR automation from this branch.
+- External anchor JSONL export/lifecycle beyond reserved registry bookkeeping.
+- Production governance claims such as hosted sessions, KMS, or multi-tenant auth.
 
 ## Registry schema v1
 
@@ -51,16 +59,15 @@ The registry is a separate SQLite database selected by caller path. It creates:
 Production enforcement should fail closed: unknown users and unknown roles have
 no permissions.
 
-## Approval signing draft
+## Approval signing
 
 Approval records carry a canonical `signed_payload` plus a `signature` string.
-The planned MVP signature format is `sha256=<hex_hmac>` using a locally managed
-secret. Verification should compare with constant-time equality and include at
-least action, subject, requester, status transition, and timestamp in the signed
-payload.
+The local-demo signature format is `sha256=<hex_hmac>` using a locally managed
+secret. Verification compares with constant-time equality and covers a canonical
+JSON payload supplied by callers.
 
-## Dashboard safety draft
+## Dashboard safety
 
-The static dashboard must HTML-escape all registry-provided values before
-rendering. Regression tests should include user IDs, display names, actions, and
-subjects containing `<script>`, event-handler attributes, quotes, and ampersands.
+The static dashboard HTML-escapes all registry-provided values before rendering.
+Regression tests include registry-controlled strings containing script tags,
+event-handler-like text, quotes, and ampersands.

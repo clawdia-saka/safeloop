@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from pathlib import Path
+import sqlite3
+
+import pytest
 
 from safeloop.control_plane.registry import (
     ApprovalRecord,
@@ -23,6 +26,22 @@ def test_registry_initializes_sqlite_file_with_expected_schema(tmp_path: Path) -
         "external_anchors",
         "users",
     }
+
+
+def test_registry_initialization_does_not_downgrade_newer_schema(tmp_path: Path) -> None:
+    db_path = tmp_path / "control-plane.sqlite3"
+    registry = ControlPlaneRegistry(db_path)
+    registry.initialize()
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "UPDATE control_plane_metadata SET value = ? WHERE key = ?",
+            ("2", "schema_version"),
+        )
+
+    with pytest.raises(RuntimeError, match="unsupported future schema_version=2"):
+        registry.initialize()
+
+    assert registry.schema_version() == 2
 
 
 def test_registry_upserts_and_lists_users_by_stable_role_order(tmp_path: Path) -> None:

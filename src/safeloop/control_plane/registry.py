@@ -73,10 +73,27 @@ class ControlPlaneRegistry:
                 );
                 """
             )
-            conn.execute(
-                "INSERT OR REPLACE INTO control_plane_metadata(key, value) VALUES (?, ?)",
-                ("schema_version", str(self._SCHEMA_VERSION)),
-            )
+            row = conn.execute(
+                "SELECT value FROM control_plane_metadata WHERE key = ?",
+                ("schema_version",),
+            ).fetchone()
+            if row is None:
+                conn.execute(
+                    "INSERT INTO control_plane_metadata(key, value) VALUES (?, ?)",
+                    ("schema_version", str(self._SCHEMA_VERSION)),
+                )
+            else:
+                current_version = int(row[0])
+                if current_version > self._SCHEMA_VERSION:
+                    raise RuntimeError(
+                        f"unsupported future schema_version={current_version}; "
+                        f"registry supports schema_version={self._SCHEMA_VERSION}"
+                    )
+                if current_version < self._SCHEMA_VERSION:
+                    raise RuntimeError(
+                        f"unsupported old schema_version={current_version}; "
+                        "explicit migration is required"
+                    )
 
     def schema_version(self) -> int:
         with self._connect() as conn:

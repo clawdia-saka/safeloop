@@ -384,6 +384,76 @@ def test_non_compensatable_execution_failure_stays_failed(tmp_path) -> None:
     assert history[-1].error == "executor boom"
 
 
+def test_compensation_terminal_contract_matches_overnight_oracle_expectations(tmp_path) -> None:
+    runtime = make_runtime(tmp_path)
+    action = make_action(EffectClass.COMPENSATABLE_WRITE, key="comp-terminal-contract")
+    hooks = CompensationHookRegistry()
+    hooks.register(lambda envelope, error: None)
+
+    result = runtime.run(
+        run_id="run-compensation-terminal-contract",
+        action=action,
+        executor=lambda checkpoint: (_ for _ in ()).throw(RuntimeError("boom")),
+        compensation_hooks=hooks,
+    )
+
+    assert result.state == JournalState.COMPENSATED
+    assert "compensation_failed" not in {state.value for state in JournalState}
+
+
+def test_compensation_failure_terminal_contract_is_failed_not_custom_state(tmp_path) -> None:
+    runtime = make_runtime(tmp_path)
+    action = make_action(EffectClass.COMPENSATABLE_WRITE, key="comp-failed-terminal-contract")
+    hooks = CompensationHookRegistry()
+    hooks.register(lambda envelope, error: (_ for _ in ()).throw(RuntimeError("cleanup broke")))
+
+    result = runtime.run(
+        run_id="run-compensation-failed-terminal-contract",
+        action=action,
+        executor=lambda checkpoint: (_ for _ in ()).throw(RuntimeError("boom")),
+        compensation_hooks=hooks,
+    )
+
+    assert result.state == JournalState.FAILED
+    assert result.state.value == "failed"
+    assert "compensation_failed" not in {state.value for state in JournalState}
+
+
+def test_unsupported_rollback_expectation_maps_to_existing_terminal_states(tmp_path) -> None:
+    runtime = make_runtime(tmp_path)
+    action = ActionEnvelope(
+        name="unsupported-rollback-expectation",
+        target="external-system",
+        args={"expects": "full rollback"},
+        diff="",
+        actor="tester",
+        privileges=[],
+        idempotency_key="unsupported-rollback-terminal-contract",
+        effect=EffectClass.COMPENSATABLE_WRITE,
+    )
+
+    compensated_hooks = CompensationHookRegistry()
+    compensated_hooks.register(lambda envelope, error: None)
+    compensated = runtime.run(
+        run_id="run-unsupported-rollback-compensated",
+        action=action,
+        executor=lambda checkpoint: (_ for _ in ()).throw(RuntimeError("undo requested")),
+        compensation_hooks=compensated_hooks,
+    )
+
+    failed_hooks = CompensationHookRegistry()
+    failed_hooks.register(lambda envelope, error: (_ for _ in ()).throw(RuntimeError("undo unavailable")))
+    failed = runtime.run(
+        run_id="run-unsupported-rollback-failed",
+        action=action.model_copy(update={"idempotency_key": "unsupported-rollback-terminal-contract-failed"}),
+        executor=lambda checkpoint: (_ for _ in ()).throw(RuntimeError("undo requested")),
+        compensation_hooks=failed_hooks,
+    )
+
+    assert compensated.state == JournalState.COMPENSATED
+    assert failed.state == JournalState.FAILED
+
+
 def test_compensating_can_fail_terminally() -> None:
     validate_transition(JournalState.COMPENSATING, JournalState.COMPENSATION_FAILED)
 

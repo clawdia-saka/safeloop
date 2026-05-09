@@ -398,10 +398,10 @@ def test_compensation_terminal_contract_matches_overnight_oracle_expectations(tm
     )
 
     assert result.state == JournalState.COMPENSATED
-    assert "compensation_failed" not in {state.value for state in JournalState}
+    assert result.state.value == "compensated"
 
 
-def test_compensation_failure_terminal_contract_is_failed_not_custom_state(tmp_path) -> None:
+def test_compensation_failure_terminal_contract_is_explicit_state(tmp_path) -> None:
     runtime = make_runtime(tmp_path)
     action = make_action(EffectClass.COMPENSATABLE_WRITE, key="comp-failed-terminal-contract")
     hooks = CompensationHookRegistry()
@@ -414,12 +414,12 @@ def test_compensation_failure_terminal_contract_is_failed_not_custom_state(tmp_p
         compensation_hooks=hooks,
     )
 
-    assert result.state == JournalState.FAILED
-    assert result.state.value == "failed"
-    assert "compensation_failed" not in {state.value for state in JournalState}
+    assert result.state == JournalState.COMPENSATION_FAILED
+    assert result.state.value == "compensation_failed"
+    assert result.reason == JournalReason.COMPENSATION_ERROR
 
 
-def test_unsupported_rollback_expectation_maps_to_existing_terminal_states(tmp_path) -> None:
+def test_unsupported_rollback_expectation_maps_to_runtime_terminal_states(tmp_path) -> None:
     runtime = make_runtime(tmp_path)
     action = ActionEnvelope(
         name="unsupported-rollback-expectation",
@@ -451,7 +451,7 @@ def test_unsupported_rollback_expectation_maps_to_existing_terminal_states(tmp_p
     )
 
     assert compensated.state == JournalState.COMPENSATED
-    assert failed.state == JournalState.FAILED
+    assert failed.state == JournalState.COMPENSATION_FAILED
 
 
 def test_compensating_can_fail_terminally() -> None:

@@ -9,6 +9,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
 from safeloop.journal import JournalEntry, JournalReason, JournalState
+from safeloop.local_anchor import canonical_sha256
 from safeloop.runtime import RunRecord, Runtime
 from safeloop.storage import LocalJournalStorage
 
@@ -172,6 +173,12 @@ def derive_terminal_semantics(
     )
 
 
+class ApiTraceEvidenceBinding(BaseModel):
+    schema_version: str
+    digest: str
+    required_stages: list[str]
+
+
 class JournalEntryPayload(BaseModel):
     run_id: str
     action_id: str
@@ -181,6 +188,7 @@ class JournalEntryPayload(BaseModel):
     scope: ScopeAnnotation
     boundaries: list[BoundaryAnnotation]
     terminal_semantics: TerminalSemantics
+    api_trace_evidence_binding: ApiTraceEvidenceBinding
 
 
 class RunSummary(BaseModel):
@@ -243,12 +251,45 @@ class RunViewer:
     @staticmethod
     def _journal_entry_payload(entry: JournalEntry) -> JournalEntryPayload:
         scope, boundaries = derive_annotations(entry.state, entry.reason)
+        terminal_semantics = derive_terminal_semantics(entry.state, entry.reason)
         return JournalEntryPayload(
             **entry.model_dump(mode="json", exclude_none=True),
             scope=scope,
             boundaries=boundaries,
-            terminal_semantics=derive_terminal_semantics(entry.state, entry.reason),
+            terminal_semantics=terminal_semantics,
+            api_trace_evidence_binding=api_trace_evidence_binding(
+                entry,
+                scope=scope,
+                boundaries=boundaries,
+                terminal_semantics=terminal_semantics,
+            ),
         )
+
+
+def api_trace_evidence_binding(
+    entry: JournalEntry,
+    *,
+    scope: ScopeAnnotation,
+    boundaries: list[BoundaryAnnotation],
+    terminal_semantics: TerminalSemantics,
+) -> ApiTraceEvidenceBinding:
+    schema_version = "api-trace-evidence-binding.v1"
+    digest_payload = {
+        "schema_version": schema_version,
+        "run_id": entry.run_id,
+        "action_id": entry.action_id,
+        "state": entry.state.value,
+        "reason": entry.reason.value if isinstance(entry.reason, JournalReason) else entry.reason,
+        "error": entry.error,
+        "scope": scope.value,
+        "boundaries": [boundary.value for boundary in boundaries],
+        "terminal_boundary": terminal_semantics.boundary.value,
+    }
+    return ApiTraceEvidenceBinding(
+        schema_version=schema_version,
+        digest=canonical_sha256(digest_payload),
+        required_stages=["request", "runtime", "enforcement", "response"],
+    )
 
 
 def create_app(runtime: Runtime | LocalJournalStorage | str | Path) -> FastAPI:

@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 from safeloop.api import RunViewer, create_app, derive_annotations
 from safeloop.hooks import ApprovalDecision, ApprovalHookRegistry, CompensationHookRegistry
 from safeloop.journal import JournalReason, JournalState
+from safeloop.local_anchor import canonical_sha256
 from safeloop.runtime import ResumableExecution, Runtime
 from safeloop.types import ActionEnvelope, EffectClass
 
@@ -33,7 +34,7 @@ def without_terminal_semantics(value):
         return {
             key: without_terminal_semantics(item)
             for key, item in value.items()
-            if key != "terminal_semantics"
+            if key not in {"terminal_semantics", "api_trace_evidence_binding"}
         }
     return value
 
@@ -408,6 +409,40 @@ def test_http_api_journal_surfaces_resumable_terminal_semantics(tmp_path) -> Non
         "scope_guess": "inside_mvp_scope",
         "note": "Terminal success; side effects may already exist.",
     }
+
+
+def test_http_api_binds_journal_entries_to_digest_bound_trace_evidence(tmp_path) -> None:
+    runtime = make_runtime(tmp_path)
+    action = make_action(EffectClass.REVERSIBLE_WRITE, key="trace-binding")
+    runtime.run(run_id="run-trace-binding", action=action, executor=lambda checkpoint: {"ok": True})
+
+    response = TestClient(create_app(runtime)).get("/runs/run-trace-binding/journal")
+
+    assert response.status_code == 200
+    entries = response.json()
+    first = entries[0]
+    assert first["api_trace_evidence_binding"] == {
+        "schema_version": "api-trace-evidence-binding.v1",
+        "digest": canonical_sha256(
+            {
+                "schema_version": "api-trace-evidence-binding.v1",
+                "run_id": "run-trace-binding",
+                "action_id": "trace-binding",
+                "state": "proposed",
+                "reason": None,
+                "error": None,
+                "scope": "inside_mvp_scope",
+                "boundaries": [],
+                "terminal_boundary": "proposed",
+            }
+        ),
+        "required_stages": ["request", "runtime", "enforcement", "response"],
+    }
+    for entry in entries:
+        binding = entry["api_trace_evidence_binding"]
+        assert binding["schema_version"] == "api-trace-evidence-binding.v1"
+        assert binding["digest"].startswith("sha256:")
+        assert binding["required_stages"] == ["request", "runtime", "enforcement", "response"]
 
 
 def test_failed_unknown_reason_defaults_to_boundary_terminal_only() -> None:

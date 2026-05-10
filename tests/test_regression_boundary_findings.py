@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from examples.boundary_demos import (
+    run_ambiguous_side_effect_demo,
     run_compensation_failed_demo,
     run_handoff_demo,
     run_resumable_demo,
@@ -16,6 +17,29 @@ from safeloop.api import BoundaryAnnotation, RunViewer, ScopeAnnotation, create_
 from safeloop.journal import JournalReason, JournalState
 from safeloop.runtime import ResumableExecution, Runtime
 from safeloop.types import ActionEnvelope, EffectClass
+
+
+def test_regression_ambiguous_side_effect_keeps_applied_terminal_truth_and_api_consistency(tmp_path) -> None:
+    storage_path = tmp_path / "journal.jsonl"
+    result = run_ambiguous_side_effect_demo(storage_path=storage_path)
+
+    viewer_run = RunViewer(storage_path).get_run("boundary-demo:ambiguous-side-effect")
+    api_response = TestClient(create_app(storage_path)).get("/runs/boundary-demo:ambiguous-side-effect")
+
+    assert result.final_state is JournalState.APPLIED
+    assert viewer_run is not None
+    assert viewer_run.state == JournalState.APPLIED
+    assert viewer_run.scope is ScopeAnnotation.INSIDE_MVP_SCOPE
+    assert viewer_run.boundaries == [
+        BoundaryAnnotation.SIDE_EFFECTS_POSSIBLE,
+        BoundaryAnnotation.TERMINAL,
+    ]
+    assert api_response.status_code == 200
+    assert api_response.json()["scope"] == ScopeAnnotation.INSIDE_MVP_SCOPE.value
+    assert api_response.json()["boundaries"] == [
+        BoundaryAnnotation.SIDE_EFFECTS_POSSIBLE.value,
+        BoundaryAnnotation.TERMINAL.value,
+    ]
 
 
 def test_regression_compensation_failed_keeps_cleanup_uncertainty_and_side_effects(tmp_path) -> None:

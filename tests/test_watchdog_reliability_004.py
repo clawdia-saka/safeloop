@@ -105,6 +105,38 @@ def test_verify_reports_malformed_bound_artifact_hash_explicitly(tmp_path: Path)
     assert "malformed-artifact-hash diff.patch" in payload["issues"]
 
 
+def test_verify_reports_missing_required_checkpoint_artifact_binding(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "agent.py").write_text("open('result.txt','w').write('v1')\n", encoding="utf-8")
+    result = run_cli(
+        "watch-run",
+        "--task-id",
+        "missing-required-binding",
+        "--repo",
+        str(repo),
+        "--run-root",
+        str(tmp_path / "runs"),
+        "--",
+        sys.executable,
+        "agent.py",
+    )
+    assert result.returncode == 0, result.stderr
+    run_dir = run_dir_from(result.stdout)
+    timeline = run_dir / "timeline.jsonl"
+    events = [json.loads(line) for line in timeline.read_text(encoding="utf-8").splitlines() if line.strip()]
+    checkpoint_event = next(event for event in events if event["type"] == "checkpoint_created")
+    checkpoint_event["payload"]["artifact_digests"].pop("summary.md")
+    timeline.write_text("\n".join(json.dumps(event, sort_keys=True) for event in events) + "\n", encoding="utf-8")
+
+    verify = run_cli("verify-artifacts", str(run_dir))
+
+    assert verify.returncode == 1
+    payload = read_json(run_dir / "verification" / "verify-artifacts-result.json")
+    assert payload["status"] == "invalid"
+    assert "missing required checkpoint artifact binding cp-0001/summary.md" in payload["issues"]
+
+
 def test_undo_preflight_digest_verifies_restore_manifest_before_dry_run(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()

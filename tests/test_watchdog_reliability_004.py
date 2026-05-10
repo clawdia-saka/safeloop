@@ -137,6 +137,67 @@ def test_verify_reports_missing_required_checkpoint_artifact_binding(tmp_path: P
     assert "missing required checkpoint artifact binding cp-0001/summary.md" in payload["issues"]
 
 
+def test_checkpoint_manifest_declares_required_artifacts(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "agent.py").write_text("open('result.txt','w').write('v1')\n", encoding="utf-8")
+
+    result = run_cli(
+        "watch-run",
+        "--task-id",
+        "manifest-required",
+        "--repo",
+        str(repo),
+        "--run-root",
+        str(tmp_path / "runs"),
+        "--",
+        sys.executable,
+        "agent.py",
+    )
+
+    assert result.returncode == 0, result.stderr
+    cp = run_dir_from(result.stdout) / "checkpoints" / "cp-0001"
+    manifest = read_json(cp / "manifest.json")
+    assert manifest["required_artifacts"] == [
+        "checkpoint.json",
+        "diff.patch",
+        "manifest.json",
+        "restore-manifest.json",
+        "summary.md",
+    ]
+
+
+def test_verify_reports_manifest_missing_required_artifact(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "agent.py").write_text("open('result.txt','w').write('v1')\n", encoding="utf-8")
+    result = run_cli(
+        "watch-run",
+        "--task-id",
+        "manifest-required-tamper",
+        "--repo",
+        str(repo),
+        "--run-root",
+        str(tmp_path / "runs"),
+        "--",
+        sys.executable,
+        "agent.py",
+    )
+    assert result.returncode == 0, result.stderr
+    run_dir = run_dir_from(result.stdout)
+    manifest_path = run_dir / "checkpoints" / "cp-0001" / "manifest.json"
+    manifest = read_json(manifest_path)
+    manifest["required_artifacts"].remove("summary.md")
+    manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+    verify = run_cli("verify-artifacts", str(run_dir))
+
+    assert verify.returncode == 1
+    payload = read_json(run_dir / "verification" / "verify-artifacts-result.json")
+    assert payload["status"] == "invalid"
+    assert "manifest missing required_artifact cp-0001/summary.md" in payload["issues"]
+
+
 def test_undo_preflight_digest_verifies_restore_manifest_before_dry_run(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()

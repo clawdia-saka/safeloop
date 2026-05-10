@@ -15,6 +15,15 @@ from typing import Any, TextIO
 from safeloop.local_anchor import create_local_anchor, verify_local_anchor
 
 
+REQUIRED_CHECKPOINT_ARTIFACTS = {
+    "checkpoint.json",
+    "manifest.json",
+    "diff.patch",
+    "restore-manifest.json",
+    "summary.md",
+}
+
+
 def now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -198,7 +207,11 @@ def create_checkpoint(
         "current_state_digest": state_digest(after),
         "created_at": now(),
     }
-    manifest = {"schema_version": "manifest.v1", "files": after}
+    manifest = {
+        "schema_version": "manifest.v1",
+        "files": after,
+        "required_artifacts": sorted(REQUIRED_CHECKPOINT_ARTIFACTS),
+    }
     restore = {
         "schema_version": "restore-manifest.v2",
         "checkpoint_id": cid,
@@ -400,14 +413,7 @@ def verify_run(run_dir: Path) -> dict[str, Any]:
             artifact_digests = payload.get("artifact_digests", {})
             if e.get("type") == "checkpoint_created":
                 checkpoint_id = payload.get("checkpoint_id", "")
-                required_checkpoint_artifacts = {
-                    "checkpoint.json",
-                    "manifest.json",
-                    "diff.patch",
-                    "restore-manifest.json",
-                    "summary.md",
-                }
-                for required in sorted(required_checkpoint_artifacts - set(artifact_digests)):
+                for required in sorted(REQUIRED_CHECKPOINT_ARTIFACTS - set(artifact_digests)):
                     issues.append(f"missing required checkpoint artifact binding {checkpoint_id}/{required}")
             for name, dig in artifact_digests.items():
                 if not is_sha256_digest(dig):
@@ -438,6 +444,16 @@ def verify_run(run_dir: Path) -> dict[str, Any]:
             if cj.get("parent_checkpoint_id") != parent:
                 issues.append(f"invalid parent chain {cp.name}")
             parent = cp.name
+            manifest = json.loads((cp / "manifest.json").read_text(encoding="utf-8"))
+            manifest_required = manifest.get("required_artifacts")
+            if not isinstance(manifest_required, list) or any(not isinstance(item, str) for item in manifest_required):
+                issues.append(f"manifest required_artifacts malformed {cp.name}")
+            else:
+                declared = set(manifest_required)
+                for required in sorted(REQUIRED_CHECKPOINT_ARTIFACTS - declared):
+                    issues.append(f"manifest missing required_artifact {cp.name}/{required}")
+                for artifact in sorted(declared - REQUIRED_CHECKPOINT_ARTIFACTS):
+                    issues.append(f"manifest unexpected required_artifact {cp.name}/{artifact}")
             restore = json.loads((cp / "restore-manifest.json").read_text(encoding="utf-8"))
             for rel_blob in restore.get("before_blobs", {}).values():
                 if rel_blob is not None and not safe_child_file(cp, rel_blob).exists():

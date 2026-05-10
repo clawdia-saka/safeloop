@@ -88,6 +88,90 @@ def derive_annotations(
     raise ValueError(f"Unhandled journal state for annotation derivation: {state}")
 
 
+class TerminalBoundary(StrEnum):
+    PROPOSED = "proposed"
+    APPROVED = "approved"
+    EXECUTOR_BOUNDARY = "executor_boundary"
+    APPLIED = "applied"
+    COMPENSATION_IN_PROGRESS = "compensation_in_progress"
+    COMPENSATED = "compensated"
+    COMPENSATION_FAILURE = "compensation_failure"
+    CHECKPOINT_RESUME = "checkpoint_resume"
+    OPERATOR_HANDOFF = "operator_handoff"
+    APPROVAL_BOUNDARY = "approval_boundary"
+    EXECUTION_FAILURE = "execution_failure"
+    FAILED_UNKNOWN_BOUNDARY = "failed_unknown_boundary"
+
+
+class TerminalSemantics(BaseModel):
+    terminal_state: JournalState
+    expected_terminal_state: JournalState
+    boundary: TerminalBoundary
+    scope_guess: ScopeAnnotation
+    note: str
+
+
+def derive_terminal_semantics(
+    state: JournalState,
+    reason: JournalReason | str | None = None,
+) -> TerminalSemantics:
+    normalized_reason = reason
+    if isinstance(reason, str):
+        try:
+            normalized_reason = JournalReason(reason)
+        except ValueError:
+            normalized_reason = reason
+
+    scope, _boundaries = derive_annotations(state, normalized_reason)
+    boundary = TerminalBoundary.PROPOSED
+    note = "Non-terminal lifecycle state."
+    if state is JournalState.PROPOSED:
+        boundary = TerminalBoundary.PROPOSED
+        note = "Action is recorded but not yet approved or executed."
+    elif state is JournalState.APPROVED:
+        boundary = TerminalBoundary.APPROVED
+        note = "Action is approved but has not entered the executor."
+    elif state is JournalState.EXECUTING:
+        boundary = TerminalBoundary.EXECUTOR_BOUNDARY
+        note = "Executor is active; side effects may already be in progress."
+    elif state is JournalState.APPLIED:
+        boundary = TerminalBoundary.APPLIED
+        note = "Terminal success; side effects may already exist."
+    elif state is JournalState.COMPENSATING:
+        boundary = TerminalBoundary.COMPENSATION_IN_PROGRESS
+        note = "Compensation is being attempted after executor failure."
+    elif state is JournalState.COMPENSATED:
+        boundary = TerminalBoundary.COMPENSATED
+        note = "Compensation completed, but this is mitigation rather than proof of perfect rollback."
+    elif state is JournalState.COMPENSATION_FAILED:
+        boundary = TerminalBoundary.COMPENSATION_FAILURE
+        note = "Compensation was attempted but cleanup remains incomplete or uncertain; this is not rollback."
+    elif state is JournalState.RESUMABLE:
+        boundary = TerminalBoundary.CHECKPOINT_RESUME
+        note = "Checkpoint exists only for the live runtime; storage-only viewers cannot resume from it."
+    elif state is JournalState.HANDED_OFF:
+        boundary = TerminalBoundary.OPERATOR_HANDOFF
+        note = "Execution did not run; operator owns the next step."
+    elif state is JournalState.FAILED:
+        if normalized_reason in {JournalReason.APPROVAL_BLOCK, JournalReason.APPROVAL_ERROR}:
+            boundary = TerminalBoundary.APPROVAL_BOUNDARY
+            note = "Failure happened before executor entry."
+        elif normalized_reason is JournalReason.EXECUTION_ERROR:
+            boundary = TerminalBoundary.EXECUTION_FAILURE
+            note = "Executor failed after side effects may have started."
+        else:
+            boundary = TerminalBoundary.FAILED_UNKNOWN_BOUNDARY
+            note = "Failure reason is unknown or legacy; inspect journal details before acting."
+
+    return TerminalSemantics(
+        terminal_state=state,
+        expected_terminal_state=state,
+        boundary=boundary,
+        scope_guess=scope,
+        note=note,
+    )
+
+
 class JournalEntryPayload(BaseModel):
     run_id: str
     action_id: str
@@ -96,6 +180,7 @@ class JournalEntryPayload(BaseModel):
     error: str | None = None
     scope: ScopeAnnotation
     boundaries: list[BoundaryAnnotation]
+    terminal_semantics: TerminalSemantics
 
 
 class RunSummary(BaseModel):
@@ -104,6 +189,7 @@ class RunSummary(BaseModel):
     state: JournalState
     scope: ScopeAnnotation
     boundaries: list[BoundaryAnnotation]
+    terminal_semantics: TerminalSemantics
 
 
 class RunDetail(RunSummary):
@@ -151,6 +237,7 @@ class RunViewer:
             state=record.state,
             scope=scope,
             boundaries=boundaries,
+            terminal_semantics=derive_terminal_semantics(record.state, latest_reason),
         )
 
     @staticmethod
@@ -160,6 +247,7 @@ class RunViewer:
             **entry.model_dump(mode="json", exclude_none=True),
             scope=scope,
             boundaries=boundaries,
+            terminal_semantics=derive_terminal_semantics(entry.state, entry.reason),
         )
 
 

@@ -32,6 +32,7 @@ Current schema:
 Viewer/API payloads add derived interpretation fields on top of those journal facts:
 - `scope`: `inside_mvp_scope|boundary_case`
 - `boundaries`: list of short tags derived from `(state, reason)`
+- `terminal_semantics`: a structured `TerminalSemantics` payload with `terminal_state`, `expected_terminal_state`, `boundary`, `scope_guess`, and `note`
 
 These additive fields are **not persisted** in journal storage. They are computed in the API/viewer layer so the canonical journal schema stays small and runtime-owned.
 
@@ -140,8 +141,12 @@ Current metadata expectation:
 ### `compensated`
 Compensation completed successfully after an execution failure. This is terminal.
 
+Compensation is not rollback: successful compensation does not prove perfect rollback. It means the configured compensation hook completed and the operator should still treat the result as mitigation rather than proof of perfect rollback.
+
 ### `compensation_failed`
 Compensation was attempted but the compensation hook raised its own error. This is terminal.
+
+`compensation_failed` is not rollback. It means cleanup remains incomplete or uncertain after a compensation attempt, and viewers/API payloads must avoid wording that implies exact reversal.
 
 Current metadata expectation:
 - `reason=compensation_error`
@@ -250,11 +255,20 @@ Returned by `RunViewer.list_runs()` and `GET /runs`:
 {
   "run_id": "string",
   "action_id": "string",
-  "state": "..."
+  "state": "applied",
+  "scope": "inside_mvp_scope",
+  "boundaries": ["side_effects_possible", "terminal"],
+  "terminal_semantics": {
+    "terminal_state": "applied",
+    "expected_terminal_state": "applied",
+    "boundary": "applied",
+    "scope_guess": "inside_mvp_scope",
+    "note": "Terminal success; side effects may already exist."
+  }
 }
 ```
 
-This is just the latest journal state per run.
+This is the latest journal state per run plus the derived API/viewer interpretation fields for that latest state.
 
 ### Run detail
 Returned by `RunViewer.get_run()` and `GET /runs/{run_id}`:
@@ -263,13 +277,31 @@ Returned by `RunViewer.get_run()` and `GET /runs/{run_id}`:
 {
   "run_id": "string",
   "action_id": "string",
-  "state": "...",
+  "state": "applied",
+  "scope": "inside_mvp_scope",
+  "boundaries": ["side_effects_possible", "terminal"],
+  "terminal_semantics": {
+    "terminal_state": "applied",
+    "expected_terminal_state": "applied",
+    "boundary": "applied",
+    "scope_guess": "inside_mvp_scope",
+    "note": "Terminal success; side effects may already exist."
+  },
   "has_checkpoint": true,
   "journal": [
     {
       "run_id": "string",
       "action_id": "string",
-      "state": "..."
+      "state": "applied",
+      "scope": "inside_mvp_scope",
+      "boundaries": ["side_effects_possible", "terminal"],
+      "terminal_semantics": {
+        "terminal_state": "applied",
+        "expected_terminal_state": "applied",
+        "boundary": "applied",
+        "scope_guess": "inside_mvp_scope",
+        "note": "Terminal success; side effects may already exist."
+      }
     }
   ]
 }
@@ -295,9 +327,10 @@ The runtime matches this caveat during execution: if the journal says `resumable
 
 ## 8. Viewer/API-derived interpretation layer
 
-In addition to canonical journal facts, `src/safeloop/api.py` derives two additive fields for viewer/API payloads:
+In addition to canonical journal facts, `src/safeloop/api.py` derives three additive fields for viewer/API payloads:
 - `scope`
 - `boundaries`
+- `terminal_semantics`
 
 Allowed `scope` values:
 - `inside_mvp_scope`
@@ -320,9 +353,49 @@ Current derived mapping:
 
 Interpretation rules:
 - `state` and `reason` remain canonical runtime truth.
-- `scope` and `boundaries` reduce first-pass reader over-interpretation; they do not replace the journal meaning.
+- `scope`, `boundaries`, and `terminal_semantics` reduce first-pass reader over-interpretation; they do not replace the journal meaning.
 - `has_checkpoint` remains separate because it is a live-runtime hint, not part of persisted journal semantics.
 - `outside_strict_rollback_scope` remains docs-only in the current MVP; it is not emitted as an API enum.
+
+### `terminal_semantics` payload
+
+`terminal_semantics` is emitted on every `Journal entry payload` returned by `RunViewer.get_run()` and `GET /runs/{run_id}/journal`. It uses the `TerminalSemantics` model:
+
+```json
+{
+  "terminal_state": "applied",
+  "expected_terminal_state": "applied",
+  "boundary": "applied",
+  "scope_guess": "inside_mvp_scope",
+  "note": "Terminal success; side effects may already exist."
+}
+```
+
+Fields:
+- `terminal_state`: the actual `JournalState` on the entry.
+- `expected_terminal_state`: currently the same value as `terminal_state`; product-adapter scenarios may use separate oracle metadata outside the persisted journal to explain expected-vs-observed terminal differences.
+- `boundary`: a `TerminalBoundary` string that gives reader-safe context without rewriting the runtime state.
+- `scope_guess`: the same high-level `ScopeAnnotation` produced from the journal state and reason.
+- `note`: conservative operator wording for the boundary.
+
+Current `TerminalBoundary` values:
+- `proposed`
+- `approved`
+- `executor_boundary`
+- `applied`
+- `compensation_in_progress`
+- `compensated`
+- `compensation_failure`
+- `checkpoint_resume`
+- `operator_handoff`
+- `approval_boundary`
+- `execution_failure`
+- `failed_unknown_boundary`
+
+Important caveats:
+- `checkpoint_resume` means the journal recorded a resumable point, but storage-only viewers cannot resume from it unless a live runtime still owns the checkpoint payload.
+- `compensated` means mitigation completed; successful compensation does not prove perfect rollback.
+- `compensation_failure` means compensation was attempted but cleanup is incomplete or uncertain; `compensation_failed` is not rollback.
 
 ## 9. Storage behavior
 

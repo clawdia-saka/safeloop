@@ -109,6 +109,10 @@ SafeLoop is intentionally narrow in this release:
 
 ## Development
 
+Canonical runtime/API contracts:
+
+- State machine and journal schema: `docs/specs/state-machine-and-journal-schema.md`
+
 Run tests:
 
 ```bash

@@ -27,6 +27,10 @@ def sha_file(path: Path) -> str:
     return sha_bytes(path.read_bytes())
 
 
+def is_sha256_digest(value: Any) -> bool:
+    return isinstance(value, str) and re.fullmatch(r"sha256:[0-9a-f]{64}", value) is not None
+
+
 def atomic_json(path: Path, obj: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + ".tmp")
@@ -393,6 +397,9 @@ def verify_run(run_dir: Path) -> dict[str, Any]:
                 issues.append(f"timeline prev hash mismatch {e.get('event_id')}")
             prev = h
             for name, dig in e.get("payload", {}).get("artifact_digests", {}).items():
+                if not is_sha256_digest(dig):
+                    issues.append(f"malformed-artifact-hash {name}")
+                    continue
                 checkpoint_id = e.get("payload", {}).get("checkpoint_id", "")
                 candidates = [run_dir / name]
                 if checkpoint_id:

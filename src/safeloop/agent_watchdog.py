@@ -396,11 +396,24 @@ def verify_run(run_dir: Path) -> dict[str, Any]:
             if e.get("prev_event_hash") != prev:
                 issues.append(f"timeline prev hash mismatch {e.get('event_id')}")
             prev = h
-            for name, dig in e.get("payload", {}).get("artifact_digests", {}).items():
+            payload = e.get("payload", {})
+            artifact_digests = payload.get("artifact_digests", {})
+            if e.get("type") == "checkpoint_created":
+                checkpoint_id = payload.get("checkpoint_id", "")
+                required_checkpoint_artifacts = {
+                    "checkpoint.json",
+                    "manifest.json",
+                    "diff.patch",
+                    "restore-manifest.json",
+                    "summary.md",
+                }
+                for required in sorted(required_checkpoint_artifacts - set(artifact_digests)):
+                    issues.append(f"missing required checkpoint artifact binding {checkpoint_id}/{required}")
+            for name, dig in artifact_digests.items():
                 if not is_sha256_digest(dig):
                     issues.append(f"malformed-artifact-hash {name}")
                     continue
-                checkpoint_id = e.get("payload", {}).get("checkpoint_id", "")
+                checkpoint_id = payload.get("checkpoint_id", "")
                 candidates = [run_dir / name]
                 if checkpoint_id:
                     candidates.append(run_dir / "checkpoints" / checkpoint_id / name)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from safeloop.dedupe import DedupeObservation, ScenarioDedupeGuard, semantic_fingerprint
+from safeloop.delta_audit import build_delta_audit_packet
 from safeloop.hooks import (
     ApprovalDecision,
     ApprovalHookRegistry,
@@ -25,6 +26,7 @@ __all__ = [
     "ApprovalDecision",
     "DedupeObservation",
     "ApprovalHookRegistry",
+    "build_delta_audit_packet",
     "CompensationHookRegistry",
     "create_app",
     "EffectClass",

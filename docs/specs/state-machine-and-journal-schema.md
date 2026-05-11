@@ -449,3 +449,15 @@ This means the journal file is an append-only local event log for all runs, whil
 Runtime journal state remains separate from control-plane approval lifecycle state. For mutating actions, `Runtime.run(...)` accepts a lifecycle-capable store such as `SQLiteApprovalLifecycleStore`; lookup-only `ControlPlaneRegistry` instances are rejected for enforcement.
 
 The SQLite lifecycle store persists current approval state in the control-plane `approvals` table and appends transition facts to `approval_events`. Its approval statuses are `REQUESTED`, `APPROVED`, `IN_FLIGHT`, `REJECTED`, `EXECUTED`, `EXPIRED`, and `REVOKED`. Runtime first execution reserves an `APPROVED` approval as `IN_FLIGHT`; successful completion marks it `EXECUTED`; resume validation requires the persisted approval to still be `IN_FLIGHT`.
+
+## Rollback public readiness skeleton
+
+The public readiness skeleton for SafeLoop 0.1.4 demonstrates the local rollback workflow end to end:
+watch a long-running local task, review and explain rollback groups, plan/apply rollback to start,
+plan/apply selected files, plan/apply selected hunks, and run `policy-check`. The scripted demo is
+`examples/rollback_selective_demo.sh`.
+
+Boundary language for public docs: exact rollback is only claimed for covered local file changes.
+External side effects require compensation or manual review and are not exact rollback. Local artifacts
+are tamper-evident review aids, not tamper-proof guarantees. SafeLoop does not claim a remote
+transparency log unless one is explicitly implemented and configured.

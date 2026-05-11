@@ -71,3 +71,15 @@ Internal planning documents may discuss future governance or stronger transparen
 - [x] Version metadata source is documented.
 - [x] Release tagging and publication are explicitly out of scope.
 - [x] Public overclaim bans are documented and test-covered.
+
+## Rollback public readiness skeleton
+
+The public readiness skeleton for SafeLoop 0.1.4 demonstrates the local rollback workflow end to end:
+watch a long-running local task, review and explain rollback groups, plan/apply rollback to start,
+plan/apply selected files, plan/apply selected hunks, and run `policy-check`. The scripted demo is
+`examples/rollback_selective_demo.sh`.
+
+Boundary language for public docs: exact rollback is only claimed for covered local file changes.
+External side effects require compensation or manual review and are not exact rollback. Local artifacts
+are tamper-evident review aids, not tamper-proof guarantees. SafeLoop does not claim a remote
+transparency log unless one is explicitly implemented and configured.

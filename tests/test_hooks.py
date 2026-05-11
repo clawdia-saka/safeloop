@@ -47,6 +47,27 @@ def test_approval_hook_registry_short_circuits_on_first_non_allow() -> None:
     assert calls == ["first", "second"]
 
 
+def test_approval_hook_registry_normalizes_string_decisions_at_boundary() -> None:
+    action = make_action(EffectClass.REVERSIBLE_WRITE)
+    registry = ApprovalHookRegistry()
+    registry.register(lambda envelope: "block")  # type: ignore[return-value]
+
+    assert registry.evaluate(action) is ApprovalDecision.BLOCK
+
+
+def test_approval_hook_registry_rejects_unknown_decision_fail_closed() -> None:
+    action = make_action(EffectClass.REVERSIBLE_WRITE)
+    registry = ApprovalHookRegistry()
+    registry.register(lambda envelope: "approve")  # type: ignore[return-value]
+
+    try:
+        registry.evaluate(action)
+    except ValueError as exc:
+        assert "approve" in str(exc)
+    else:
+        raise AssertionError("unknown hook decision should not execute as allow")
+
+
 def test_compensation_hook_registry_runs_for_compensatable_actions() -> None:
     compensatable_action = make_action(EffectClass.COMPENSATABLE_WRITE)
     irreversible_action = make_action(EffectClass.IRREVERSIBLE_WRITE)

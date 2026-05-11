@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from safeloop.api import RunDetail, RunSummary, TerminalBoundary, TerminalSemantics
+from safeloop.journal import JournalReason
 
 
 SPEC_PATH = Path("docs/specs/state-machine-and-journal-schema.md")
@@ -72,3 +73,10 @@ def test_state_machine_spec_documents_api_shape_after_terminal_semantics() -> No
 
     for marker in required_markers:
         assert marker in spec
+
+
+def test_state_machine_spec_documents_every_journal_reason() -> None:
+    spec = read_spec()
+
+    for reason in JournalReason:
+        assert f"`{reason.value}`" in spec or reason.value in spec

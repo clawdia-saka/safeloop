@@ -63,3 +63,13 @@ def test_public_readiness_script_check_verifies_packet_and_build_metadata() -> N
     assert "demo-verifier=present" in output
     assert "demo-verifier-help=ok" in output
     assert "release-tag=not-created" in output
+
+
+def test_readme_release_boundary_matches_current_public_readiness_version() -> None:
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    packet = DOC.read_text(encoding="utf-8")
+
+    assert "SafeLoop 0.1.4" in readme
+    assert "SafeLoop 0.1.4" in packet
+    assert "0.0.4 reliability sprint" not in readme
+    assert "no HTTP dashboard v2 in 0.0.3" not in readme

@@ -14,7 +14,7 @@ Agents can run for minutes or hours and leave operators asking:
 - can a checkpoint be locally undone?
 - did anything external happen that needs manual compensation?
 
-SafeLoop 0.0.4 begins hardening the local watchdog/reversible-timeline workflow for those questions.
+SafeLoop 0.1.4 hardens the local watchdog, delta-audit packet, and control-plane evidence workflow for those questions.
 
 ## Demo commands
 
@@ -61,7 +61,7 @@ bash examples/watchdog_demo.sh
 
 ## What it does today
 
-SafeLoop 0.0.4 reliability sprint writes a local run artifact packet:
+SafeLoop 0.1.4 writes local watchdog and review-aid artifacts such as:
 
 ```text
 RUN_DIR/
@@ -95,6 +95,10 @@ Implemented surfaces:
 - `undo`: demo-ready dry-run/apply UX for covered local file creations, including operator-readable artifact paths for `undo-preflight.json`, `rollback-plan.json`, and `undo-result.json`.
 - Existing runtime boundary demos, including repeated resume, remain documented as local lifecycle examples alongside the watchdog RC.
 
+## Compensation is not rollback
+
+SafeLoop separates exact local undo from external compensation. A `compensated` run means the configured compensation hook completed; it does not mean exact rollback or an “as-if-never-happened” state. A `compensation_failed` run means cleanup is incomplete or uncertain and needs operator review. See [`docs/faq.md`](docs/faq.md), [`docs/specs/state-machine-and-journal-schema.md`](docs/specs/state-machine-and-journal-schema.md), and [`docs/case-studies/boundary-scenarios.md`](docs/case-studies/boundary-scenarios.md) for the boundary examples.
+
 ## What it does not claim
 
 SafeLoop is intentionally narrow in this release:
@@ -103,9 +107,9 @@ SafeLoop is intentionally narrow in this release:
 - not a hosted control plane yet
 - external actions are not blindly reversible
 - gitignored files are out of scope unless configured
-- no HTTP dashboard v2 in 0.0.3
-- no Slack/GitHub/Vercel external adapters in 0.0.3
-- no signing, remote transparency log, RBAC, or full rollback-to semantics yet
+- no hosted HTTP dashboard v2 or SaaS control plane
+- no Slack/GitHub/Vercel external adapter authority
+- no remote transparency log or full rollback-to semantics yet
 
 ## Development
 
@@ -125,6 +129,6 @@ Build a wheel:
 python -m build --wheel
 ```
 
-For the 0.0.3 watchdog contract, see [`docs/safeloop-0.0.3-agent-watchdog-rc.md`](docs/safeloop-0.0.3-agent-watchdog-rc.md). For release notes and deltas from 0.0.1/0.0.2, see [`docs/release-notes-0.0.3.md`](docs/release-notes-0.0.3.md).
+For the public MVP readiness boundary, see [`docs/public-mvp-readiness.md`](docs/public-mvp-readiness.md). Historical watchdog contract notes remain in [`docs/safeloop-0.0.3-agent-watchdog-rc.md`](docs/safeloop-0.0.3-agent-watchdog-rc.md) and [`docs/release-notes-0.0.3.md`](docs/release-notes-0.0.3.md).
 
 For the 0.1.0 local control-plane MVP, see [`docs/control-plane.md`](docs/control-plane.md), [`docs/approval-lifecycle.md`](docs/approval-lifecycle.md), [`docs/control-plane-threat-model.md`](docs/control-plane-threat-model.md), and [`docs/release-notes-0.1.0.md`](docs/release-notes-0.1.0.md). A local demo is in [`examples/control-plane-local-demo/`](examples/control-plane-local-demo/).

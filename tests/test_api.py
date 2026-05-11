@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
-from safeloop.api import RunViewer, create_app, derive_annotations
+from safeloop.api import RunViewer, create_app, derive_annotations, derive_terminal_semantics
 from safeloop.hooks import ApprovalDecision, ApprovalHookRegistry, CompensationHookRegistry
 from safeloop.journal import JournalReason, JournalState
 from safeloop.local_anchor import canonical_sha256
@@ -450,6 +450,20 @@ def test_failed_approval_completion_error_is_side_effects_possible_boundary() ->
 
     assert scope.value == "boundary_case"
     assert [boundary.value for boundary in boundaries] == ["side_effects_possible", "terminal"]
+
+
+def test_failed_resume_approval_block_is_side_effects_possible_boundary() -> None:
+    scope, boundaries = derive_annotations(JournalState.FAILED, JournalReason.RESUME_APPROVAL_BLOCK)
+    semantics = derive_terminal_semantics(JournalState.FAILED, JournalReason.RESUME_APPROVAL_BLOCK)
+
+    assert scope.value == "boundary_case"
+    assert [boundary.value for boundary in boundaries] == [
+        "checkpoint_recorded",
+        "side_effects_possible",
+        "terminal",
+    ]
+    assert semantics.boundary.value == "checkpoint_resume"
+    assert "prior side effects may exist" in semantics.note
 
 
 def test_failed_unknown_reason_defaults_to_boundary_terminal_only() -> None:

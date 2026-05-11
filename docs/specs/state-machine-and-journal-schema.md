@@ -24,7 +24,7 @@ Current schema:
   "run_id": "string",
   "action_id": "string",
   "state": "proposed|approved|executing|applied|compensating|compensated|compensation_failed|failed|resumable|handed_off",
-  "reason": "approval_error|approval_block|handoff_requested|execution_error|compensation_error|null",
+  "reason": "approval_error|approval_block|approval_completion_error|resume_approval_block|handoff_requested|execution_error|compensation_error|null",
   "error": "string|null"
 }
 ```
@@ -104,6 +104,7 @@ The transition graph enforced by `validate_transition()` is:
 - `compensating -> compensated`
 - `compensating -> compensation_failed`
 - `resumable -> executing`
+- `resumable -> failed`
 
 Everything else is invalid, including:
 - `executing -> handed_off`
@@ -155,9 +156,11 @@ Current metadata expectation:
 ### `failed`
 The automatic runtime path terminated unsuccessfully without ending in successful compensation.
 
-Current code uses `failed` for three cases:
+Current code uses `failed` for four cases:
 - approval hook raised: `reason=approval_error`
-- approval hook blocked execution: `reason=approval_block`
+- approval hook blocked execution before executor entry: `reason=approval_block`
+- approval completion failed after executor success: `reason=approval_completion_error`
+- resume approval failed after a live checkpoint: `reason=resume_approval_block`
 - executor raised for a non-compensatable path: `reason=execution_error`
 
 This state is terminal.
@@ -215,6 +218,26 @@ Path:
 Metadata:
 - `reason=execution_error`
 - `error=str(exception)`
+
+### Approval completion failure after executor success
+Path:
+- `proposed -> approved -> executing -> failed`
+
+Metadata:
+- `reason=approval_completion_error`
+- `error=str(exception)` from the lifecycle completion store
+
+The executor has already returned successfully, so viewer/API mappings treat this as a side-effects-possible boundary rather than a pre-execution block.
+
+### Resume approval block
+Path:
+- `proposed -> approved -> executing -> resumable -> failed`
+
+Metadata:
+- `reason=resume_approval_block`
+- `error` contains the resume approval validation error, such as expiry
+
+The executor is not re-entered for the blocked resume attempt, the live checkpoint is cleared when the run becomes terminal, and API/viewer mappings keep this as side-effects-possible because execution had already reached a checkpoint before the failed resume.
 
 ### Compensatable execution failure with successful compensation
 Path:
@@ -348,6 +371,8 @@ Current derived mapping:
 - `handed_off` -> `boundary_case`, `["pre_execution", "operator_owned", "terminal"]`
 - `failed(reason=approval_block)` -> `inside_mvp_scope`, `["pre_execution", "terminal"]`
 - `failed(reason=approval_error)` -> `inside_mvp_scope`, `["pre_execution", "terminal"]`
+- `failed(reason=resume_approval_block)` -> `boundary_case`, `["checkpoint_recorded", "side_effects_possible", "terminal"]`
+- `failed(reason=approval_completion_error)` -> `boundary_case`, `["side_effects_possible", "terminal"]`
 - `failed(reason=execution_error)` -> `boundary_case`, `["side_effects_possible", "terminal"]`
 - `failed(reason=None|legacy unknown)` -> `boundary_case`, `["terminal"]`
 

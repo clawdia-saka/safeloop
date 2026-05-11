@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -196,6 +196,64 @@ def test_control_plane_gate_does_not_consume_approval_when_executor_fails(tmp_pa
     assert result.state == JournalState.FAILED
     assert result.reason == JournalReason.EXECUTION_ERROR
     assert lifecycle.get("approval-runtime-fail").status == IN_FLIGHT
+
+
+def test_resume_control_plane_gate_uses_deterministic_approval_now_for_expiry(tmp_path) -> None:
+    key = b"runtime-gate-test-key"
+    now = datetime(2026, 5, 3, 5, 38, tzinfo=timezone.utc)
+    runtime = make_runtime(tmp_path)
+    lifecycle = ApprovalLifecycleStore(key, ttl=timedelta(seconds=5))
+    lifecycle.approve(
+        lifecycle.request(
+            approval_id="approval-runtime-resume-expired",
+            requested_by="tester",
+            action="demo",
+            subject="system",
+            created_at=now,
+        ).approval_id,
+        now=now,
+    )
+    action = make_action(EffectClass.REVERSIBLE_WRITE, key="runtime-gated-resume-expired")
+    executions: list[object | None] = []
+
+    def pause_then_resume(checkpoint: object | None) -> object:
+        executions.append(checkpoint)
+        if checkpoint is None:
+            raise ResumableExecution({"step": 1})
+        return {"ok": True}
+
+    first = runtime.run(
+        run_id="run-runtime-gated-resume-expired",
+        action=action,
+        executor=pause_then_resume,
+        control_plane_approvals=lifecycle,
+        approval_id="approval-runtime-resume-expired",
+        approval_key=key,
+        approval_now=now,
+    )
+
+    second = runtime.run(
+        run_id="run-runtime-gated-resume-expired",
+        action=action,
+        executor=pause_then_resume,
+        control_plane_approvals=lifecycle,
+        approval_id="approval-runtime-resume-expired",
+        approval_key=key,
+        approval_now=now + timedelta(seconds=6),
+    )
+
+    assert first.state == JournalState.RESUMABLE
+    assert second.state == JournalState.FAILED
+    assert second.reason == JournalReason.RESUME_APPROVAL_BLOCK
+    assert executions == [None]
+    assert runtime.checkpoint_for("run-runtime-gated-resume-expired") is None
+    assert [entry.state for entry in runtime.history("run-runtime-gated-resume-expired")] == [
+        JournalState.PROPOSED,
+        JournalState.APPROVED,
+        JournalState.EXECUTING,
+        JournalState.RESUMABLE,
+        JournalState.FAILED,
+    ]
 
 
 def test_runtime_enforcement_rejects_lookup_only_registry_to_avoid_replay(tmp_path) -> None:

@@ -6,8 +6,10 @@ watchdog timeline so watched agents never append to timeline.jsonl.
 from __future__ import annotations
 
 import hashlib
+import difflib
 import json
 import os
+import re
 import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -32,6 +34,43 @@ def _sha_event(event_without_hash: dict[str, Any]) -> str:
 
 def _is_sha(value: Any) -> bool:
     return isinstance(value, str) and value.startswith("sha256:") and len(value) == 71
+
+
+def _snapshot_text(root: Path) -> dict[str, str | None]:
+    out: dict[str, str | None] = {}
+    for path in root.rglob("*"):
+        if not path.is_file() or ".safeloop" in path.parts:
+            continue
+        rel = path.relative_to(root).as_posix()
+        try:
+            out[rel] = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            out[rel] = None
+    return out
+
+
+def _parse_hunk_header(line: str) -> tuple[int, int, int, int] | None:
+    match = re.match(r"@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@", line)
+    if not match:
+        return None
+    return int(match.group(1)), int(match.group(2) or "1"), int(match.group(3)), int(match.group(4) or "1")
+
+
+def _action_changes(root: Path, before: dict[str, str | None]) -> tuple[list[str], list[dict[str, Any]]]:
+    after = _snapshot_text(root)
+    files = sorted(f for f in set(before) | set(after) if before.get(f) != after.get(f))
+    hunks: list[dict[str, Any]] = []
+    for rel in files:
+        if before.get(rel) is None or after.get(rel) is None:
+            continue
+        old_lines = str(before[rel]).splitlines(keepends=True)
+        new_lines = str(after[rel]).splitlines(keepends=True)
+        for line in difflib.unified_diff(old_lines, new_lines, lineterm=""):
+            parsed = _parse_hunk_header(line)
+            if parsed:
+                os_, ol, ns, nl = parsed
+                hunks.append({"path": rel, "old_start": os_, "old_lines": ol, "new_start": ns, "new_lines": nl})
+    return files, hunks
 
 
 def _ledger_path_from_env() -> tuple[Path, str] | None:
@@ -92,11 +131,13 @@ def action_span(name: str, *, intent: str | None = None) -> Iterator[str | None]
         "intent": intent,
         "run_id": run_id,
     }
+    before = _snapshot_text(Path.cwd())
     append_action_event(path, {**common, "event_type": "action_started", "timestamp": _now()})
     try:
         yield action_id
     finally:
-        append_action_event(path, {**common, "event_type": "action_finished", "timestamp": _now()})
+        files, hunks = _action_changes(Path.cwd(), before)
+        append_action_event(path, {**common, "event_type": "action_finished", "timestamp": _now(), "files": files, "hunks": hunks})
 
 
 def verify_action_events(path: Path) -> dict[str, Any]:

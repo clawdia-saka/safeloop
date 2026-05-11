@@ -735,7 +735,8 @@ def undo(run_dir: Path, run_id: str, checkpoint_id: str, apply: bool = False) ->
     status = "blocked" if blockers else "ok"
     pre = {"schema_version": "undo-preflight.v1", "run_id": run_id, "checkpoint_id": checkpoint_id, "mode": "apply" if apply else "dry-run", "status": status, "blockers": blockers, "file_counts": {"created": len(created), "modified": len(modified), "deleted": len(deleted)}, "external_side_effect_status": "not_tracked"}
     atomic_json(cp / "undo-preflight.json", pre)
-    atomic_json(run_dir / "rollback-plan.json", pre)
+    if not apply:
+        atomic_json(run_dir / "rollback-plan.json", pre)
     if blockers:
         return {**pre, "blocked_reason": blockers[0]["code"]}
     if apply:
@@ -802,7 +803,8 @@ def rollback_to_start(run_dir: Path, run_id: str, apply: bool = False) -> dict[s
             blockers.append({"file": f, "code": str(code), "expected": "baseline blob", "actual": "missing"})
     side_effects = {"classification": "manual_review", "exact_rollback": False, "note": "External side effects are not exact rollback; review side-effects.jsonl for compensation or handoff."}
     result = {"schema_version": "rollback-result.v1" if apply else "rollback-plan.v1", "operation": "rollback_to_start", "run_id": run_id, "mode": "apply" if apply else "dry-run", "status": "blocked" if blockers else "ok", "review_required": True, "covered_local_file_changes": {"created": created, "modified": modified, "deleted": deleted}, "file_counts": {"created": len(created), "modified": len(modified), "deleted": len(deleted)}, "blockers": blockers, "external_side_effects": side_effects, "preflight": {"status": "blocked" if blockers else "pass"}, "apply_command": f"safeloop rollback apply {run_dir} {run_id} --to-start"}
-    atomic_json(run_dir / "rollback-plan.json", result)
+    if not apply:
+        atomic_json(run_dir / "rollback-plan.json", result)
     if blockers:
         return {**result, "blocked_reason": blockers[0]["code"]}
     if apply:
@@ -823,13 +825,6 @@ def rollback_to_start(run_dir: Path, run_id: str, apply: bool = False) -> dict[s
         result.update({"status": "applied", "restored_file_count": len(created) + len(modified) + len(deleted)})
         result["verification"] = verify_run(run_dir, check_source_evidence=False)
         atomic_json(run_dir / "rollback-result.json", result)
-        evs = timeline_events(run_dir)
-        prev = evs[-1]["event_hash"] if evs else None
-        new_hash = append_event(run_dir / "timeline.jsonl", len(evs) + 1, "rollback_applied", {"operation": "rollback_to_start", "rollback_status": "applied", "artifact_digests": {"rollback-result.json": sha_file(run_dir / "rollback-result.json")}}, prev)
-        run["latest_event_hash"] = new_hash
-        run["final_event_hash"] = new_hash
-        atomic_json(run_dir / "run.json", run)
-        create_local_anchor(run_dir)
     return result
 
 

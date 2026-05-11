@@ -163,6 +163,52 @@ def test_delta_audit_packet_rejects_sensitive_api_trace_payload_even_when_not_em
     assert "payload" not in bundle["artifacts"]["api_trace"]
 
 
+def test_delta_audit_packet_refuses_sensitive_payload_even_when_payload_opted_in(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run-sensitive-opt-in"
+    run_dir.mkdir()
+    (run_dir / "api-trace.json").write_text(
+        json.dumps({
+            "events": [
+                {"stage": "request", "hash": "r", "artifact_sha256": "a" * 64, "headers": {"authorization": "Bearer secret"}},
+                {"stage": "runtime", "hash": "r", "artifact_sha256": "b" * 64},
+                {"stage": "enforcement", "hash": "e", "artifact_sha256": "c" * 64},
+                {"stage": "response", "hash": "s", "artifact_sha256": "d" * 64},
+            ]
+        }),
+        encoding="utf-8",
+    )
+
+    packet = build_delta_audit_packet(run_dir, output_dir=tmp_path / "sensitive-opt-in-packet", include_payload=True)
+
+    assert packet["action_required"] is True
+    assert "api-trace.json.events[0].headers contains sensitive key authorization" in packet["issues"]
+    bundle = read_json(tmp_path / "sensitive-opt-in-packet" / "evidence-bundle.json")
+    assert bundle["payload_included"] is False
+    assert "payload" not in bundle["artifacts"]["api_trace"]
+
+
+def test_delta_audit_packet_detects_camel_case_sensitive_keys(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run-camel-sensitive"
+    run_dir.mkdir()
+    (run_dir / "api-trace.json").write_text(
+        json.dumps({
+            "events": [
+                {"stage": "request", "hash": "r", "artifact_sha256": "a" * 64, "accessToken": "secret"},
+                {"stage": "runtime", "hash": "r", "artifact_sha256": "b" * 64},
+                {"stage": "enforcement", "hash": "e", "artifact_sha256": "c" * 64, "privateKey": "secret"},
+                {"stage": "response", "hash": "s", "artifact_sha256": "d" * 64},
+            ]
+        }),
+        encoding="utf-8",
+    )
+
+    packet = build_delta_audit_packet(run_dir, output_dir=tmp_path / "camel-sensitive-packet")
+
+    assert packet["action_required"] is True
+    assert "api-trace.json.events[0] contains sensitive key accessToken" in packet["issues"]
+    assert "api-trace.json.events[2] contains sensitive key privateKey" in packet["issues"]
+
+
 def test_delta_audit_packet_validates_jsonl_side_effect_evidence(tmp_path: Path) -> None:
     run_dir = tmp_path / "run-jsonl"
     run_dir.mkdir()

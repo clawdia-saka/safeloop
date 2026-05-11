@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -80,7 +81,8 @@ def build_delta_audit_packet(
             issues.extend(_validate_api_trace(payload))
         if kind == "side_effects":
             issues.extend(_validate_side_effect_jsonl(payload, filename))
-        issues.extend(_scan_sensitive_keys(payload, prefix=filename))
+        sensitive_issues = _scan_sensitive_keys(payload, prefix=filename)
+        issues.extend(sensitive_issues)
 
         descriptor = {
             "kind": kind,
@@ -95,7 +97,7 @@ def build_delta_audit_packet(
             "bytes": descriptor["bytes"],
             "summary": _summarize_payload(payload, encoding=encoding),
         }
-        if include_payload:
+        if include_payload and not sensitive_issues:
             artifact["payload"] = payload
         artifacts[kind] = artifact
 
@@ -114,7 +116,7 @@ def build_delta_audit_packet(
         "run_dir": str(run_path),
         "bound_evidence": bound,
         "artifacts": artifacts,
-        "payload_included": include_payload,
+        "payload_included": include_payload and any("payload" in artifact for artifact in artifacts.values()),
         "action_required": action_required,
         "issues": issues,
     }
@@ -266,15 +268,20 @@ def _scan_sensitive_keys(value: Any, *, prefix: str) -> list[str]:
     if isinstance(value, dict):
         for key, child in value.items():
             key_text = str(key)
-            lowered = key_text.lower()
             path = f"{prefix}.{key_text}"
-            if lowered in SENSITIVE_KEYS or any(lowered.endswith(suffix) for suffix in SENSITIVE_SUFFIXES):
+            if _sensitive_key(key_text):
                 issues.append(f"{prefix} contains sensitive key {path.removeprefix(prefix + '.')}")
             issues.extend(_scan_sensitive_keys(child, prefix=path))
     elif isinstance(value, list):
         for index, child in enumerate(value):
             issues.extend(_scan_sensitive_keys(child, prefix=f"{prefix}[{index}]"))
     return issues
+
+
+def _sensitive_key(key: str) -> bool:
+    normalized = re.sub(r"[^a-z0-9]", "", key.lower())
+    sensitive = {re.sub(r"[^a-z0-9]", "", item) for item in SENSITIVE_KEYS}
+    return normalized in sensitive or normalized.endswith(("token", "key", "secret", "password"))
 
 
 def _has_digest_binding(event: dict[str, Any]) -> bool:

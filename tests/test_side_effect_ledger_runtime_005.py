@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -15,6 +16,12 @@ from safeloop.side_effect_ledger import (
 
 def read_events(path: Path) -> list[dict]:
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+
+def event_hash(event: dict) -> str:
+    payload = dict(event)
+    payload.pop("event_hash", None)
+    return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
 def test_side_effect_ledger_records_strict_redacted_intent(tmp_path: Path) -> None:
@@ -189,3 +196,28 @@ def test_side_effect_ledger_rejects_appending_to_legacy_unhashed_history(tmp_pat
         assert "cannot append to unhashed legacy side-effect ledger" in str(exc)
     else:
         raise AssertionError("expected legacy append rejection")
+
+
+def test_side_effect_ledger_rejects_appending_to_corrupted_hash_chain(tmp_path: Path) -> None:
+    path = tmp_path / "side-effects.jsonl"
+    ledger = LocalSideEffectLedger(path, run_id="run-005")
+    first = ledger.append(SideEffectRecord(phase="intent", effect_class="file", target={"path": "a"}))
+    second = ledger.append(SideEffectRecord(phase="prepared", effect_class="file", target={"path": "b"}))
+    first["target"] = {"path": "tampered"}
+    path.write_text(json.dumps(first) + "\n" + json.dumps(second) + "\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="cannot append to corrupted side-effect ledger"):
+        ledger.append(SideEffectRecord(phase="committed", effect_class="file", target={"path": "c"}))
+
+
+def test_side_effect_ledger_rejects_appending_after_prev_hash_mismatch(tmp_path: Path) -> None:
+    path = tmp_path / "side-effects.jsonl"
+    ledger = LocalSideEffectLedger(path, run_id="run-005")
+    first = ledger.append(SideEffectRecord(phase="intent", effect_class="file", target={"path": "a"}))
+    second = ledger.append(SideEffectRecord(phase="prepared", effect_class="file", target={"path": "b"}))
+    second["prev_event_hash"] = "0" * 64
+    second["event_hash"] = event_hash(second)
+    path.write_text(json.dumps(first) + "\n" + json.dumps(second) + "\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="cannot append to corrupted side-effect ledger"):
+        ledger.append(SideEffectRecord(phase="committed", effect_class="file", target={"path": "c"}))

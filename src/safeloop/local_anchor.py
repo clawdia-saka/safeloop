@@ -61,6 +61,7 @@ def run_artifact_hashes(run_dir: Path) -> dict[str, str]:
             or rel.startswith("verification/")
             or rel.endswith("/undo-preflight.json")
             or rel.endswith("/undo-result.json")
+            or rel.endswith("/rollback-result.json")
         ):
             continue
         hashes[rel] = artifact_hash(path)

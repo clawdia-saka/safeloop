@@ -5,9 +5,47 @@ import json
 import sys
 from pathlib import Path
 
-from safeloop.agent_watchdog import timeline_summary, undo, verify_run, watch_run
+from safeloop.agent_watchdog import atomic_json, timeline_summary, undo, verify_run, watch_run
 from safeloop.control_plane.anchor_audit import audit_control_plane_anchors
 from safeloop.local_anchor import verify_local_anchor
+
+
+def _rollback_artifact(run_dir: Path, checkpoint_id: str, res: dict, *, apply: bool) -> dict:
+    status = res.get("status", "unknown")
+    file_counts = res.get("file_counts", {})
+    restore_path = run_dir / "checkpoints" / checkpoint_id / "restore-manifest.json"
+    restore = json.loads(restore_path.read_text(encoding="utf-8"))
+    artifact = {
+        "schema_version": "rollback-result.v1" if apply else "rollback-plan.v1",
+        "operation": "rollback_to_checkpoint",
+        "run_id": res["run_id"],
+        "checkpoint_id": res["checkpoint_id"],
+        "mode": "apply" if apply else "dry-run",
+        "status": status,
+        "review_required": True,
+        "covered_local_file_changes": {
+            "created": sorted(restore.get("created_files", [])),
+            "modified": sorted(restore.get("modified_files", [])),
+            "deleted": sorted(restore.get("deleted_files", [])),
+        },
+        "file_counts": file_counts,
+        "blockers": res.get("blockers", []),
+        "dependency_warning": None if status in {"ok", "applied"} else "rollback blocked until blockers are resolved",
+        "external_side_effects": {
+            "classification": "manual_review",
+            "exact_rollback": False,
+            "note": "External side effects are not exact rollback; review side-effects.jsonl for compensation or handoff.",
+        },
+        "preflight": {
+            "status": "pass" if status in {"ok", "applied"} else "blocked",
+            "artifact": str(run_dir / "checkpoints" / checkpoint_id / "undo-preflight.json"),
+        },
+        "apply_command": f"safeloop rollback apply {run_dir} {res['run_id']} {checkpoint_id}",
+    }
+    if apply:
+        artifact["verification"] = verify_run(run_dir)
+        artifact["undo_result_path"] = res.get("undo_result_path")
+    return artifact
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -49,6 +87,16 @@ def main(argv: list[str] | None = None) -> int:
     g = u.add_mutually_exclusive_group()
     g.add_argument("--dry-run", action="store_true")
     g.add_argument("--apply", action="store_true")
+    rb = sub.add_parser("rollback")
+    rb_sub = rb.add_subparsers(dest="rollback_cmd", required=True)
+    rb_plan = rb_sub.add_parser("plan")
+    rb_plan.add_argument("run_dir")
+    rb_plan.add_argument("run_id")
+    rb_plan.add_argument("checkpoint_id")
+    rb_apply = rb_sub.add_parser("apply")
+    rb_apply.add_argument("run_dir")
+    rb_apply.add_argument("run_id")
+    rb_apply.add_argument("checkpoint_id")
     args = parser.parse_args(argv)
 
     if args.cmd in {"watch-run", "watch"}:
@@ -113,6 +161,26 @@ def main(argv: list[str] | None = None) -> int:
                 f"blocked={c['blocked_reason']} side_effects={c['side_effect_status']} timestamp={c['timestamp']}"
             )
         return 0
+    if args.cmd == "rollback":
+        run_dir = Path(args.run_dir)
+        apply_mode = args.rollback_cmd == "apply"
+        res = undo(run_dir, args.run_id, args.checkpoint_id, apply=apply_mode)
+        artifact = _rollback_artifact(run_dir, args.checkpoint_id, res, apply=apply_mode)
+        if apply_mode:
+            atomic_json(run_dir / "checkpoints" / args.checkpoint_id / "rollback-result.json", artifact)
+            print("Rollback apply complete" if artifact["status"] == "applied" else "Rollback apply blocked")
+            print(f"rollback-result.json: {run_dir / 'checkpoints' / args.checkpoint_id / 'rollback-result.json'}")
+        else:
+            atomic_json(run_dir / "rollback-plan.json", artifact)
+            print("Rollback plan: PASS" if artifact["preflight"]["status"] == "pass" else "Rollback plan: BLOCKED")
+            print(f"rollback-plan.json: {run_dir / 'rollback-plan.json'}")
+        print("SafeLoop rollback operator summary")
+        print(f"run id: {artifact['run_id']}")
+        print(f"checkpoint id: {artifact['checkpoint_id']}")
+        print(f"mode: {artifact['mode']}")
+        print(f"file counts: {artifact['file_counts']}")
+        print(f"external side effects: {artifact['external_side_effects']['classification']}")
+        return 1 if artifact["preflight"]["status"] == "blocked" and apply_mode else 0
     if args.cmd == "undo":
         res = undo(Path(args.run_dir), args.run_id, args.checkpoint_id, apply=args.apply)
         blocked = res.get("status") == "blocked"

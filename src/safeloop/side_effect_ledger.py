@@ -6,6 +6,7 @@ contract for tests/examples. It does not perform external writes.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import uuid
@@ -13,6 +14,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
+
+from safeloop.storage import exclusive_lock
 
 SCHEMA_VERSION = "side-effect-ledger.v1"
 _ALLOWED_PHASES = {"intent", "prepared", "committed", "observed", "compensating", "compensated", "failed", "redacted"}
@@ -125,8 +128,14 @@ class LocalSideEffectLedger:
 
     def append(self, record: SideEffectRecord) -> dict[str, Any]:
         event = self._event(record)
-        with self.path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(event, sort_keys=True, separators=(",", ":")) + "\n")
+        lock_path = self.path.with_suffix(self.path.suffix + ".lock")
+        with lock_path.open("a+", encoding="utf-8") as lock_handle:
+            with exclusive_lock(lock_handle):
+                previous_hash = _latest_event_hash(self.path)
+                event["prev_event_hash"] = previous_hash
+                event["event_hash"] = _event_hash(event)
+                with self.path.open("a", encoding="utf-8") as handle:
+                    handle.write(json.dumps(event, sort_keys=True, separators=(",", ":")) + "\n")
         return event
 
     def record_prepared(self, prepared: PreparedSideEffect) -> dict[str, Any]:
@@ -188,6 +197,36 @@ def _string_values(value: Any) -> list[str]:
             values.extend(_string_values(item))
         return values
     return []
+
+
+def _event_hash(event: dict[str, Any]) -> str:
+    payload = dict(event)
+    payload.pop("event_hash", None)
+    return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def _latest_event_hash(path: Path) -> str | None:
+    previous: str | None = None
+    for line_number, event in enumerate(read_side_effect_events(path), start=1):
+        hash_value = event.get("event_hash")
+        if not isinstance(hash_value, str) or not _is_hex_sha256(hash_value):
+            raise ValueError("cannot append to unhashed legacy side-effect ledger")
+        if event.get("prev_event_hash") != previous:
+            raise ValueError(f"cannot append to corrupted side-effect ledger: prev hash mismatch at line {line_number}")
+        if _event_hash(event) != hash_value:
+            raise ValueError(f"cannot append to corrupted side-effect ledger: event hash mismatch at line {line_number}")
+        previous = hash_value
+    return previous
+
+
+def _is_hex_sha256(value: str) -> bool:
+    if len(value) != 64:
+        return False
+    try:
+        int(value, 16)
+    except ValueError:
+        return False
+    return True
 
 
 def read_side_effect_events(path: Path) -> list[dict[str, Any]]:

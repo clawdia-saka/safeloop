@@ -24,3 +24,20 @@ def test_package_init_does_not_import_optional_fastapi_api_at_module_import_time
 
     assert "from safeloop.api import RunViewer, create_app" not in top_level_imports
     assert "def __getattr__" in init_source
+
+
+def test_runviewer_is_importable_without_fastapi(monkeypatch) -> None:
+    import builtins
+
+    real_import = builtins.__import__
+
+    def blocked_import(name, *args, **kwargs):
+        if name == "fastapi" or name.startswith("fastapi."):
+            raise ModuleNotFoundError("blocked fastapi import")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", blocked_import)
+
+    from safeloop.viewer import RunViewer
+
+    assert RunViewer.__name__ == "RunViewer"

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -15,6 +16,12 @@ from safeloop.side_effect_ledger import (
 
 def read_events(path: Path) -> list[dict]:
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+
+def event_hash(event: dict) -> str:
+    payload = dict(event)
+    payload.pop("event_hash", None)
+    return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
 def test_side_effect_ledger_records_strict_redacted_intent(tmp_path: Path) -> None:
@@ -162,3 +169,55 @@ def test_adapter_prepare_does_not_imply_commit(tmp_path: Path) -> None:
     assert event["external_ref"] is None
     assert read_events(tmp_path / "side-effects.jsonl")[0]["phase"] == "prepared"
     assert all(e["phase"] != "committed" for e in read_events(tmp_path / "side-effects.jsonl"))
+
+
+def test_side_effect_ledger_events_are_hash_chained(tmp_path: Path) -> None:
+    ledger = LocalSideEffectLedger(tmp_path / "side-effects.jsonl", run_id="run-005")
+
+    first = ledger.append(SideEffectRecord(phase="intent", effect_class="file", target={"path": "a"}))
+    second = ledger.append(SideEffectRecord(phase="prepared", effect_class="file", target={"path": "b"}))
+
+    assert first["prev_event_hash"] is None
+    assert isinstance(first["event_hash"], str) and len(first["event_hash"]) == 64
+    assert second["prev_event_hash"] == first["event_hash"]
+    assert second["event_hash"] != first["event_hash"]
+    persisted = read_events(tmp_path / "side-effects.jsonl")
+    assert persisted[1]["prev_event_hash"] == persisted[0]["event_hash"]
+
+
+def test_side_effect_ledger_rejects_appending_to_legacy_unhashed_history(tmp_path: Path) -> None:
+    path = tmp_path / "side-effects.jsonl"
+    path.write_text(json.dumps({"schema_version": "side-effect-ledger.v1", "phase": "intent"}) + "\n", encoding="utf-8")
+    ledger = LocalSideEffectLedger(path, run_id="run-005")
+
+    try:
+        ledger.append(SideEffectRecord(phase="prepared", effect_class="file", target={"path": "b"}))
+    except ValueError as exc:
+        assert "cannot append to unhashed legacy side-effect ledger" in str(exc)
+    else:
+        raise AssertionError("expected legacy append rejection")
+
+
+def test_side_effect_ledger_rejects_appending_to_corrupted_hash_chain(tmp_path: Path) -> None:
+    path = tmp_path / "side-effects.jsonl"
+    ledger = LocalSideEffectLedger(path, run_id="run-005")
+    first = ledger.append(SideEffectRecord(phase="intent", effect_class="file", target={"path": "a"}))
+    second = ledger.append(SideEffectRecord(phase="prepared", effect_class="file", target={"path": "b"}))
+    first["target"] = {"path": "tampered"}
+    path.write_text(json.dumps(first) + "\n" + json.dumps(second) + "\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="cannot append to corrupted side-effect ledger"):
+        ledger.append(SideEffectRecord(phase="committed", effect_class="file", target={"path": "c"}))
+
+
+def test_side_effect_ledger_rejects_appending_after_prev_hash_mismatch(tmp_path: Path) -> None:
+    path = tmp_path / "side-effects.jsonl"
+    ledger = LocalSideEffectLedger(path, run_id="run-005")
+    first = ledger.append(SideEffectRecord(phase="intent", effect_class="file", target={"path": "a"}))
+    second = ledger.append(SideEffectRecord(phase="prepared", effect_class="file", target={"path": "b"}))
+    second["prev_event_hash"] = "0" * 64
+    second["event_hash"] = event_hash(second)
+    path.write_text(json.dumps(first) + "\n" + json.dumps(second) + "\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="cannot append to corrupted side-effect ledger"):
+        ledger.append(SideEffectRecord(phase="committed", effect_class="file", target={"path": "c"}))

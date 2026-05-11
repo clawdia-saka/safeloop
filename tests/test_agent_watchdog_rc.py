@@ -5,6 +5,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import safeloop.agent_watchdog as aw
 from safeloop.agent_watchdog import allocate_checkpoint_seq, snapshot, verify_run
 
 
@@ -228,4 +229,29 @@ def test_undo_refuses_symlink_restore_target_without_touching_link_target(tmp_pa
 
     assert apply.returncode == 1
     assert "symlink_restore_target" in apply.stdout
+    assert symlink_target.read_text(encoding="utf-8") == "do not overwrite\n"
+
+
+def test_undo_apply_blocks_symlink_swap_after_preflight_without_touching_target(tmp_path: Path, monkeypatch) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "notes.txt").write_text("before\n")
+    (repo / "agent.py").write_text("open('notes.txt','w').write('after\\n')\n")
+    result = run_cli("watch-run", "--task-id", "symlink-toctou", "--repo", str(repo), "--run-root", str(tmp_path / "runs"), "--", sys.executable, "agent.py")
+    assert result.returncode == 0
+    run_dir = Path([line.split(":", 1)[1].strip() for line in result.stdout.splitlines() if line.startswith("Run dir:")][0])
+    symlink_target = tmp_path / "outside-target.txt"
+    symlink_target.write_text("do not overwrite\n", encoding="utf-8")
+
+    def swap_after_preflight() -> None:
+        (repo / "notes.txt").unlink()
+        (repo / "notes.txt").symlink_to(symlink_target)
+
+    monkeypatch.setattr(aw, "_UNDO_APPLY_TEST_HOOK", swap_after_preflight)
+    run_id = read_json(run_dir / "run.json")["run_id"]
+
+    res = aw.undo(run_dir, run_id, "cp-0001", apply=True)
+
+    assert res["status"] == "blocked"
+    assert res["blocked_reason"] == "symlink_restore_target"
     assert symlink_target.read_text(encoding="utf-8") == "do not overwrite\n"

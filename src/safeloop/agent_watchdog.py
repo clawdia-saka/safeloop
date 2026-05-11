@@ -491,12 +491,57 @@ def _safe_repo_path(repo: Path, rel: str) -> Path:
 
 def _symlink_blocker(repo: Path, rel: str) -> dict[str, str] | None:
     path = _safe_repo_path(repo, rel)
+    return _reject_symlink(path, rel)
+
+
+_UNDO_APPLY_TEST_HOOK = None
+
+
+def _path_exists_no_follow(path: Path) -> bool:
+    try:
+        path.lstat()
+        return True
+    except FileNotFoundError:
+        return False
+
+
+def _reject_symlink(path: Path, rel: str) -> dict[str, str] | None:
     try:
         path.lstat()
     except FileNotFoundError:
         return None
     if path.is_symlink():
         return {"file": rel, "code": "symlink_restore_target", "expected": "non-symlink", "actual": "symlink"}
+    return None
+
+
+def _safe_unlink_for_undo(path: Path, rel: str) -> dict[str, str] | None:
+    blocker = _reject_symlink(path, rel)
+    if blocker is not None:
+        return blocker
+    if _path_exists_no_follow(path):
+        path.unlink()
+    return None
+
+
+def _safe_write_for_undo(path: Path, rel: str, data: bytes) -> dict[str, str] | None:
+    blocker = _reject_symlink(path, rel)
+    if blocker is not None:
+        return blocker
+    path.parent.mkdir(parents=True, exist_ok=True)
+    parent_blocker = _reject_symlink(path.parent, rel)
+    if parent_blocker is not None:
+        return parent_blocker
+    tmp = path.parent / f".{path.name}.safeloop-undo.tmp"
+    tmp.write_bytes(data)
+    try:
+        blocker = _reject_symlink(path, rel)
+        if blocker is not None:
+            return blocker
+        os.replace(tmp, path)
+    finally:
+        if _path_exists_no_follow(tmp):
+            tmp.unlink()
     return None
 
 
@@ -541,19 +586,27 @@ def undo(run_dir: Path, run_id: str, checkpoint_id: str, apply: bool = False) ->
     if blockers:
         return {**pre, "blocked_reason": blockers[0]["code"]}
     if apply:
+        if _UNDO_APPLY_TEST_HOOK is not None:
+            _UNDO_APPLY_TEST_HOOK()
+        apply_blockers: list[dict[str, str]] = []
         for f in created:
             p = _safe_repo_path(repo, f)
-            if p.exists():
-                p.unlink()
+            blocker = _safe_unlink_for_undo(p, f)
+            if blocker is not None:
+                apply_blockers.append(blocker)
         for f in modified + deleted:
             blob = restore.get("before_blobs", {}).get(f)
             p = _safe_repo_path(repo, f)
             if blob is None:
-                if p.exists():
-                    p.unlink()
+                blocker = _safe_unlink_for_undo(p, f)
             else:
-                p.parent.mkdir(parents=True, exist_ok=True)
-                p.write_bytes(safe_child_file(cp, blob).read_bytes())
+                blocker = _safe_write_for_undo(p, f, safe_child_file(cp, blob).read_bytes())
+            if blocker is not None:
+                apply_blockers.append(blocker)
+        if apply_blockers:
+            blocked = {**pre, "schema_version": "undo-result.v1", "status": "blocked", "blockers": apply_blockers, "blocked_reason": apply_blockers[0]["code"]}
+            atomic_json(cp / "undo-result.json", blocked)
+            return blocked
         result = {**pre, "schema_version": "undo-result.v1", "status": "applied", "restored_file_count": len(created) + len(modified) + len(deleted), "undo_result_path": str(cp / "undo-result.json")}
         atomic_json(cp / "undo-result.json", result)
         evs = timeline_events(run_dir)

@@ -550,6 +550,7 @@ def watch_run(
     atomic_json(run_dir / "run.json", run)
 
     last_snap = snapshot(repo)
+    last_bytes = snapshot_bytes(repo)
     last_digest = state_digest(last_snap)
     create_run_start_baseline(run_dir, repo, run_id, task_id, last_snap)
     base = run_dir / "baseline"
@@ -576,7 +577,7 @@ def watch_run(
     pending_since: float | None = None
 
     def maybe_checkpoint(force: bool = False) -> None:
-        nonlocal last_snap, last_digest, checkpoint_count, parent, prev, seq, pending_snap, pending_since
+        nonlocal last_snap, last_bytes, last_digest, checkpoint_count, parent, prev, seq, pending_snap, pending_since
         current = snapshot(repo)
         digest = state_digest(current)
         if digest == last_digest:
@@ -592,13 +593,14 @@ def watch_run(
         checkpoint_count += 1
         checkpoint_seq = allocate_checkpoint_seq(run_root_path, repo, task_id, run_id)
         cid = f"cp-{checkpoint_seq:04d}"
-        create_checkpoint(run_dir, repo, cid, checkpoint_seq, "monotonic-repo-task", parent, last_snap, current)
+        create_checkpoint(run_dir, repo, cid, checkpoint_seq, "monotonic-repo-task", parent, last_snap, current, last_bytes)
         cp = run_dir / "checkpoints" / cid
         digests = {name: sha_file(cp / name) for name in ["checkpoint.json", "manifest.json", "diff.patch", "changes.patch", "hunk-manifest.json", "restore-manifest.json", "summary.md"]}
         prev = append_event(timeline, seq, "checkpoint_created", {"checkpoint_id": cid, "parent_checkpoint_id": parent, "artifact_digests": digests}, prev)
         seq += 1
         parent = cid
         last_snap = current
+        last_bytes = snapshot_bytes(repo)
         last_digest = digest
         pending_snap = None; pending_since = None
 

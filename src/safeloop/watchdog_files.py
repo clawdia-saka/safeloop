@@ -25,6 +25,16 @@ def discover_repo_files(repo: Path) -> list[Path]:
 
 def _discover_with_git(root: Path) -> list[Path] | None:
     try:
+        probe = subprocess.run(
+            ["git", "rev-parse", "--is-inside-work-tree"],
+            cwd=root,
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        if probe.returncode != 0 or probe.stdout.strip() != "true":
+            return None
         result = subprocess.run(
             ["git", "ls-files", "-co", "--exclude-standard", "-z"],
             cwd=root,

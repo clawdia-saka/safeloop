@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -102,6 +103,113 @@ def _normalize_selected_files(files: list[str]) -> list[str]:
         if rel not in selected:
             selected.append(rel)
     return selected
+
+
+def _normalize_selected_hunks(hunks: list[str]) -> list[str]:
+    selected: list[str] = []
+    for raw in hunks:
+        if not raw.startswith("hunk-") or "/" in raw or ".." in raw or raw in {"", "."}:
+            raise ValueError(f"selected hunk must be a hunk id: {raw}")
+        if raw not in selected:
+            selected.append(raw)
+    return selected
+
+
+def _sha_bytes_local(data: bytes) -> str:
+    return "sha256:" + hashlib.sha256(data).hexdigest()
+
+
+def _text_lines(path: Path) -> list[str]:
+    return path.read_text(encoding="utf-8").splitlines(keepends=True)
+
+
+def _hunk_context(lines: list[str], start: int, count: int) -> list[str]:
+    if start == 0:
+        return []
+    return lines[start - 1 : start - 1 + count]
+
+
+def _load_hunk_sources(run_dir: Path) -> dict[str, tuple[Path, dict]]:
+    found: dict[str, tuple[Path, dict]] = {}
+    for cp in sorted((run_dir / "checkpoints").glob("cp-*")) if (run_dir / "checkpoints").exists() else []:
+        hm_path = cp / "hunk-manifest.json"
+        if not hm_path.exists():
+            continue
+        for hunk in _load_json(hm_path).get("hunks", []):
+            hid = str(hunk.get("hunk_id"))
+            if hid in found:
+                raise ValueError(f"ambiguous hunk id across checkpoints: {hid}")
+            found[hid] = (cp, hunk)
+    return found
+
+
+def _selected_hunk_rollback(run_dir: Path, run_id: str, selected_hunks: list[str], *, apply: bool) -> dict:
+    run = _load_json(run_dir / "run.json")
+    if run.get("run_id") != run_id:
+        raise ValueError(f"run_id mismatch: expected {run.get('run_id')}, got {run_id}")
+    repo = Path(run["repo"])
+    selected = _normalize_selected_hunks(selected_hunks)
+    sources = _load_hunk_sources(run_dir)
+    blockers: list[dict[str, str]] = []
+    chosen: list[tuple[Path, dict]] = []
+    for hid in selected:
+        if hid not in sources:
+            blockers.append({"hunk_id": hid, "code": "missing_hunk", "expected": "hunk-manifest entry", "actual": "missing"})
+        else:
+            chosen.append(sources[hid])
+    affected_files = sorted({h["path"] for _, h in chosen})
+    for cp, h in chosen:
+        rel = h["path"]
+        p = _safe_repo_path(repo, rel)
+        blocker = _reject_symlink_ancestor(repo, p, rel) or _reject_symlink(p, rel)
+        if blocker:
+            blockers.append(blocker); continue
+        if h.get("binary"):
+            blockers.append({"hunk_id": h["hunk_id"], "file": rel, "code": "binary_hunk_unsupported", "expected": "text hunk", "actual": "binary"}); continue
+        if not h.get("undo_supported"):
+            blockers.append({"hunk_id": h["hunk_id"], "file": rel, "code": str(h.get("unsupported_reason") or "hunk_unsupported"), "expected": "undo_supported=true", "actual": "false"}); continue
+        if h.get("operation") == "deleted":
+            blockers.append({"hunk_id": h["hunk_id"], "file": rel, "code": "deleted_file_hunk_unsupported", "expected": "existing file", "actual": "deleted"}); continue
+        if not p.exists():
+            blockers.append({"hunk_id": h["hunk_id"], "file": rel, "code": "missing_file", "expected": "current file", "actual": "missing"}); continue
+        try:
+            current = _text_lines(p)
+        except UnicodeDecodeError:
+            blockers.append({"hunk_id": h["hunk_id"], "file": rel, "code": "binary_or_non_utf8_current", "expected": "utf-8 text", "actual": "non-text"}); continue
+        blob = _load_json(cp / "restore-manifest.json").get("before_blobs", {}).get(rel)
+        if not blob:
+            blockers.append({"hunk_id": h["hunk_id"], "file": rel, "code": "missing_restore_blob", "expected": "before blob", "actual": "missing"}); continue
+        try:
+            before_lines = _text_lines(safe_child_file(cp, blob))
+        except UnicodeDecodeError:
+            blockers.append({"hunk_id": h["hunk_id"], "file": rel, "code": "binary_or_non_utf8_before", "expected": "utf-8 text", "actual": "non-text"}); continue
+        ns, nl, os, ol = int(h["new_start"]), int(h["new_lines"]), int(h["old_start"]), int(h["old_lines"])
+        if ns == 0 or ns - 1 + nl > len(current) or (os != 0 and os - 1 + ol > len(before_lines)):
+            blockers.append({"hunk_id": h["hunk_id"], "file": rel, "code": "hunk_context_mismatch", "expected": "hunk range present", "actual": "out_of_bounds"}); continue
+        expected_after = h.get("after_text_hash")
+        if expected_after and _sha_bytes_local(p.read_bytes()) != expected_after:
+            blockers.append({"hunk_id": h["hunk_id"], "file": rel, "code": "hunk_context_mismatch", "expected": str(expected_after), "actual": _sha_bytes_local(p.read_bytes())}); continue
+    artifact = {"schema_version": "rollback-result.v1" if apply else "rollback-plan.v1", "operation": "rollback_selected_hunks", "run_id": run_id, "mode": "apply" if apply else "dry-run", "selected_hunks": selected, "affected_files": affected_files, "source": {"checkpoints": sorted({cp.name for cp, _ in chosen})}, "target": {"type": "current_worktree"}, "rollback_source_hashes": {h["path"]: h.get("after_text_hash") for _, h in chosen}, "status": "blocked" if blockers else ("applied" if apply else "ok"), "review_required": True, "blockers": blockers, "dependency_warnings": [], "external_side_effects": {"classification": "manual_review", "exact_rollback": False, "note": "External side effects are not exact rollback; review side-effects.jsonl for compensation or handoff."}, "preflight": {"status": "blocked" if blockers else "pass"}, "file_counts": {"created": 0, "modified": len(affected_files), "deleted": 0}, "apply_command": f"safeloop rollback apply {run_dir} {run_id} --hunks {' '.join(selected)}"}
+    if not apply:
+        atomic_json(run_dir / "rollback-plan.json", artifact); return artifact
+    if blockers:
+        artifact["blocked_reason"] = blockers[0]["code"]; atomic_json(run_dir / "rollback-result.json", artifact); return artifact
+    by_file: dict[str, list[tuple[Path, dict]]] = {}
+    for cp, h in chosen:
+        by_file.setdefault(h["path"], []).append((cp, h))
+    for rel, items in by_file.items():
+        p = _safe_repo_path(repo, rel); lines = _text_lines(p)
+        for cp, h in sorted(items, key=lambda item: int(item[1]["new_start"]), reverse=True):
+            before_blob = _load_json(cp / "restore-manifest.json")["before_blobs"][rel]
+            before_lines = _text_lines(safe_child_file(cp, before_blob))
+            ns, nl, os, ol = int(h["new_start"]), int(h["new_lines"]), int(h["old_start"]), int(h["old_lines"])
+            lines[ns - 1 : ns - 1 + nl] = _hunk_context(before_lines, os, ol)
+        p.write_text("".join(lines), encoding="utf-8")
+    artifact["restored_hunk_count"] = len(selected)
+    atomic_json(run_dir / "rollback-result.json", artifact)
+    artifact["verification"] = verify_run(run_dir, check_source_evidence=False)
+    atomic_json(run_dir / "rollback-result.json", artifact)
+    return artifact
 
 
 def _target_from_args(checkpoint_id: str | None) -> dict:
@@ -394,6 +502,7 @@ def main(argv: list[str] | None = None) -> int:
     rb_plan.add_argument("--to-start", action="store_true")
     rb_plan.add_argument("--from-checkpoint", dest="from_checkpoint")
     rb_plan.add_argument("--files", nargs="+", default=[])
+    rb_plan.add_argument("--hunks", nargs="+", default=[])
     rb_apply = rb_sub.add_parser("apply")
     rb_apply.add_argument("run_dir")
     rb_apply.add_argument("run_id")
@@ -401,6 +510,7 @@ def main(argv: list[str] | None = None) -> int:
     rb_apply.add_argument("--to-start", action="store_true")
     rb_apply.add_argument("--from-checkpoint", dest="from_checkpoint")
     rb_apply.add_argument("--files", nargs="+", default=[])
+    rb_apply.add_argument("--hunks", nargs="+", default=[])
     args = parser.parse_args(argv)
 
     if args.cmd in {"watch-run", "watch"}:
@@ -475,6 +585,41 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "rollback":
         run_dir = Path(args.run_dir)
         apply_mode = args.rollback_cmd == "apply"
+        if args.hunks:
+            selected = _normalize_selected_hunks(args.hunks)
+            if apply_mode:
+                plan_path = run_dir / "rollback-plan.json"
+                mismatch = None
+                plan = None
+                if not plan_path.exists():
+                    mismatch = "missing rollback-plan.json"
+                else:
+                    plan = _load_json(plan_path)
+                    if plan.get("operation") != "rollback_selected_hunks" or plan.get("schema_version") != "rollback-plan.v1" or plan.get("run_id") != args.run_id or plan.get("mode") != "dry-run" or plan.get("preflight", {}).get("status") != "pass":
+                        mismatch = "plan mismatch"
+                    elif plan.get("selected_hunks") != selected:
+                        mismatch = "selected_hunks mismatch"
+                if mismatch:
+                    artifact = {"schema_version": "rollback-result.v1", "operation": "rollback_selected_hunks", "run_id": args.run_id, "mode": "apply", "selected_hunks": selected, "status": "blocked", "preflight": {"status": "blocked"}, "blocked_reason": mismatch}
+                    atomic_json(run_dir / "rollback-result.json", artifact)
+                    digests = {"rollback-result.json": sha_file(run_dir / "rollback-result.json")}
+                    if plan_path.exists(): digests["rollback-plan.json"] = sha_file(plan_path)
+                    _append_rollback_event(run_dir, "rollback_blocked", {"operation": "rollback_selected_hunks", "reason": mismatch, "selected_hunks": selected, "artifact_digests": digests})
+                    print("Rollback apply blocked"); print(f"blocked reason: {mismatch}"); return 1
+            artifact = _selected_hunk_rollback(run_dir, args.run_id, selected, apply=apply_mode)
+            if apply_mode:
+                event_type = "rollback_applied" if artifact["status"] == "applied" else "rollback_blocked"
+                _append_rollback_event(run_dir, event_type, {"operation": "rollback_selected_hunks", "rollback_status": artifact["status"], "selected_hunks": selected, "artifact_digests": {"rollback-plan.json": sha_file(run_dir / "rollback-plan.json"), "rollback-result.json": sha_file(run_dir / "rollback-result.json")}})
+                print("Rollback apply complete" if artifact["status"] == "applied" else "Rollback apply blocked")
+                print(f"rollback-result.json: {run_dir / 'rollback-result.json'}")
+            else:
+                _append_rollback_event(run_dir, "rollback_plan_created", {"operation": "rollback_selected_hunks", "selected_hunks": selected, "artifact_digests": {"rollback-plan.json": sha_file(run_dir / "rollback-plan.json")}})
+                print("Rollback plan: PASS" if artifact["preflight"]["status"] == "pass" else "Rollback plan: BLOCKED")
+                print(f"rollback-plan.json: {run_dir / 'rollback-plan.json'}")
+            print("SafeLoop rollback operator summary")
+            print(f"run id: {artifact['run_id']}"); print(f"mode: {artifact['mode']}"); print(f"file counts: {artifact['file_counts']}")
+            if artifact.get("blocked_reason"): print(f"blocked reason: {artifact['blocked_reason']}")
+            return 1 if artifact["preflight"]["status"] == "blocked" and apply_mode else 0
         if args.files:
             selected = _normalize_selected_files(args.files)
             checkpoint_id = args.from_checkpoint or args.checkpoint_id

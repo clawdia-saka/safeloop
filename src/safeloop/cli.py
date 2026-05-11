@@ -26,6 +26,7 @@ from safeloop.agent_watchdog import (
 )
 from safeloop.control_plane.anchor_audit import audit_control_plane_anchors
 from safeloop.local_anchor import create_local_anchor, verify_local_anchor
+from safeloop.rollback_groups import build_rollback_groups, print_rollback_groups
 from safeloop.side_effect_ledger import read_side_effect_events
 
 
@@ -493,6 +494,10 @@ def main(argv: list[str] | None = None) -> int:
     r = sub.add_parser("review")
     r.add_argument("run_dir")
     r.add_argument("--json", action="store_true")
+    r.add_argument("--groups", action="store_true")
+    ex = sub.add_parser("explain")
+    ex.add_argument("run_dir")
+    ex.add_argument("--json", action="store_true")
     rb = sub.add_parser("rollback")
     rb_sub = rb.add_subparsers(dest="rollback_cmd", required=True)
     rb_plan = rb_sub.add_parser("plan")
@@ -576,11 +581,25 @@ def main(argv: list[str] | None = None) -> int:
             )
         return 0
     if args.cmd == "review":
+        if args.groups:
+            artifact = build_rollback_groups(Path(args.run_dir))
+            if args.json:
+                print(json.dumps(artifact, indent=2, sort_keys=True))
+            else:
+                print_rollback_groups(artifact)
+            return 0
         summary = _review_summary(Path(args.run_dir))
         if args.json:
             print(json.dumps(summary, indent=2, sort_keys=True))
         else:
             _print_review(summary)
+        return 0
+    if args.cmd == "explain":
+        artifact = build_rollback_groups(Path(args.run_dir))
+        if args.json:
+            print(json.dumps(artifact, indent=2, sort_keys=True))
+        else:
+            print_rollback_groups(artifact)
         return 0
     if args.cmd == "rollback":
         run_dir = Path(args.run_dir)

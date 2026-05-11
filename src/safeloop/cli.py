@@ -27,7 +27,7 @@ from safeloop.agent_watchdog import (
 from safeloop.compensation import build_compensation_plan, compensation_section_for_rollback
 from safeloop.control_plane.anchor_audit import audit_control_plane_anchors
 from safeloop.local_anchor import create_local_anchor, verify_local_anchor
-from safeloop.policy_check import PolicyCheckError, run_policy_check
+from safeloop.policy_check import PolicyCheckError, build_policy_rollback_suggestion, run_policy_check
 from safeloop.rollback_groups import build_rollback_groups, print_rollback_groups
 from safeloop.side_effect_ledger import read_side_effect_events
 
@@ -273,15 +273,7 @@ def _selected_rollback(run_dir: Path, run_id: str, selected_files: list[str], *,
             raise ValueError("cannot run selected-file rollback: artifact verification is not valid")
     repo = Path(run["repo"])
     selected = _normalize_selected_files(selected_files)
-    base_dir = run_dir / "baseline"
-    manifest = _load_json(base_dir / "manifest.json")
-    before = manifest.get("files", {})
     target = _target_from_args(checkpoint_id)
-    current = snapshot(repo)
-    changed = {f for f in current if f not in before} | {f for f in current if f in before and current[f] != before[f]} | {f for f in before if f not in current}
-    source_hashes = {f: current.get(f) for f in selected}
-    restore_blobs = {f: b for f, b in manifest.get("before_blobs", {}).items() if f in selected}
-    restore_root = base_dir
     if checkpoint_id:
         cp_dir = run_dir / "checkpoints" / checkpoint_id
         restore = _load_json(cp_dir / "restore-manifest.json")
@@ -289,9 +281,21 @@ def _selected_rollback(run_dir: Path, run_id: str, selected_files: list[str], *,
         source_hashes = {f: restore.get("after_hashes", {}).get(f) for f in selected}
         restore_blobs = {f: b for f, b in restore.get("before_blobs", {}).items() if f in selected}
         restore_root = cp_dir
-    created = sorted(f for f in selected if f in changed and f not in before)
-    deleted = sorted(f for f in selected if f in changed and f in before and source_hashes.get(f) is None)
-    modified = sorted(f for f in selected if f in changed and f in before and f not in deleted)
+        created = sorted(f for f in selected if f in restore.get("created_files", []))
+        modified = sorted(f for f in selected if f in restore.get("modified_files", []))
+        deleted = sorted(f for f in selected if f in restore.get("deleted_files", []))
+    else:
+        base_dir = run_dir / "baseline"
+        manifest = _load_json(base_dir / "manifest.json")
+        before = manifest.get("files", {})
+        current = snapshot(repo)
+        changed = {f for f in current if f not in before} | {f for f in current if f in before and current[f] != before[f]} | {f for f in before if f not in current}
+        source_hashes = {f: current.get(f) for f in selected}
+        restore_blobs = {f: b for f, b in manifest.get("before_blobs", {}).items() if f in selected}
+        restore_root = base_dir
+        created = sorted(f for f in selected if f in changed and f not in before)
+        deleted = sorted(f for f in selected if f in changed and f in before and source_hashes.get(f) is None)
+        modified = sorted(f for f in selected if f in changed and f in before and f not in deleted)
     blockers: list[dict[str, str]] = []
     for f in selected:
         p = _safe_repo_path(repo, f)
@@ -604,6 +608,7 @@ def main(argv: list[str] | None = None) -> int:
     pc.add_argument("run_dir")
     pc.add_argument("--policy", required=True)
     pc.add_argument("--json", action="store_true")
+    pc.add_argument("--suggest-rollback", action="store_true")
     comp = sub.add_parser("compensate")
     comp.add_argument("run_dir")
     comp.add_argument("--side-effect", dest="side_effect_id")
@@ -622,6 +627,7 @@ def main(argv: list[str] | None = None) -> int:
     rb_plan.add_argument("--hunks", nargs="+", default=[])
     rb_plan.add_argument("--action")
     rb_plan.add_argument("--include-compensation", action="store_true")
+    rb_plan.add_argument("--policy")
     rb_apply = rb_sub.add_parser("apply")
     rb_apply.add_argument("run_dir")
     rb_apply.add_argument("run_id")
@@ -722,6 +728,17 @@ def main(argv: list[str] | None = None) -> int:
         except PolicyCheckError as exc:
             print(str(exc), file=sys.stderr)
             return 2
+        if args.suggest_rollback:
+            suggestion = build_policy_rollback_suggestion(Path(args.run_dir), Path(args.policy), result)
+            if args.json:
+                print(json.dumps(suggestion, indent=2, sort_keys=True))
+            else:
+                print("SafeLoop policy rollback suggestion")
+                print(f"status: {suggestion['status']}")
+                print(f"exact rollback: {str(suggestion['exact_rollback']).lower()}")
+                print(f"manual review required: {str(suggestion['manual_review_required']).lower()}")
+                print(f"policy-rollback-suggestion.json: {Path(args.run_dir) / 'policy-rollback-suggestion.json'}")
+            return 1 if result["violations"] else 0
         if args.json:
             print(json.dumps(result, indent=2, sort_keys=True))
         else:
@@ -743,6 +760,16 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "rollback":
         run_dir = Path(args.run_dir)
         apply_mode = args.rollback_cmd == "apply"
+        if getattr(args, "rollback_cmd", None) == "plan" and getattr(args, "policy", None) and not args.files and not args.hunks and not args.action:
+            try:
+                result = run_policy_check(run_dir, Path(args.policy))
+            except PolicyCheckError as exc:
+                print(str(exc), file=sys.stderr)
+                return 2
+            suggestion = build_policy_rollback_suggestion(run_dir, Path(args.policy), result)
+            print("Policy rollback suggestion: " + ("PASS" if suggestion["status"] == "pass" else "REVIEW"))
+            print(f"policy-rollback-suggestion.json: {run_dir / 'policy-rollback-suggestion.json'}")
+            return 1 if result["violations"] else 0
         if args.action:
             if apply_mode:
                 ok, reason, plan = _require_matching_action_plan(run_dir, args.run_id, args.action)

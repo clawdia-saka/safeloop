@@ -10,6 +10,7 @@ from safeloop.side_effect_ledger import read_side_effect_events
 
 POLICY_SCHEMA_VERSION = "do-not-do-policy.v1"
 RESULT_SCHEMA_VERSION = "policy-check-result.v1"
+ROLLBACK_SUGGESTION_SCHEMA_VERSION = "policy-rollback-suggestion.v1"
 
 
 class PolicyCheckError(ValueError):
@@ -132,6 +133,48 @@ def _as_list(value: Any) -> list[str]:
     return []
 
 
+def _confidence_for_violation(v: dict[str, Any]) -> str:
+    if v.get("matched_side_effects") or v.get("matched_actions"):
+        return "weak"
+    if v.get("matched_hunks") or v.get("matched_files"):
+        return "strong"
+    return "weak"
+
+
+def build_policy_rollback_suggestion(run_dir: Path, policy_path: Path, result: dict[str, Any] | None = None) -> dict[str, Any]:
+    run_dir = run_dir.resolve()
+    if result is None:
+        result = run_policy_check(run_dir, policy_path)
+    run_id = result.get("run_id")
+    local_exact: list[dict[str, Any]] = []
+    external: list[dict[str, Any]] = []
+    manual_review_required = False
+    dependency_warnings: list[dict[str, str]] = []
+    for v in result.get("violations", []):
+        confidence = _confidence_for_violation(v)
+        if confidence == "weak":
+            manual_review_required = True
+            dependency_warnings.append({"policy_id": str(v.get("policy_id", "unknown")), "code": "weak_confidence"})
+        cp_arg = f" --from-checkpoint {v.get('checkpoint_id')}" if v.get("checkpoint_id") else ""
+        files = list(v.get("matched_files", []))
+        if files:
+            local_exact.append({"policy_id": v["policy_id"], "type": "files", "confidence": confidence, "files": files, "plan_command": f"safeloop rollback plan {run_dir} {run_id} --policy {policy_path}{cp_arg} --files {' '.join(files)}"})
+        hunk_ids = [str(h.get("hunk_id")) for h in v.get("matched_hunks", []) if h.get("hunk_id")]
+        if hunk_ids:
+            local_exact.append({"policy_id": v["policy_id"], "type": "hunks", "confidence": confidence, "hunks": hunk_ids, "plan_command": f"safeloop rollback plan {run_dir} {run_id} --policy {policy_path} --hunks {' '.join(hunk_ids)}"})
+        actions = list(v.get("matched_actions", []))
+        if actions:
+            local_exact.append({"policy_id": v["policy_id"], "type": "action", "confidence": "weak", "actions": actions, "plan_command": f"safeloop rollback plan {run_dir} {run_id} --policy {policy_path} --action {' '.join(actions)}"})
+            dependency_warnings.append({"policy_id": v["policy_id"], "code": "action_scope_requires_review"})
+            manual_review_required = True
+        if v.get("matched_side_effects"):
+            external.append({"policy_id": v["policy_id"], "type": "side_effect", "classification": "compensation_required", "manual_review_required": True, "exact_rollback": False, "side_effects": v["matched_side_effects"], "review_command": f"safeloop review {run_dir}"})
+            manual_review_required = True
+    suggestion = {"schema_version": ROLLBACK_SUGGESTION_SCHEMA_VERSION, "run_id": run_id, "policy_path": str(policy_path), "status": "suggested" if result.get("violations") else "pass", "auto_apply": False, "matching_plan_required_before_apply": True, "exact_rollback": bool(local_exact) and not external and not manual_review_required, "manual_review_required": manual_review_required, "local_exact_rollback": local_exact, "external_compensation": external, "dependency_warnings": dependency_warnings, "raw_payloads_included": False}
+    atomic_json(run_dir / "policy-rollback-suggestion.json", suggestion)
+    return suggestion
+
+
 def run_policy_check(run_dir: Path, policy_path: Path) -> dict[str, Any]:
     run_dir = run_dir.resolve()
     policy = load_policy(policy_path)
@@ -181,6 +224,7 @@ def run_policy_check(run_dir: Path, policy_path: Path) -> dict[str, Any]:
                 "matched_side_effects": matched_side_effects,
                 "matched_actions": matched_actions,
                 "exact_rollback": exact,
+                "checkpoint_id": cp,
                 "suggested_rollback_command": f"safeloop rollback plan {run_dir} {run.get('run_id')} {cp}" if cp else None,
                 "suggested_compensation_command": f"safeloop review {run_dir}" if matched_side_effects else None,
             }

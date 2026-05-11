@@ -166,7 +166,14 @@ def test_regression_unsupported_rollback_expectation_stays_docs_only() -> None:
     faq_doc = (root / "docs/faq.md").read_text()
 
     assert "## Compensation is not rollback" in readme
+    assert "| Term | Means | Does not mean |" in readme
+    assert "| Local rollback |" in readme
+    assert "| Compensation |" in readme
     assert "does not mean exact rollback" in readme
+    assert "## Compensation is not rollback" in faq_doc
+    assert "| Term | Means | Does not mean |" in faq_doc
+    assert "| Local rollback |" in faq_doc
+    assert "| Compensation |" in faq_doc
     assert "Unsupported rollback expectation" in boundary_doc
     assert "Issue #12 will later" not in boundary_doc
     assert "viewer/API already expose" in boundary_doc

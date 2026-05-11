@@ -100,7 +100,15 @@ Implemented surfaces:
 
 ## Compensation is not rollback
 
-SafeLoop separates exact local undo from external compensation. A `compensated` run means the configured compensation hook completed; it does not mean exact rollback or an “as-if-never-happened” state. A `compensation_failed` run means cleanup is incomplete or uncertain and needs operator review. See [`docs/faq.md`](docs/faq.md), [`docs/specs/state-machine-and-journal-schema.md`](docs/specs/state-machine-and-journal-schema.md), and [`docs/case-studies/boundary-scenarios.md`](docs/case-studies/boundary-scenarios.md) for the boundary examples.
+SafeLoop separates exact local undo from external compensation.
+
+| Term | Means | Does not mean |
+| --- | --- | --- |
+| Local rollback | SafeLoop applies a reviewed rollback plan for covered local file changes. | External systems, hidden state, or every possible side effect were reset. |
+| Compensation | SafeLoop ran a configured cleanup hook after execution began. | Exact rollback, time travel, or an “as-if-never-happened” state. |
+| `compensation_failed` | SafeLoop tried cleanup and the hook failed. | The original side effect was safely undone or can be ignored. |
+
+A `compensated` run means the configured compensation hook completed; it does not mean exact rollback or an “as-if-never-happened” state. A `compensation_failed` run means cleanup is incomplete or uncertain and needs operator review. See [`docs/faq.md`](docs/faq.md), [`docs/specs/state-machine-and-journal-schema.md`](docs/specs/state-machine-and-journal-schema.md), and [`docs/case-studies/boundary-scenarios.md`](docs/case-studies/boundary-scenarios.md) for the boundary examples.
 
 ## What it does not claim
 

@@ -5,7 +5,24 @@ import json
 import sys
 from pathlib import Path
 
-from safeloop.agent_watchdog import atomic_json, append_event, rollback_to_start, sha_file, timeline_events, timeline_summary, undo, verify_run, watch_run
+from safeloop.agent_watchdog import (
+    _reject_symlink,
+    _reject_symlink_ancestor,
+    _safe_repo_path,
+    _safe_unlink_for_undo,
+    _safe_write_for_undo,
+    atomic_json,
+    append_event,
+    rollback_to_start,
+    safe_child_file,
+    sha_file,
+    snapshot,
+    timeline_events,
+    timeline_summary,
+    undo,
+    verify_run,
+    watch_run,
+)
 from safeloop.control_plane.anchor_audit import audit_control_plane_anchors
 from safeloop.local_anchor import create_local_anchor, verify_local_anchor
 from safeloop.side_effect_ledger import read_side_effect_events
@@ -71,7 +88,118 @@ def _plan_target(plan: dict) -> tuple[str, str | None]:
 def _target_selection(artifact: dict) -> dict:
     if artifact.get("operation") == "rollback_to_start":
         return {"type": "start"}
+    if artifact.get("operation") == "rollback_selected_files":
+        return artifact.get("target", {"type": "start"})
     return {"type": "checkpoint", "checkpoint_id": artifact.get("checkpoint_id")}
+
+
+def _normalize_selected_files(files: list[str]) -> list[str]:
+    selected: list[str] = []
+    for raw in files:
+        rel = raw.replace("\\", "/")
+        if rel.startswith("/") or ".." in Path(rel).parts or rel in {"", "."}:
+            raise ValueError(f"selected file must be repo-local: {raw}")
+        if rel not in selected:
+            selected.append(rel)
+    return selected
+
+
+def _target_from_args(checkpoint_id: str | None) -> dict:
+    return {"type": "checkpoint", "checkpoint_id": checkpoint_id} if checkpoint_id else {"type": "start"}
+
+
+def _selected_rollback(run_dir: Path, run_id: str, selected_files: list[str], *, checkpoint_id: str | None, apply: bool) -> dict:
+    run = _load_json(run_dir / "run.json")
+    if run.get("run_id") != run_id:
+        raise ValueError(f"run_id mismatch: expected {run.get('run_id')}, got {run_id}")
+    verification = verify_run(run_dir, check_source_evidence=False)
+    if apply and verification["status"] != "valid":
+        issues = verification.get("issues", [])
+        restore_blob_only = issues and all(str(issue).startswith("restore blob missing ") for issue in issues)
+        if not restore_blob_only:
+            raise ValueError("cannot run selected-file rollback: artifact verification is not valid")
+    repo = Path(run["repo"])
+    selected = _normalize_selected_files(selected_files)
+    base_dir = run_dir / "baseline"
+    manifest = _load_json(base_dir / "manifest.json")
+    before = manifest.get("files", {})
+    target = _target_from_args(checkpoint_id)
+    current = snapshot(repo)
+    changed = {f for f in current if f not in before} | {f for f in current if f in before and current[f] != before[f]} | {f for f in before if f not in current}
+    source_hashes = {f: current.get(f) for f in selected}
+    restore_blobs = {f: b for f, b in manifest.get("before_blobs", {}).items() if f in selected}
+    restore_root = base_dir
+    if checkpoint_id:
+        cp_dir = run_dir / "checkpoints" / checkpoint_id
+        restore = _load_json(cp_dir / "restore-manifest.json")
+        changed = set(restore.get("created_files", []) + restore.get("modified_files", []) + restore.get("deleted_files", []))
+        source_hashes = {f: restore.get("after_hashes", {}).get(f) for f in selected}
+        restore_blobs = {f: b for f, b in restore.get("before_blobs", {}).items() if f in selected}
+        restore_root = cp_dir
+    created = sorted(f for f in selected if f in changed and f not in before)
+    deleted = sorted(f for f in selected if f in changed and f in before and source_hashes.get(f) is None)
+    modified = sorted(f for f in selected if f in changed and f in before and f not in deleted)
+    blockers: list[dict[str, str]] = []
+    for f in selected:
+        p = _safe_repo_path(repo, f)
+        blocker = _reject_symlink_ancestor(repo, p, f) or _reject_symlink(p, f)
+        if blocker:
+            blockers.append(blocker)
+    for f in created + modified:
+        if any(b["file"] == f for b in blockers):
+            continue
+        p = _safe_repo_path(repo, f)
+        actual = sha_file(p) if p.exists() else None
+        if actual != source_hashes.get(f):
+            blockers.append({"file": f, "code": "current_hash_mismatch", "expected": str(source_hashes.get(f)), "actual": str(actual)})
+    for f in deleted:
+        if any(b["file"] == f for b in blockers):
+            continue
+        p = _safe_repo_path(repo, f)
+        if p.exists():
+            blockers.append({"file": f, "code": "deleted_path_recreated", "expected": "absent", "actual": sha_file(p) if p.is_file() else "non_file_exists"})
+    for f in modified + deleted:
+        blob = restore_blobs.get(f)
+        if not blob or not safe_child_file(restore_root, blob).exists():
+            blockers.append({"file": f, "code": "missing_restore_blob", "expected": "restore blob", "actual": "missing"})
+    touched_counts = {f: 0 for f in selected}
+    for cp in sorted((run_dir / "checkpoints").glob("cp-*")) if (run_dir / "checkpoints").exists() else []:
+        rm = _load_json(cp / "restore-manifest.json")
+        cp_changed = set(rm.get("created_files", []) + rm.get("modified_files", []) + rm.get("deleted_files", []))
+        for f in selected:
+            if f in cp_changed:
+                touched_counts[f] += 1
+    dependency_warnings = [{"file": f, "code": "touched_across_multiple_checkpoints"} for f, n in touched_counts.items() if n > 1]
+    for f in modified:
+        if not any(w["file"] == f for w in dependency_warnings):
+            dependency_warnings.append({"file": f, "code": "later_changes_after_target"})
+    artifact = {"schema_version": "rollback-result.v1" if apply else "rollback-plan.v1", "operation": "rollback_selected_files", "run_id": run_id, "mode": "apply" if apply else "dry-run", "selected_files": selected, "target": target, "rollback_source_hashes": {f: source_hashes.get(f) for f in selected}, "status": "blocked" if blockers else ("applied" if apply else "ok"), "review_required": True, "covered_local_file_changes": {"created": created, "modified": modified, "deleted": deleted}, "file_counts": {"created": len(created), "modified": len(modified), "deleted": len(deleted)}, "blockers": blockers, "dependency_warnings": dependency_warnings, "external_side_effects": {"classification": "manual_review", "exact_rollback": False, "note": "External side effects are not exact rollback; review side-effects.jsonl for compensation or handoff."}, "preflight": {"status": "blocked" if blockers else "pass"}, "apply_command": f"safeloop rollback apply {run_dir} {run_id} {'--from-checkpoint ' + checkpoint_id + ' ' if checkpoint_id else ''}--files {' '.join(selected)}"}
+    if not apply:
+        atomic_json(run_dir / "rollback-plan.json", artifact)
+        return artifact
+    if blockers:
+        artifact["blocked_reason"] = blockers[0]["code"]
+        atomic_json(run_dir / "rollback-result.json", artifact)
+        return artifact
+    apply_blockers: list[dict[str, str]] = []
+    for f in created:
+        blocker = _safe_unlink_for_undo(repo, _safe_repo_path(repo, f), f)
+        if blocker:
+            apply_blockers.append(blocker)
+    for f in modified + deleted:
+        blob = restore_blobs.get(f)
+        blocker = _safe_write_for_undo(repo, _safe_repo_path(repo, f), f, safe_child_file(restore_root, blob).read_bytes()) if blob else {"file": f, "code": "missing_restore_blob", "expected": "restore blob", "actual": "missing"}
+        if blocker:
+            apply_blockers.append(blocker)
+    if apply_blockers:
+        artifact.update({"status": "blocked", "blockers": apply_blockers, "blocked_reason": apply_blockers[0]["code"], "preflight": {"status": "blocked"}})
+    else:
+        artifact["restored_file_count"] = len(created) + len(modified) + len(deleted)
+    atomic_json(run_dir / "rollback-result.json", artifact)
+    if artifact["status"] == "applied":
+        artifact["verification"] = verify_run(run_dir, check_source_evidence=False)
+        atomic_json(run_dir / "rollback-result.json", artifact)
+    return artifact
 
 
 def _require_matching_rollback_plan(run_dir: Path, run_id: str, *, checkpoint_id: str | None, to_start: bool) -> tuple[bool, str | None, dict | None]:
@@ -264,11 +392,15 @@ def main(argv: list[str] | None = None) -> int:
     rb_plan.add_argument("run_id")
     rb_plan.add_argument("checkpoint_id", nargs="?")
     rb_plan.add_argument("--to-start", action="store_true")
+    rb_plan.add_argument("--from-checkpoint", dest="from_checkpoint")
+    rb_plan.add_argument("--files", nargs="+", default=[])
     rb_apply = rb_sub.add_parser("apply")
     rb_apply.add_argument("run_dir")
     rb_apply.add_argument("run_id")
     rb_apply.add_argument("checkpoint_id", nargs="?")
     rb_apply.add_argument("--to-start", action="store_true")
+    rb_apply.add_argument("--from-checkpoint", dest="from_checkpoint")
+    rb_apply.add_argument("--files", nargs="+", default=[])
     args = parser.parse_args(argv)
 
     if args.cmd in {"watch-run", "watch"}:
@@ -343,6 +475,59 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "rollback":
         run_dir = Path(args.run_dir)
         apply_mode = args.rollback_cmd == "apply"
+        if args.files:
+            selected = _normalize_selected_files(args.files)
+            checkpoint_id = args.from_checkpoint or args.checkpoint_id
+            if apply_mode:
+                plan_path = run_dir / "rollback-plan.json"
+                if not plan_path.exists():
+                    artifact = {"schema_version": "rollback-result.v1", "operation": "rollback_selected_files", "run_id": args.run_id, "mode": "apply", "selected_files": selected, "target": _target_from_args(checkpoint_id), "status": "blocked", "preflight": {"status": "blocked"}, "blocked_reason": "missing rollback-plan.json"}
+                    atomic_json(run_dir / "rollback-result.json", artifact)
+                    _append_rollback_event(run_dir, "rollback_blocked", {"operation": "rollback_selected_files", "target": artifact["target"], "reason": artifact["blocked_reason"], "artifact_digests": {"rollback-result.json": sha_file(run_dir / "rollback-result.json")}})
+                    print("Rollback apply blocked")
+                    print(f"blocked reason: {artifact['blocked_reason']}")
+                    return 1
+                plan = _load_json(plan_path)
+                expected_target = _target_from_args(checkpoint_id)
+                mismatch = None
+                if plan.get("operation") != "rollback_selected_files" or plan.get("schema_version") != "rollback-plan.v1" or plan.get("run_id") != args.run_id or plan.get("mode") != "dry-run" or plan.get("preflight", {}).get("status") != "pass":
+                    mismatch = "plan mismatch"
+                elif plan.get("selected_files") != selected:
+                    mismatch = "selected_files mismatch"
+                elif plan.get("target") != expected_target:
+                    mismatch = "target mismatch"
+                else:
+                    for rel, expected_hash in plan.get("rollback_source_hashes", {}).items():
+                        p = _safe_repo_path(Path(_load_json(run_dir / "run.json")["repo"]), rel)
+                        actual = sha_file(p) if p.exists() else None
+                        if actual != expected_hash:
+                            mismatch = "current_hash_mismatch"
+                            break
+                if mismatch:
+                    artifact = {"schema_version": "rollback-result.v1", "operation": "rollback_selected_files", "run_id": args.run_id, "mode": "apply", "selected_files": selected, "target": expected_target, "status": "blocked", "preflight": {"status": "blocked"}, "blocked_reason": mismatch}
+                    atomic_json(run_dir / "rollback-result.json", artifact)
+                    _append_rollback_event(run_dir, "rollback_blocked", {"operation": "rollback_selected_files", "target": expected_target, "reason": mismatch, "artifact_digests": {"rollback-plan.json": sha_file(plan_path), "rollback-result.json": sha_file(run_dir / "rollback-result.json")}})
+                    print("Rollback apply blocked")
+                    print(f"blocked reason: {mismatch}")
+                    return 1
+            artifact = _selected_rollback(run_dir, args.run_id, selected, checkpoint_id=checkpoint_id, apply=apply_mode)
+            if apply_mode:
+                event_type = "rollback_applied" if artifact["status"] == "applied" else "rollback_blocked"
+                _append_rollback_event(run_dir, event_type, {"operation": "rollback_selected_files", "rollback_status": artifact["status"], "target": artifact["target"], "selected_files": selected, "artifact_digests": {"rollback-plan.json": sha_file(run_dir / "rollback-plan.json"), "rollback-result.json": sha_file(run_dir / "rollback-result.json")}})
+                print("Rollback apply complete" if artifact["status"] == "applied" else "Rollback apply blocked")
+                print(f"rollback-result.json: {run_dir / 'rollback-result.json'}")
+            else:
+                _append_rollback_event(run_dir, "rollback_plan_created", {"operation": "rollback_selected_files", "target": artifact["target"], "selected_files": selected, "artifact_digests": {"rollback-plan.json": sha_file(run_dir / "rollback-plan.json")}})
+                print("Rollback plan: PASS" if artifact["preflight"]["status"] == "pass" else "Rollback plan: BLOCKED")
+                print(f"rollback-plan.json: {run_dir / 'rollback-plan.json'}")
+            print("SafeLoop rollback operator summary")
+            print(f"run id: {artifact['run_id']}")
+            print(f"mode: {artifact['mode']}")
+            print(f"file counts: {artifact['file_counts']}")
+            print(f"external side effects: {artifact['external_side_effects']['classification']}")
+            if artifact.get("blocked_reason"):
+                print(f"blocked reason: {artifact['blocked_reason']}")
+            return 1 if artifact["preflight"]["status"] == "blocked" and apply_mode else 0
         if args.to_start:
             if apply_mode:
                 ok, reason, plan = _require_matching_rollback_plan(run_dir, args.run_id, checkpoint_id=None, to_start=True)

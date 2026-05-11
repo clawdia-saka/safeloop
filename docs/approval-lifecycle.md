@@ -51,7 +51,7 @@ The signed payload remains deterministic JSON over approval ID, action, subject,
 
 ## Restart behavior
 
-The lifecycle store is SQLite-backed. `APPROVED`, `IN_FLIGHT`, and `EXECUTED` states survive process restarts. Runtime startup can reserve a previously approved record after restart, and resume validation can verify a persisted `IN_FLIGHT` approval when the runtime still has the checkpoint needed to resume safely.
+The lifecycle store is SQLite-backed. `APPROVED`, `IN_FLIGHT`, and `EXECUTED` states survive process restarts. Runtime startup can reserve a previously approved record after restart, and resume validation can verify a persisted `IN_FLIGHT` approval before resuming from the latest checkpoint stored in the local journal.
 
 ## Boundary notes
 

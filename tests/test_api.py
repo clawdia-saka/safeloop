@@ -180,7 +180,7 @@ def test_http_api_exposes_has_checkpoint_for_resumable_runs(tmp_path) -> None:
     assert detail.json()["has_checkpoint"] is True
 
 
-def test_storage_backed_viewer_reports_no_live_checkpoint_for_resumable_run(tmp_path) -> None:
+def test_storage_backed_viewer_reports_persisted_checkpoint_for_resumable_run(tmp_path) -> None:
     storage_path = tmp_path / "journal.jsonl"
     runtime = Runtime(storage_path)
     action = make_action(EffectClass.REVERSIBLE_WRITE, key="viewer-resume")
@@ -196,7 +196,7 @@ def test_storage_backed_viewer_reports_no_live_checkpoint_for_resumable_run(tmp_
     assert run.state == JournalState.RESUMABLE
     assert run.scope.value == "boundary_case"
     assert [boundary.value for boundary in run.boundaries] == ["checkpoint_recorded", "side_effects_possible"]
-    assert run.has_checkpoint is False
+    assert run.has_checkpoint is True
 
 
 def test_http_api_clears_has_checkpoint_after_terminal_resume(tmp_path) -> None:

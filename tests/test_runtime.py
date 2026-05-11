@@ -682,7 +682,7 @@ def test_terminal_rerun_is_idempotent_and_does_not_reexecute(tmp_path) -> None:
     assert len(runtime.history("run-terminal-rerun")) == 4
 
 
-def test_resumable_run_without_live_checkpoint_is_idempotent(tmp_path) -> None:
+def test_resumable_checkpoint_persists_across_runtime_reload(tmp_path) -> None:
     storage_path = tmp_path / "journal.jsonl"
     action = make_action(EffectClass.REVERSIBLE_WRITE, key="resume-after-reload")
 
@@ -701,14 +701,41 @@ def test_resumable_run_without_live_checkpoint_is_idempotent(tmp_path) -> None:
         executor=lambda checkpoint: executions.append(checkpoint) or {"ok": True},
     )
 
-    assert result.state == JournalState.RESUMABLE
-    assert executions == []
+    assert result.state == JournalState.APPLIED
+    assert executions == [{"step": 1}]
+    assert reloaded_runtime.checkpoint_for("run-resume-after-reload") is None
     assert [entry.state for entry in reloaded_runtime.history("run-resume-after-reload")] == [
         JournalState.PROPOSED,
         JournalState.APPROVED,
         JournalState.EXECUTING,
         JournalState.RESUMABLE,
+        JournalState.EXECUTING,
+        JournalState.APPLIED,
     ]
+
+
+def test_resumable_checkpoint_history_keeps_latest_payload_for_deduped_retry(tmp_path) -> None:
+    runtime = make_runtime(tmp_path)
+    action = make_action(EffectClass.REVERSIBLE_WRITE, key="resume-history-payload")
+
+    first = runtime.run(
+        run_id="run-resume-history-payload",
+        action=action,
+        executor=lambda checkpoint: (_ for _ in ()).throw(ResumableExecution({"cursor": 1})),
+    )
+    second = runtime.run(
+        run_id="run-resume-history-payload",
+        action=action,
+        executor=lambda checkpoint: (_ for _ in ()).throw(ResumableExecution({"cursor": 2})),
+    )
+
+    history = runtime.history("run-resume-history-payload")
+    assert [first.state, second.state] == [JournalState.RESUMABLE, JournalState.RESUMABLE]
+    assert [entry.checkpoint for entry in history if entry.state == JournalState.RESUMABLE] == [
+        {"cursor": 1},
+        {"cursor": 2},
+    ]
+    assert runtime.checkpoint_for("run-resume-history-payload") == {"cursor": 2}
 
 
 def test_resumable_state_can_be_reentered_and_continued(tmp_path) -> None:

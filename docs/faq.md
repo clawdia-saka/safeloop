@@ -47,7 +47,7 @@ For concrete runnable illustrations, see:
 - `examples/boundary_demos.py` for `handed_off`, `compensation_failed`, `ambiguous_side_effect`, `resumable`, `repeated_resume`, and the docs-only `unsupported_rollback_expectation` reference
 - `docs/case-studies/boundary-scenarios.md` for the current `in_scope` / `boundary` / `unsupported` example matrix
 
-For resumable runs, the detail/viewer surface may expose `has_checkpoint=true`. In the current local MVP, that only means the live runtime instance still holds checkpoint data for resume; it is not a promise of durable persisted checkpoint storage. If a persisted run is still marked `resumable` but the current runtime has no live checkpoint, SafeLoop will not blindly resume with `checkpoint=None`.
+For resumable runs, the journal records the checkpoint payload on each `resumable` entry. A new runtime instance can resume from the latest persisted checkpoint instead of replaying from `checkpoint=None`. SafeLoop still treats terminal reruns as idempotent: once a run reaches a terminal state, calling `run` again with the same `run_id`/action returns the existing terminal journal entry and does not re-execute the action.
 
 ## Is this a workflow engine?
 

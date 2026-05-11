@@ -131,6 +131,47 @@ def _hunk_context(lines: list[str], start: int, count: int) -> list[str]:
     return lines[start - 1 : start - 1 + count]
 
 
+def _expected_hunk_after_lines(cp: Path, hunk: dict) -> list[str] | None:
+    """Return the exact post-change lines for one unified-diff hunk.
+
+    Hunk manifests intentionally record the whole-file before/after hashes, but
+    action rollback must preserve unrelated later edits in the same file.  Use
+    the checkpoint patch to validate only the selected hunk range.
+    """
+    patch_path = cp / "changes.patch"
+    if not patch_path.exists():
+        patch_path = cp / "diff.patch"
+    if not patch_path.exists():
+        return None
+    header = f"@@ -{int(hunk['old_start'])}"
+    new_count = int(hunk["new_lines"])
+    in_file = False
+    for raw in patch_path.read_text(encoding="utf-8").splitlines(keepends=True):
+        if raw.startswith("diff --git "):
+            in_file = raw.rstrip("\n").endswith(f" b/{hunk['path']}")
+            continue
+        if raw.startswith("+++ "):
+            in_file = raw.rstrip("\n") in {f"+++ b/{hunk['path']}", "+++ /dev/null"}
+            continue
+        if not in_file or not raw.startswith("@@ "):
+            continue
+        if not raw.startswith(header) or f" +{int(hunk['new_start'])}" not in raw:
+            continue
+        after: list[str] = []
+        # Continue from the line after this header by re-reading with an index.
+        lines = patch_path.read_text(encoding="utf-8").splitlines(keepends=True)
+        start_idx = lines.index(raw) + 1
+        for body in lines[start_idx:]:
+            if body.startswith("@@ ") or body.startswith("diff --git "):
+                break
+            if body.startswith(" ") or body.startswith("+"):
+                after.append(body[1:])
+            if len(after) == new_count:
+                return after
+        return after if len(after) == new_count else None
+    return None
+
+
 def _load_hunk_sources(run_dir: Path) -> dict[str, tuple[Path, dict]]:
     found: dict[str, tuple[Path, dict]] = {}
     for cp in sorted((run_dir / "checkpoints").glob("cp-*")) if (run_dir / "checkpoints").exists() else []:
@@ -188,9 +229,10 @@ def _selected_hunk_rollback(run_dir: Path, run_id: str, selected_hunks: list[str
         ns, nl, os, ol = int(h["new_start"]), int(h["new_lines"]), int(h["old_start"]), int(h["old_lines"])
         if ns == 0 or ns - 1 + nl > len(current) or (os != 0 and os - 1 + ol > len(before_lines)):
             blockers.append({"hunk_id": h["hunk_id"], "file": rel, "code": "hunk_context_mismatch", "expected": "hunk range present", "actual": "out_of_bounds"}); continue
-        expected_after = h.get("after_text_hash")
-        if expected_after and _sha_bytes_local(p.read_bytes()) != expected_after:
-            blockers.append({"hunk_id": h["hunk_id"], "file": rel, "code": "hunk_context_mismatch", "expected": str(expected_after), "actual": _sha_bytes_local(p.read_bytes())}); continue
+        expected_after = _expected_hunk_after_lines(cp, h)
+        whole_file_matches = bool(h.get("after_text_hash")) and _sha_bytes_local(p.read_bytes()) == h.get("after_text_hash")
+        if not whole_file_matches and (expected_after is None or current[ns - 1 : ns - 1 + nl] != expected_after):
+            blockers.append({"hunk_id": h["hunk_id"], "file": rel, "code": "hunk_context_mismatch", "expected": "selected hunk post-change lines", "actual": "current hunk range differs"}); continue
     artifact = {"schema_version": "rollback-result.v1" if apply else "rollback-plan.v1", "operation": "rollback_selected_hunks", "run_id": run_id, "mode": "apply" if apply else "dry-run", "selected_hunks": selected, "affected_files": affected_files, "source": {"checkpoints": sorted({cp.name for cp, _ in chosen})}, "target": {"type": "current_worktree"}, "rollback_source_hashes": {h["path"]: h.get("after_text_hash") for _, h in chosen}, "status": "blocked" if blockers else ("applied" if apply else "ok"), "review_required": True, "blockers": blockers, "dependency_warnings": [], "external_side_effects": {"classification": "manual_review", "exact_rollback": False, "note": "External side effects are not exact rollback; review side-effects.jsonl for compensation or handoff."}, "preflight": {"status": "blocked" if blockers else "pass"}, "file_counts": {"created": 0, "modified": len(affected_files), "deleted": 0}, "apply_command": f"safeloop rollback apply {run_dir} {run_id} --hunks {' '.join(selected)}"}
     if not apply:
         atomic_json(run_dir / "rollback-plan.json", artifact); return artifact
@@ -344,6 +386,64 @@ def _block_rollback_apply(run_dir: Path, run_id: str, *, checkpoint_id: str | No
         payload["artifact_digests"]["rollback-plan.json"] = sha_file(run_dir / "rollback-plan.json")
     _append_rollback_event(run_dir, "rollback_blocked", payload)
     return {"schema_version": "rollback-result.v1", "status": "blocked", "run_id": run_id, "target": target, "preflight": {"status": "blocked"}, "blocked_reason": reason}
+
+
+def _action_group(run_dir: Path, run_id: str, action_id: str) -> dict:
+    groups = build_rollback_groups(run_dir)
+    if groups.get("run", {}).get("run_id") != run_id:
+        raise ValueError(f"run_id mismatch: expected {groups.get('run', {}).get('run_id')}, got {run_id}")
+    for group in groups.get("groups", []):
+        if group.get("action_id") == action_id:
+            return group
+    raise ValueError(f"action not found: {action_id}")
+
+
+def _action_rollback(run_dir: Path, run_id: str, action_id: str, *, apply: bool) -> dict:
+    group = _action_group(run_dir, run_id, action_id)
+    files = sorted(set(str(f) for f in group.get("files", []) if f))
+    hunks = [h for h in group.get("hunks", []) if h.get("hunk_id")]
+    hunk_ids = [str(h["hunk_id"]) for h in hunks]
+    blockers: list[dict[str, str]] = []
+    hunk_files = sorted({str(h.get("path")) for h in hunks if h.get("path")})
+    mode = "hunk" if hunk_ids and (not files or set(hunk_files) == set(files)) else "file"
+    if not hunk_ids and not files:
+        blockers.append({"action_id": action_id, "code": "action_has_no_local_changes", "expected": "files or hunks", "actual": "none"})
+    if mode == "hunk":
+        for h in hunks:
+            if h.get("binary") or h.get("undo_supported") is False or h.get("unsupported_reason"):
+                blockers.append({"action_id": action_id, "hunk_id": str(h.get("hunk_id")), "file": str(h.get("path")), "code": str(h.get("unsupported_reason") or "unsupported_hunk"), "expected": "undo_supported hunk", "actual": "unsupported"})
+    selected = hunk_ids if mode == "hunk" else files
+    if not blockers:
+        inner = _selected_hunk_rollback(run_dir, run_id, selected, apply=apply) if mode == "hunk" else _selected_rollback(run_dir, run_id, selected, checkpoint_id=None, apply=apply)
+        blockers = list(inner.get("blockers", []))
+    else:
+        inner = {"status": "blocked", "preflight": {"status": "blocked"}, "file_counts": {"created": 0, "modified": len(files), "deleted": 0}}
+    status = "blocked" if blockers else ("applied" if apply else "ok")
+    side_effects = group.get("external_side_effects") or {"classification": "manual_review", "exact_rollback": False}
+    side_effects = {**side_effects, "manual_review": True, "exact_rollback": False, "compensation_plan_required": bool((group.get("side_effects") or {}).get("count"))}
+    artifact = {"schema_version": "rollback-result.v1" if apply else "rollback-plan.v1", "operation": "rollback_action", "run_id": run_id, "mode": "apply" if apply else "dry-run", "action_id": action_id, "action": {"name": group.get("title") or action_id, "intent": group.get("intent") or group.get("title") or action_id}, "rollback_mode": mode, "selected_hunks": hunk_ids if mode == "hunk" else [], "selected_files": files, "affected_files": files, "hunks": hunks, "checkpoints": group.get("checkpoints", []), "side_effects": group.get("side_effects", {"count": 0, "types": []}), "external_side_effects": side_effects, "status": status, "review_required": True, "blockers": blockers, "dependency_warnings": group.get("dependency_warnings", []) or inner.get("dependency_warnings", []), "preflight": {"status": "blocked" if blockers else "pass"}, "file_counts": inner.get("file_counts", {"created": 0, "modified": len(files), "deleted": 0}), "apply_command": f"safeloop rollback apply {run_dir} {run_id} --action {action_id}"}
+    if apply:
+        artifact["inner_result"] = {k: inner.get(k) for k in ("operation", "status", "restored_hunk_count", "restored_file_count") if k in inner}
+        artifact["verification"] = verify_run(run_dir, check_source_evidence=False)
+    if blockers:
+        artifact["blocked_reason"] = blockers[0].get("code")
+    atomic_json(run_dir / ("rollback-result.json" if apply else "rollback-plan.json"), artifact)
+    return artifact
+
+
+def _require_matching_action_plan(run_dir: Path, run_id: str, action_id: str) -> tuple[bool, str | None, dict | None]:
+    plan_path = run_dir / "rollback-plan.json"
+    if not plan_path.exists():
+        return False, "missing rollback-plan.json", None
+    try:
+        plan = _load_json(plan_path)
+    except (OSError, json.JSONDecodeError):
+        return False, "malformed rollback-plan.json", None
+    checks = [(plan.get("schema_version") == "rollback-plan.v1", "schema_version mismatch"), (plan.get("operation") == "rollback_action", "operation mismatch"), (plan.get("run_id") == run_id, "run_id mismatch"), (plan.get("mode") == "dry-run", "mode mismatch"), (plan.get("action_id") == action_id, "action_id mismatch"), (plan.get("preflight", {}).get("status") == "pass", "preflight not pass")]
+    for ok, reason in checks:
+        if not ok:
+            return False, reason, plan
+    return True, None, plan
 
 
 def _checkpoint_changes(cp: Path) -> dict[str, list[str]]:
@@ -513,6 +613,7 @@ def main(argv: list[str] | None = None) -> int:
     rb_plan.add_argument("--from-checkpoint", dest="from_checkpoint")
     rb_plan.add_argument("--files", nargs="+", default=[])
     rb_plan.add_argument("--hunks", nargs="+", default=[])
+    rb_plan.add_argument("--action")
     rb_apply = rb_sub.add_parser("apply")
     rb_apply.add_argument("run_dir")
     rb_apply.add_argument("run_id")
@@ -521,6 +622,7 @@ def main(argv: list[str] | None = None) -> int:
     rb_apply.add_argument("--from-checkpoint", dest="from_checkpoint")
     rb_apply.add_argument("--files", nargs="+", default=[])
     rb_apply.add_argument("--hunks", nargs="+", default=[])
+    rb_apply.add_argument("--action")
     args = parser.parse_args(argv)
 
     if args.cmd in {"watch-run", "watch"}:
@@ -623,6 +725,39 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "rollback":
         run_dir = Path(args.run_dir)
         apply_mode = args.rollback_cmd == "apply"
+        if args.action:
+            if apply_mode:
+                ok, reason, plan = _require_matching_action_plan(run_dir, args.run_id, args.action)
+                if not ok:
+                    artifact = {"schema_version": "rollback-result.v1", "operation": "rollback_action", "run_id": args.run_id, "mode": "apply", "action_id": args.action, "status": "blocked", "preflight": {"status": "blocked"}, "blocked_reason": reason or "plan mismatch"}
+                    atomic_json(run_dir / "rollback-result.json", artifact)
+                    digests = {"rollback-result.json": sha_file(run_dir / "rollback-result.json")}
+                    if plan is not None and (run_dir / "rollback-plan.json").exists():
+                        digests["rollback-plan.json"] = sha_file(run_dir / "rollback-plan.json")
+                    _append_rollback_event(run_dir, "rollback_blocked", {"operation": "rollback_action", "action_id": args.action, "reason": artifact["blocked_reason"], "artifact_digests": digests})
+                    print("Rollback apply blocked")
+                    print(f"blocked reason: {artifact['blocked_reason']}")
+                    print(f"rollback-result.json: {run_dir / 'rollback-result.json'}")
+                    return 1
+            artifact = _action_rollback(run_dir, args.run_id, args.action, apply=apply_mode)
+            if apply_mode:
+                event_type = "rollback_applied" if artifact["status"] == "applied" else "rollback_blocked"
+                _append_rollback_event(run_dir, event_type, {"operation": "rollback_action", "action_id": args.action, "rollback_status": artifact["status"], "artifact_digests": {"rollback-plan.json": sha_file(run_dir / "rollback-plan.json"), "rollback-result.json": sha_file(run_dir / "rollback-result.json")}})
+                print("Rollback apply complete" if artifact["status"] == "applied" else "Rollback apply blocked")
+                print(f"rollback-result.json: {run_dir / 'rollback-result.json'}")
+            else:
+                _append_rollback_event(run_dir, "rollback_plan_created", {"operation": "rollback_action", "action_id": args.action, "artifact_digests": {"rollback-plan.json": sha_file(run_dir / "rollback-plan.json")}})
+                print("Rollback plan: PASS" if artifact["preflight"]["status"] == "pass" else "Rollback plan: BLOCKED")
+                print(f"rollback-plan.json: {run_dir / 'rollback-plan.json'}")
+            print("SafeLoop rollback operator summary")
+            print(f"run id: {artifact['run_id']}")
+            print(f"action id: {artifact['action_id']}")
+            print(f"mode: {artifact['mode']}")
+            print(f"file counts: {artifact['file_counts']}")
+            print(f"external side effects: {artifact['external_side_effects']['classification']}")
+            if artifact.get("blocked_reason"):
+                print(f"blocked reason: {artifact['blocked_reason']}")
+            return 1 if artifact["preflight"]["status"] == "blocked" and apply_mode else 0
         if args.hunks:
             selected = _normalize_selected_hunks(args.hunks)
             if apply_mode:

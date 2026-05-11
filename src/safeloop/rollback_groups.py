@@ -61,6 +61,12 @@ def _checkpoint_data(run_dir: Path) -> dict[str, dict[str, Any]]:
                 "checkpoint_id": h.get("checkpoint_id", cid),
                 "path": h.get("path"),
                 "operation": h.get("operation"),
+                "old_start": h.get("old_start"),
+                "old_lines": h.get("old_lines"),
+                "new_start": h.get("new_start"),
+                "new_lines": h.get("new_lines"),
+                "before_text_hash": h.get("before_text_hash"),
+                "after_text_hash": h.get("after_text_hash"),
                 "undo_supported": h.get("undo_supported", True),
                 "unsupported_reason": h.get("unsupported_reason"),
                 "binary": h.get("binary", False),
@@ -75,16 +81,20 @@ def _action_events(run_dir: Path) -> list[dict[str, Any]]:
     path = run_dir / "action-events.jsonl"
     if not path.exists():
         return []
-    out = []
+    by_id: dict[str, dict[str, Any]] = {}
     for line in path.read_text(encoding="utf-8").splitlines():
         if line.strip():
             item = json.loads(line)
-            if item.get("action_id"):
-                out.append(item)
-    return out
+            action_id = item.get("action_id")
+            if action_id:
+                existing = by_id.setdefault(str(action_id), {"action_id": str(action_id)})
+                existing.update({k: v for k, v in item.items() if v is not None})
+                if item.get("name") and not existing.get("title"):
+                    existing["title"] = item.get("name")
+    return list(by_id.values())
 
 
-def _make_group(idx: int, *, title: str, source: str, files: list[str], checkpoints: list[str], hunks: list[dict[str, Any]], run_dir: Path, action_id: str | None = None) -> dict[str, Any]:
+def _make_group(idx: int, *, title: str, source: str, files: list[str], checkpoints: list[str], hunks: list[dict[str, Any]], run_dir: Path, action_id: str | None = None, intent: str | None = None) -> dict[str, Any]:
     side_effects = _side_effect_summary(run_dir)
     unsupported = [h for h in hunks if h.get("undo_supported") is False or h.get("binary") or h.get("unsupported_reason")]
     risk = "high" if unsupported else ("medium" if side_effects["count"] else "low")
@@ -114,6 +124,8 @@ def _make_group(idx: int, *, title: str, source: str, files: list[str], checkpoi
     }
     if action_id:
         g["action_id"] = action_id
+    if intent:
+        g["intent"] = intent
     if side_effects["count"]:
         g["dependency_warnings"].append("external_side_effects_require_manual_review")
         g["exact_rollback_available"] = False
@@ -130,8 +142,12 @@ def build_rollback_groups(run_dir: Path) -> dict[str, Any]:
         for i, ev in enumerate(actions, 1):
             cps = [ev.get("checkpoint_id")] if ev.get("checkpoint_id") else sorted(cpdata)
             files = list(ev.get("files") or [])
+            action_hunks = ev.get("hunks") or []
             hunks = [h for cid in cps for h in cpdata.get(cid, {}).get("hunks", []) if not files or h.get("path") in files]
-            groups.append(_make_group(i, title=str(ev.get("title") or ev["action_id"]), source="action", files=files or [h.get("path") for h in hunks if h.get("path")], checkpoints=cps, hunks=hunks, run_dir=run_dir, action_id=str(ev["action_id"])))
+            if action_hunks:
+                wanted = {(x.get("path"), x.get("old_start"), x.get("old_lines"), x.get("new_start"), x.get("new_lines")) for x in action_hunks}
+                hunks = [h for h in hunks if (h.get("path"), h.get("old_start"), h.get("old_lines"), h.get("new_start"), h.get("new_lines")) in wanted]
+            groups.append(_make_group(i, title=str(ev.get("title") or ev.get("name") or ev["action_id"]), source="action", files=files or [h.get("path") for h in hunks if h.get("path")], checkpoints=cps, hunks=hunks, run_dir=run_dir, action_id=str(ev["action_id"]), intent=ev.get("intent")))
     else:
         idx = 1
         for cid, data in cpdata.items():

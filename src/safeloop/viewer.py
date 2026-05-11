@@ -193,6 +193,7 @@ class ApiTraceEvidenceBinding(BaseModel):
     schema_version: str
     digest: str
     required_stages: list[str]
+    stage_digests: dict[str, str]
 
 
 class JournalEntryPayload(BaseModel):
@@ -290,20 +291,18 @@ def api_trace_evidence_binding(
     terminal_semantics: TerminalSemantics,
 ) -> ApiTraceEvidenceBinding:
     schema_version = "api-trace-evidence-binding.v1"
-    digest_payload = {
-        "schema_version": schema_version,
-        "run_id": entry.run_id,
-        "action_id": entry.action_id,
-        "state": entry.state.value,
-        "reason": entry.reason.value if isinstance(entry.reason, JournalReason) else entry.reason,
-        "error": entry.error,
-        "scope": scope.value,
-        "boundaries": [boundary.value for boundary in boundaries],
-        "terminal_boundary": terminal_semantics.boundary.value,
+    required_stages = ["request", "runtime", "enforcement", "response"]
+    reason = entry.reason.value if isinstance(entry.reason, JournalReason) else entry.reason
+    stage_digests = {
+        "request": canonical_sha256({"method": "GET", "path_template": "/runs/{run_id}/journal", "run_id": entry.run_id}),
+        "runtime": canonical_sha256({"run_id": entry.run_id, "action_id": entry.action_id, "state": entry.state.value, "reason": reason, "error": entry.error}),
+        "enforcement": canonical_sha256({"scope": scope.value, "boundaries": [boundary.value for boundary in boundaries], "terminal_boundary": terminal_semantics.boundary.value}),
+        "response": canonical_sha256({"schema_version": schema_version, "run_id": entry.run_id, "action_id": entry.action_id, "state": entry.state.value}),
     }
     return ApiTraceEvidenceBinding(
         schema_version=schema_version,
-        digest=canonical_sha256(digest_payload),
-        required_stages=["request", "runtime", "enforcement", "response"],
+        digest=canonical_sha256({"schema_version": schema_version, "stage_digests": stage_digests}),
+        required_stages=required_stages,
+        stage_digests=stage_digests,
     )
 

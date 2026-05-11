@@ -421,28 +421,24 @@ def test_http_api_binds_journal_entries_to_digest_bound_trace_evidence(tmp_path)
     assert response.status_code == 200
     entries = response.json()
     first = entries[0]
+    expected_stage_digests = {
+        "request": canonical_sha256({"method": "GET", "path_template": "/runs/{run_id}/journal", "run_id": "run-trace-binding"}),
+        "runtime": canonical_sha256({"run_id": "run-trace-binding", "action_id": "trace-binding", "state": "proposed", "reason": None, "error": None}),
+        "enforcement": canonical_sha256({"scope": "inside_mvp_scope", "boundaries": [], "terminal_boundary": "proposed"}),
+        "response": canonical_sha256({"schema_version": "api-trace-evidence-binding.v1", "run_id": "run-trace-binding", "action_id": "trace-binding", "state": "proposed"}),
+    }
     assert first["api_trace_evidence_binding"] == {
         "schema_version": "api-trace-evidence-binding.v1",
-        "digest": canonical_sha256(
-            {
-                "schema_version": "api-trace-evidence-binding.v1",
-                "run_id": "run-trace-binding",
-                "action_id": "trace-binding",
-                "state": "proposed",
-                "reason": None,
-                "error": None,
-                "scope": "inside_mvp_scope",
-                "boundaries": [],
-                "terminal_boundary": "proposed",
-            }
-        ),
+        "digest": canonical_sha256({"schema_version": "api-trace-evidence-binding.v1", "stage_digests": expected_stage_digests}),
         "required_stages": ["request", "runtime", "enforcement", "response"],
+        "stage_digests": expected_stage_digests,
     }
     for entry in entries:
         binding = entry["api_trace_evidence_binding"]
         assert binding["schema_version"] == "api-trace-evidence-binding.v1"
         assert binding["digest"].startswith("sha256:")
         assert binding["required_stages"] == ["request", "runtime", "enforcement", "response"]
+        assert set(binding["stage_digests"]) == set(binding["required_stages"])
 
 
 def test_failed_approval_completion_error_is_side_effects_possible_boundary() -> None:

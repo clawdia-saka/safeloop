@@ -26,6 +26,7 @@ from safeloop.agent_watchdog import (
 )
 from safeloop.control_plane.anchor_audit import audit_control_plane_anchors
 from safeloop.local_anchor import create_local_anchor, verify_local_anchor
+from safeloop.policy_check import PolicyCheckError, run_policy_check
 from safeloop.rollback_groups import build_rollback_groups, print_rollback_groups
 from safeloop.side_effect_ledger import read_side_effect_events
 
@@ -498,6 +499,10 @@ def main(argv: list[str] | None = None) -> int:
     ex = sub.add_parser("explain")
     ex.add_argument("run_dir")
     ex.add_argument("--json", action="store_true")
+    pc = sub.add_parser("policy-check")
+    pc.add_argument("run_dir")
+    pc.add_argument("--policy", required=True)
+    pc.add_argument("--json", action="store_true")
     rb = sub.add_parser("rollback")
     rb_sub = rb.add_subparsers(dest="rollback_cmd", required=True)
     rb_plan = rb_sub.add_parser("plan")
@@ -601,6 +606,20 @@ def main(argv: list[str] | None = None) -> int:
         else:
             print_rollback_groups(artifact)
         return 0
+    if args.cmd == "policy-check":
+        try:
+            result = run_policy_check(Path(args.run_dir), Path(args.policy))
+        except PolicyCheckError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+        if args.json:
+            print(json.dumps(result, indent=2, sort_keys=True))
+        else:
+            print("SafeLoop do-not-do policy check")
+            print(f"status: {result['status']}")
+            print(f"violations: {result['violation_count']}")
+            print(f"policy-check-result.json: {Path(args.run_dir) / 'policy-check-result.json'}")
+        return 1 if result["violations"] else 0
     if args.cmd == "rollback":
         run_dir = Path(args.run_dir)
         apply_mode = args.rollback_cmd == "apply"

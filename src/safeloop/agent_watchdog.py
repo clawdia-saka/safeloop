@@ -99,6 +99,20 @@ def snapshot_bytes(repo: Path) -> dict[str, bytes]:
     return {str(r): (repo / r).read_bytes() for r in rel_files(repo)}
 
 
+def _source_evidence(repo: Path, files: list[str]) -> list[dict[str, Any]]:
+    evidence: list[dict[str, Any]] = []
+    for name in sorted(files):
+        path = _safe_repo_path(repo, name)
+        if path.exists() and not path.is_symlink():
+            st = path.stat()
+            evidence.append({
+                "path": name,
+                "digest": sha_file(path),
+                "mtime_ns": st.st_mtime_ns,
+            })
+    return evidence
+
+
 def state_digest(snap: dict[str, str]) -> str:
     return sha_bytes(json.dumps(snap, sort_keys=True, separators=(",", ":")).encode())
 
@@ -216,6 +230,7 @@ def create_checkpoint(
     manifest = {
         "schema_version": "manifest.v1",
         "files": after,
+        "source_evidence": _source_evidence(repo, created + modified),
         "required_artifacts": sorted(REQUIRED_CHECKPOINT_ARTIFACTS),
     }
     restore = {
@@ -398,7 +413,50 @@ def timeline_events(run_dir: Path) -> list[dict[str, Any]]:
     return [json.loads(l) for l in p.read_text(encoding="utf-8").splitlines() if l.strip()]
 
 
-def verify_run(run_dir: Path) -> dict[str, Any]:
+def _verify_source_evidence(repo: Path, source_evidence: Any, issues: list[str]) -> None:
+    if not isinstance(source_evidence, list):
+        issues.append("source-evidence malformed")
+        return
+    seen: set[str] = set()
+    for item in source_evidence:
+        if not isinstance(item, dict):
+            issues.append("source-evidence malformed")
+            continue
+        rel = item.get("path")
+        if not isinstance(rel, str):
+            issues.append("source-evidence malformed")
+            continue
+        if rel in seen:
+            issues.append(f"duplicate-source-evidence-path {rel}")
+            continue
+        seen.add(rel)
+        try:
+            path = _safe_repo_path(repo, rel)
+        except ValueError:
+            issues.append(f"unsafe-source-evidence-path {rel}")
+            continue
+        if path.is_symlink():
+            issues.append(f"source-evidence-symlink {rel}")
+            continue
+        if not path.exists():
+            continue
+        expected_digest = item.get("digest")
+        if not is_sha256_digest(expected_digest):
+            issues.append(f"source-evidence-malformed-digest {rel}")
+            continue
+        recorded_mtime = item.get("mtime_ns")
+        if not isinstance(recorded_mtime, int):
+            issues.append(f"source-evidence-malformed-mtime {rel}")
+            continue
+        try:
+            current_mtime = path.stat().st_mtime_ns
+        except OSError:
+            continue
+        if current_mtime <= recorded_mtime and sha_file(path) != expected_digest:
+            issues.append(f"source-evidence-rewritten-after-packet {rel}")
+
+
+def verify_run(run_dir: Path, *, check_source_evidence: bool = True) -> dict[str, Any]:
     issues: list[str] = []
     warnings: list[str] = []
     prev = None
@@ -441,6 +499,7 @@ def verify_run(run_dir: Path) -> dict[str, Any]:
                     if sha_file(path) != dig:
                         issues.append(f"digest mismatch {path.relative_to(run_dir)}")
         r = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
+        repo = Path(r.get("repo", ""))
         for required in ["command.stdout.txt", "command.stderr.txt", "process-result.json", "side-effects.jsonl"]:
             if not (run_dir / required).exists():
                 issues.append(f"capture missing {required}")
@@ -455,6 +514,8 @@ def verify_run(run_dir: Path) -> dict[str, Any]:
                 issues.append(f"invalid parent chain {cp.name}")
             parent = cp.name
             manifest = json.loads((cp / "manifest.json").read_text(encoding="utf-8"))
+            if check_source_evidence:
+                _verify_source_evidence(repo, manifest.get("source_evidence"), issues)
             manifest_required = manifest.get("required_artifacts")
             if not isinstance(manifest_required, list) or any(not isinstance(item, str) for item in manifest_required):
                 issues.append(f"manifest required_artifacts malformed {cp.name}")
@@ -589,7 +650,7 @@ def undo(run_dir: Path, run_id: str, checkpoint_id: str, apply: bool = False) ->
     cp = safe_child_dir(checkpoints_root, checkpoint_id)
     restore = json.loads((cp / "restore-manifest.json").read_text(encoding="utf-8"))
     repo = Path(run["repo"])
-    baseline = verify_run(run_dir)
+    baseline = verify_run(run_dir, check_source_evidence=False)
     if baseline["status"] != "valid":
         raise ValueError("cannot run undo preflight: artifact verification is not valid")
     created = restore.get("created_files", [])

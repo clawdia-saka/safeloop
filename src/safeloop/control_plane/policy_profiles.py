@@ -111,6 +111,11 @@ def enforce_policy(
             raise PolicyDenied(f"unknown policy: {policy}") from exc
         raise PolicyDenied(f"unknown action: {action}") from exc
 
+    if principal.role not in _ROLE_RANK:
+        raise PolicyDenied(f"invalid principal role: {principal.role}")
+    if principal.role not in ROLE_PERMISSIONS:
+        raise PolicyDenied(f"invalid principal role: {principal.role}")
+
     if action_policy.require_role is not None and _ROLE_RANK[principal.role] < _ROLE_RANK[action_policy.require_role]:
         raise PolicyDenied(f"principal role {principal.role} is below required role {action_policy.require_role}")
     if action_policy.permission is not None and action_policy.permission not in ROLE_PERMISSIONS[principal.role]:
@@ -178,6 +183,8 @@ def _parse_action_policy(action_name: str, data: Any) -> ActionPolicy:
     max_age = data.get("max_age_seconds")
     if max_age is not None and (not isinstance(max_age, int) or isinstance(max_age, bool) or max_age <= 0):
         raise PolicyConfigError(f"action {action_name} max_age_seconds must be a positive integer")
+    if max_age is not None and status is None:
+        raise PolicyConfigError(f"action {action_name} max_age_seconds requires approval_status")
     require_anchor = data.get("require_anchor_verified", False)
     if not isinstance(require_anchor, bool):
         raise PolicyConfigError(f"action {action_name} require_anchor_verified must be boolean")

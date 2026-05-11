@@ -208,3 +208,24 @@ def test_undo_blocks_deleted_file_recreated_after_checkpoint(tmp_path: Path) -> 
     apply = run_cli("undo", str(run_dir), run_id, "cp-0001", "--apply")
     assert apply.returncode == 1
     assert (repo / "gone.txt").read_text() == "operator replacement\n"
+
+
+def test_undo_refuses_symlink_restore_target_without_touching_link_target(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "notes.txt").write_text("before\n")
+    (repo / "agent.py").write_text("open('notes.txt','w').write('after\\n')\n")
+    result = run_cli("watch-run", "--task-id", "symlink-race", "--repo", str(repo), "--run-root", str(tmp_path / "runs"), "--", sys.executable, "agent.py")
+    assert result.returncode == 0
+    run_dir = Path([line.split(":", 1)[1].strip() for line in result.stdout.splitlines() if line.startswith("Run dir:")][0])
+    symlink_target = tmp_path / "outside-target.txt"
+    symlink_target.write_text("do not overwrite\n", encoding="utf-8")
+    (repo / "notes.txt").unlink()
+    (repo / "notes.txt").symlink_to(symlink_target)
+
+    run_id = read_json(run_dir / "run.json")["run_id"]
+    apply = run_cli("undo", str(run_dir), run_id, "cp-0001", "--apply")
+
+    assert apply.returncode == 1
+    assert "symlink_restore_target" in apply.stdout
+    assert symlink_target.read_text(encoding="utf-8") == "do not overwrite\n"

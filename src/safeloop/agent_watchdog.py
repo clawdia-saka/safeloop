@@ -14,6 +14,7 @@ from threading import Thread
 from typing import Any, TextIO
 
 from safeloop.local_anchor import create_local_anchor, verify_local_anchor
+from safeloop.storage import exclusive_lock
 
 
 REQUIRED_CHECKPOINT_ARTIFACTS = {
@@ -252,27 +253,25 @@ def allocate_checkpoint_seq(run_root: Path, repo: Path, task_id: str, run_id: st
     invocations for the same repo + task avoid cp-id reuse across separate run
     directories while remaining local and inspectable.
     """
-    import fcntl
-
     ledger = _monotonic_ledger_path(run_root, repo, task_id)
     lock_path = ledger.with_suffix(ledger.suffix + ".lock")
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     with lock_path.open("a+", encoding="utf-8") as lock_handle:
-        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
-        current = 0
-        if ledger.exists():
-            payload = json.loads(ledger.read_text(encoding="utf-8"))
-            current = int(payload.get("last_checkpoint_seq", 0))
-        next_seq = current + 1
-        atomic_json(ledger, {
-            "schema_version": "monotonic-checkpoint-ledger.v1",
-            "repo": str(repo.resolve()),
-            "task_id": task_id,
-            "last_checkpoint_seq": next_seq,
-            "last_run_id": run_id,
-            "updated_at": now(),
-        })
-        return next_seq
+        with exclusive_lock(lock_handle):
+            current = 0
+            if ledger.exists():
+                payload = json.loads(ledger.read_text(encoding="utf-8"))
+                current = int(payload.get("last_checkpoint_seq", 0))
+            next_seq = current + 1
+            atomic_json(ledger, {
+                "schema_version": "monotonic-checkpoint-ledger.v1",
+                "repo": str(repo.resolve()),
+                "task_id": task_id,
+                "last_checkpoint_seq": next_seq,
+                "last_run_id": run_id,
+                "updated_at": now(),
+            })
+            return next_seq
 
 
 def _drain_pipe(pipe: TextIO | None, output_path: Path) -> None:
@@ -485,10 +484,20 @@ def verify_run(run_dir: Path) -> dict[str, Any]:
 
 
 def _safe_repo_path(repo: Path, rel: str) -> Path:
-    path = (repo / rel).resolve()
-    if repo.resolve() not in path.parents and path != repo.resolve():
+    if Path(rel).is_absolute() or ".." in Path(rel).parts:
         raise ValueError(f"unsafe restore path: {rel}")
-    return path
+    return repo.resolve() / rel
+
+
+def _symlink_blocker(repo: Path, rel: str) -> dict[str, str] | None:
+    path = _safe_repo_path(repo, rel)
+    try:
+        path.lstat()
+    except FileNotFoundError:
+        return None
+    if path.is_symlink():
+        return {"file": rel, "code": "symlink_restore_target", "expected": "non-symlink", "actual": "symlink"}
+    return None
 
 
 def undo(run_dir: Path, run_id: str, checkpoint_id: str, apply: bool = False) -> dict[str, Any]:
@@ -507,12 +516,20 @@ def undo(run_dir: Path, run_id: str, checkpoint_id: str, apply: bool = False) ->
     modified = restore.get("modified_files", [])
     deleted = restore.get("deleted_files", [])
     blockers: list[dict[str, str]] = []
+    for f in created + modified + deleted:
+        blocker = _symlink_blocker(repo, f)
+        if blocker is not None:
+            blockers.append(blocker)
     for f, expected_hash in restore.get("after_hashes", {}).items():
+        if any(blocker["file"] == f for blocker in blockers):
+            continue
         p = _safe_repo_path(repo, f)
         actual = sha_file(p) if p.exists() else None
         if actual != expected_hash:
             blockers.append({"file": f, "code": "current_hash_mismatch", "expected": expected_hash, "actual": str(actual)})
     for f in deleted:
+        if any(blocker["file"] == f for blocker in blockers):
+            continue
         p = _safe_repo_path(repo, f)
         if p.exists():
             actual = sha_file(p) if p.is_file() else "non_file_exists"

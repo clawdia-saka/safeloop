@@ -3,8 +3,22 @@
 from __future__ import annotations
 
 import json
-import fcntl
+from contextlib import contextmanager
 from pathlib import Path
+from typing import Iterator, TextIO
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - exercised via import monkeypatch
+    fcntl = None
+
+
+@contextmanager
+def exclusive_lock(handle: TextIO) -> Iterator[None]:
+    """Best-effort exclusive file lock with a no-op fallback on platforms without fcntl."""
+    if fcntl is not None:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+    yield
 
 from pydantic import ValidationError
 
@@ -23,10 +37,10 @@ class LocalJournalStorage:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         lock_path = self.path.with_suffix(self.path.suffix + ".lock")
         with lock_path.open("a+", encoding="utf-8") as lock_handle:
-            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
-            with self.path.open("a", encoding="utf-8") as handle:
-                handle.write(entry.model_dump_json())
-                handle.write("\n")
+            with exclusive_lock(lock_handle):
+                with self.path.open("a", encoding="utf-8") as handle:
+                    handle.write(entry.model_dump_json())
+                    handle.write("\n")
 
     def read(self, run_id: str) -> list[JournalEntry]:
         return [entry for entry in self._load_entries() if entry.run_id == run_id]

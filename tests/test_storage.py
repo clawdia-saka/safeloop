@@ -1,4 +1,7 @@
 from pathlib import Path
+import builtins
+import importlib
+import sys
 
 import pytest
 
@@ -113,3 +116,19 @@ def test_list_run_ids_raises_clear_error_for_invalid_entry_shape(tmp_path: Path)
 
     with pytest.raises(JournalStorageError, match=r"Malformed journal entry .* line 2"):
         storage.list_run_ids()
+
+
+def test_storage_module_imports_when_fcntl_is_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
+    real_import = builtins.__import__
+
+    def no_fcntl_import(name: str, *args, **kwargs):
+        if name == "fcntl":
+            raise ImportError("fcntl is not available on this platform")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", no_fcntl_import)
+    sys.modules.pop("safeloop.storage", None)
+
+    module = importlib.import_module("safeloop.storage")
+
+    assert module.LocalJournalStorage is not None

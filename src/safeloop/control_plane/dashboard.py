@@ -84,7 +84,17 @@ def _safe_call(obj: Any, method_name: str) -> list[Any]:
     method = getattr(obj, method_name)
     try:
         return list(method())
-    except Exception:
+    except Exception as exc:
+        if method_name == "list_approvals":
+            return [
+                {
+                    "approval_id": "registry-error",
+                    "status": "unknown",
+                    "action": "registry-error",
+                    "subject": "control-plane registry",
+                    "warnings": [f"registry-error: {method_name} failed: {exc}; render-only controls disabled"],
+                }
+            ]
         return []
 
 
@@ -118,7 +128,9 @@ def _normalize_approval(record: Any) -> dict[str, Any]:
     status = _status_key(data.get("status")) or "missing"
     if status in _WARNING_STATUSES:
         warnings.append(f"{approval_id}: status is {status}; treat as not actionable")
-    if not data.get("signature") and not data.get("signed_payload"):
+    if "warnings" in data:
+        warnings.extend(_as_list(data["warnings"]))
+    if not data.get("signature") or not data.get("signed_payload"):
         warnings.append(f"{approval_id}: missing signature; treat as unverified")
     data["warnings"] = warnings
     return data
@@ -227,7 +239,7 @@ def _render_evidence_links(approval: Mapping[str, Any]) -> str:
 
 def _safe_href(url: Any) -> bool:
     parsed = urlparse(str(url).strip())
-    return parsed.scheme in {"", "http", "https", "file"}
+    return parsed.scheme in {"", "http", "https", "file"} and not (parsed.scheme == "" and parsed.netloc)
 
 
 def _render_value_list(label: str, value: Any) -> str:

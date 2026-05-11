@@ -148,6 +148,33 @@ def test_e2e_guarded_auto_undo_and_external_dispatch_policies(tmp_path) -> None:
         enforce_policy(profiles, policy="external_dispatch", action="dispatch_webhook", principal=Principal("ops", "operator"), approval=dispatch, requested_by="admin", subject="webhooks/w1", now=T0 + timedelta(seconds=2), signing_key=KEY)
 
 
+def test_invalid_principal_role_fails_closed_with_policy_denied() -> None:
+    profiles = PolicyProfileSet.from_dict(
+        {
+            "version": "0.1.4",
+            "profiles": {"p": {"actions": {"a": {"require_role": "viewer", "permission": "view"}}}},
+        }
+    )
+
+    with pytest.raises(PolicyDenied, match="invalid principal role"):
+        enforce_policy(
+            profiles,
+            policy="p",
+            action="a",
+            principal=Principal(user_id="mallory", role="superuser"),  # type: ignore[arg-type]
+        )
+
+
+def test_policy_config_rejects_max_age_without_approval_status() -> None:
+    with pytest.raises(PolicyConfigError, match="max_age_seconds requires approval_status"):
+        PolicyProfileSet.from_dict(
+            {
+                "version": "0.1.4",
+                "profiles": {"p": {"actions": {"a": {"max_age_seconds": 60}}}},
+            }
+        )
+
+
 def test_approval_policy_requires_signing_key_and_rejects_forged_approved_record() -> None:
     profiles = PolicyProfileSet.from_dict(
         {

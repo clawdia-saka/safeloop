@@ -7,6 +7,8 @@ from pathlib import Path
 import sqlite3
 from typing import Literal
 
+from safeloop.control_plane.auth import AuthenticationError, LocalTokenStore
+
 RegistryRole = Literal["admin", "operator", "viewer"]
 ApprovalStatus = Literal[
     "pending",
@@ -110,6 +112,16 @@ class ControlPlaneRegistry:
                 "SELECT user_id, role, display_name FROM users ORDER BY user_id ASC"
             ).fetchall()
         return [RegistryUser(user_id=row[0], role=row[1], display_name=row[2]) for row in rows]
+
+    def issue_token(self, user_id: str, role: RegistryRole) -> str:
+        """Issue a local token only for an existing registry user."""
+        with self._connect() as conn:
+            row = conn.execute("SELECT role FROM users WHERE user_id = ?", (user_id,)).fetchone()
+        if row is None:
+            raise AuthenticationError(f"unknown user: {user_id}")
+        if row[0] != role:
+            raise AuthenticationError(f"role mismatch for user: {user_id}")
+        return LocalTokenStore(self.path).issue_token(user_id, role)
 
     def upsert_operator_token(self, token: OperatorTokenRecord) -> None:
         """Persist hashed token metadata compatible with LocalTokenStore."""

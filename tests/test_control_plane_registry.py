@@ -5,6 +5,7 @@ import sqlite3
 
 import pytest
 
+from safeloop.control_plane.auth import AuthenticationError
 from safeloop.control_plane.registry import (
     ApprovalEvent,
     ApprovalRecord,
@@ -231,3 +232,11 @@ def test_registry_operator_token_table_matches_local_token_store_shape(tmp_path:
     registry.upsert_operator_token(record)
 
     assert registry.list_operator_tokens() == [record]
+
+
+def test_registry_issue_token_rejects_unknown_user(tmp_path: Path) -> None:
+    registry = ControlPlaneRegistry(tmp_path / "control-plane.sqlite3")
+    registry.initialize()
+
+    with pytest.raises(AuthenticationError, match="unknown user"):
+        registry.issue_token("missing", "operator")

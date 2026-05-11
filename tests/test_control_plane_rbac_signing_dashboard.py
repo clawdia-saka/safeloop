@@ -276,3 +276,43 @@ def test_static_dashboard_v2_blocks_dangerous_evidence_link_schemes() -> None:
     assert "blocked unsafe approval link" in html
     assert "blocked unsafe run link" in html
     assert '<a href="https://example.invalid/artifact.json">artifact</a>' in html
+
+
+def test_static_dashboard_v2_blocks_protocol_relative_evidence_links_and_allows_local_relative() -> None:
+    html = render_static_dashboard_v2(
+        approvals=[
+            {
+                "approval_id": "appr-link",
+                "status": "approved",
+                "action": "resume_run",
+                "subject": "runs/run-123",
+                "signature": "sha256=ok",
+                "signed_payload": "{}",
+                "approval_url": "//evil.example/steal",
+                "run_url": "/local/runs/run-123",
+                "artifact_url": "artifacts/run-123.json",
+            }
+        ]
+    )
+
+    assert 'href="//evil.example/steal"' not in html
+    assert "blocked unsafe approval link: //evil.example/steal" in html
+    assert '<a href="/local/runs/run-123">run</a>' in html
+    assert '<a href="artifacts/run-123.json">artifact</a>' in html
+
+
+@pytest.mark.parametrize("missing_field", ["signature", "signed_payload"])
+def test_static_dashboard_v2_warns_when_either_signature_part_is_missing(missing_field: str) -> None:
+    approval = {
+        "approval_id": "appr-sig",
+        "status": "approved",
+        "action": "resume_run",
+        "subject": "runs/run-123",
+        "signature": "sha256=ok",
+        "signed_payload": "{}",
+    }
+    approval[missing_field] = ""
+
+    html = render_static_dashboard_v2(approvals=[approval])
+
+    assert "appr-sig: missing signature; treat as unverified" in html

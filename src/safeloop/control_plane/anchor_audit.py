@@ -135,6 +135,8 @@ def audit_control_plane_anchors(
     last_seq = 0
     for record in observed:
         key = (str(record.get("kind")), str(record.get("id")))
+        if key in observed_by_key:
+            issues.append(f"duplicate anchor {key[0]}:{key[1]}")
         observed_by_key[key] = record
         seq = record.get("seq")
         if not isinstance(seq, int) or seq <= last_seq:

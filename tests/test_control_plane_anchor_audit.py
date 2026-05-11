@@ -136,3 +136,18 @@ def test_control_plane_anchor_audit_rejects_missing_record_hash(tmp_path):
 
     assert result["status"] == "invalid"
     assert "missing record hash approval:appr-1" in result["issues"]
+
+
+def test_control_plane_anchor_audit_detects_duplicate_anchor_keys(tmp_path):
+    db_path = _registry(tmp_path)
+    records = expected_anchor_records(db_path)
+    duplicate = dict(records[0])
+    duplicate["seq"] = records[-1]["seq"] + 1
+    duplicate["record_hash"] = canonical_sha256({k: v for k, v in duplicate.items() if k != "record_hash"})
+    anchors = tmp_path / "anchors.jsonl"
+    write_anchor_jsonl(anchors, [*records, duplicate])
+
+    result = audit_control_plane_anchors(db_path, anchors, output_dir=tmp_path / "audit")
+
+    assert result["status"] == "invalid"
+    assert "duplicate anchor approval:appr-1" in result["issues"]

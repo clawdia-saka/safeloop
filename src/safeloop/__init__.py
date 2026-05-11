@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from safeloop.action_span import action_span
 from safeloop.dedupe import DedupeObservation, ScenarioDedupeGuard, semantic_fingerprint
 from safeloop.delta_audit import build_delta_audit_packet, verify_delta_audit_packet
 from safeloop.hooks import (
@@ -27,6 +28,7 @@ def __getattr__(name: str):
 
 __all__ = [
     "ActionEnvelope",
+    "action_span",
     "ApprovalDecision",
     "DedupeObservation",
     "ApprovalHookRegistry",

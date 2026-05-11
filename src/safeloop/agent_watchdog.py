@@ -14,6 +14,7 @@ from pathlib import Path
 from threading import Thread
 from typing import Any, TextIO
 
+from safeloop.action_span import verify_action_events
 from safeloop.local_anchor import create_local_anchor, verify_local_anchor
 from safeloop.storage import exclusive_lock
 from safeloop.watchdog_files import discover_repo_files
@@ -559,6 +560,9 @@ def watch_run(
     checkpoint_count = 0
     parent: str | None = None
 
+    child_env = os.environ.copy()
+    child_env["SAFELOOP_RUN_DIR"] = str(run_dir)
+    child_env["SAFELOOP_RUN_ID"] = run_id
     proc = subprocess.Popen(
         command,
         cwd=repo,
@@ -566,6 +570,7 @@ def watch_run(
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         start_new_session=True,
+        env=child_env,
     )
     stdout_thread = Thread(target=_drain_pipe, args=(proc.stdout, run_dir / "command.stdout.txt"), daemon=True)
     stderr_thread = Thread(target=_drain_pipe, args=(proc.stderr, run_dir / "command.stderr.txt"), daemon=True)
@@ -734,6 +739,12 @@ def verify_run(run_dir: Path, *, check_source_evidence: bool = True) -> dict[str
         for required in ["command.stdout.txt", "command.stderr.txt", "process-result.json", "side-effects.jsonl"]:
             if not (run_dir / required).exists():
                 issues.append(f"capture missing {required}")
+        action_events_path = run_dir / "action-events.jsonl"
+        if action_events_path.exists():
+            action_result = verify_action_events(action_events_path)
+            checked.append("action-events.jsonl")
+            if action_result["status"] != "valid":
+                issues.extend(action_result.get("issues", []))
         if r.get("capture_status") != "complete" and r.get("status") in {"completed", "failed"}:
             issues.append(f"invalid_partial finalization capture_status={r.get('capture_status')}")
         if r.get("final_event_hash") != prev:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -283,3 +284,58 @@ def test_undo_apply_blocks_intermediate_symlink_ancestor_swap_after_preflight(tm
     assert res["status"] == "blocked"
     assert res["blocked_reason"] == "symlink_restore_ancestor"
     assert (outside / "d" / "file.txt").read_text(encoding="utf-8") == "do not overwrite\n"
+
+
+def test_verify_artifacts_fails_closed_when_source_evidence_is_symlink(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "tracked.txt").write_text("before\n", encoding="utf-8")
+    (repo / "agent.py").write_text("from pathlib import Path\nPath('tracked.txt').write_text('after\\n')\n")
+    result = run_cli("watch-run", "--task-id", "source-symlink", "--repo", str(repo), "--run-root", str(tmp_path / "runs"), "--", sys.executable, "agent.py")
+    assert result.returncode == 0
+    run_dir = Path([line.split(":", 1)[1].strip() for line in result.stdout.splitlines() if line.startswith("Run dir:")][0])
+    (repo / "tracked.txt").unlink()
+    (repo / "tracked.txt").symlink_to(tmp_path / "outside.txt")
+
+    payload = verify_run(run_dir)
+
+    assert payload["status"] == "invalid"
+    assert "source-evidence-symlink tracked.txt" in payload["issues"]
+
+
+def test_verify_artifacts_detects_preserved_mtime_source_evidence_rewrite(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    source = repo / "tracked.txt"
+    source.write_text("before\n", encoding="utf-8")
+    (repo / "agent.py").write_text("from pathlib import Path\nPath('tracked.txt').write_text('after\\n')\n")
+    result = run_cli("watch-run", "--task-id", "source-rewrite", "--repo", str(repo), "--run-root", str(tmp_path / "runs"), "--", sys.executable, "agent.py")
+    assert result.returncode == 0
+    run_dir = Path([line.split(":", 1)[1].strip() for line in result.stdout.splitlines() if line.startswith("Run dir:")][0])
+    original_stat = source.stat()
+    source.write_text("rewritten with preserved mtime\n", encoding="utf-8")
+    os.utime(source, ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns))
+
+    payload = verify_run(run_dir)
+
+    assert payload["status"] == "invalid"
+    assert "source-evidence-rewritten-after-packet tracked.txt" in payload["issues"]
+
+
+def test_verify_artifacts_fails_closed_on_duplicate_source_evidence_path(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "tracked.txt").write_text("before\n", encoding="utf-8")
+    (repo / "agent.py").write_text("from pathlib import Path\nPath('tracked.txt').write_text('after\\n')\n")
+    result = run_cli("watch-run", "--task-id", "source-dupe", "--repo", str(repo), "--run-root", str(tmp_path / "runs"), "--", sys.executable, "agent.py")
+    assert result.returncode == 0
+    run_dir = Path([line.split(":", 1)[1].strip() for line in result.stdout.splitlines() if line.startswith("Run dir:")][0])
+    manifest_path = run_dir / "checkpoints" / "cp-0001" / "manifest.json"
+    manifest = read_json(manifest_path)
+    manifest["source_evidence"].append(dict(manifest["source_evidence"][0]))
+    manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+    payload = verify_run(run_dir)
+
+    assert payload["status"] == "invalid"
+    assert "duplicate-source-evidence-path tracked.txt" in payload["issues"]

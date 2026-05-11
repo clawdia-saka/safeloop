@@ -74,3 +74,18 @@ def test_local_anchor_detects_artifact_and_journal_tampering(tmp_path):
     journal_result = verify_local_anchor(run_dir)
     assert journal_result["status"] == "invalid"
     assert "journal hash mismatch" in journal_result["issues"]
+
+
+def test_verify_local_anchor_reports_missing_run_and_timeline_without_crashing(tmp_path):
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    (run_dir / "local-anchor.json").write_text(
+        json.dumps({"schema_version": "local-anchor.v1", "anchor_hash": "sha256:" + "0" * 64}) + "\n",
+        encoding="utf-8",
+    )
+
+    result = verify_local_anchor(run_dir)
+
+    assert result["status"] == "invalid"
+    assert "missing run.json" in result["issues"]
+    assert "missing timeline.jsonl" in result["issues"]

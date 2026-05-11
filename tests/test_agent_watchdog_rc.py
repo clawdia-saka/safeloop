@@ -5,7 +5,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from safeloop.agent_watchdog import verify_run
+from safeloop.agent_watchdog import allocate_checkpoint_seq, snapshot, verify_run
 
 
 def run_cli(*args: str, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
@@ -161,6 +161,33 @@ def test_security_guards_reject_path_traversal_and_unsafe_undo(tmp_path: Path) -
     assert mismatch.returncode != 0
     traversal = run_cli("undo", str(run_dir), run_id, "../cp-0001", "--dry-run")
     assert traversal.returncode != 0
+
+
+def test_snapshot_skips_repo_symlink_to_external_file(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    external = tmp_path / "outside-secret.txt"
+    external.write_text("do not capture\n", encoding="utf-8")
+    (repo / "safe.txt").write_text("ok\n", encoding="utf-8")
+    (repo / "leak.txt").symlink_to(external)
+
+    snap = snapshot(repo)
+
+    assert "safe.txt" in snap
+    assert "leak.txt" not in snap
+
+
+def test_checkpoint_sequence_allocation_is_cross_process_safe(tmp_path: Path) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    run_root = tmp_path / "runs"
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        seqs = list(pool.map(lambda i: allocate_checkpoint_seq(run_root, repo, "task", f"run-{i}"), range(16)))
+
+    assert sorted(seqs) == list(range(1, 17))
 
 
 def test_undo_blocks_deleted_file_recreated_after_checkpoint(tmp_path: Path) -> None:

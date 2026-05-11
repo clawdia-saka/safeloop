@@ -7,6 +7,7 @@ import os
 import re
 import subprocess
 import time
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import Thread
@@ -33,7 +34,11 @@ def sha_bytes(data: bytes) -> str:
 
 
 def sha_file(path: Path) -> str:
-    return sha_bytes(path.read_bytes())
+    h = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            h.update(chunk)
+    return "sha256:" + h.hexdigest()
 
 
 def is_sha256_digest(value: Any) -> bool:
@@ -42,14 +47,14 @@ def is_sha256_digest(value: Any) -> bool:
 
 def atomic_json(path: Path, obj: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + ".tmp")
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
     tmp.write_text(json.dumps(obj, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     tmp.replace(path)
 
 
 def atomic_text(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + ".tmp")
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
     tmp.write_text(text, encoding="utf-8")
     tmp.replace(path)
 
@@ -73,7 +78,7 @@ def rel_files(repo: Path) -> list[Path]:
     repo = repo.resolve()
     out: list[Path] = []
     for p in repo.rglob("*"):
-        if not p.is_file():
+        if not p.is_file() or p.is_symlink():
             continue
         rel = p.relative_to(repo)
         parts = set(rel.parts)
@@ -247,21 +252,27 @@ def allocate_checkpoint_seq(run_root: Path, repo: Path, task_id: str, run_id: st
     invocations for the same repo + task avoid cp-id reuse across separate run
     directories while remaining local and inspectable.
     """
+    import fcntl
+
     ledger = _monotonic_ledger_path(run_root, repo, task_id)
-    current = 0
-    if ledger.exists():
-        payload = json.loads(ledger.read_text(encoding="utf-8"))
-        current = int(payload.get("last_checkpoint_seq", 0))
-    next_seq = current + 1
-    atomic_json(ledger, {
-        "schema_version": "monotonic-checkpoint-ledger.v1",
-        "repo": str(repo.resolve()),
-        "task_id": task_id,
-        "last_checkpoint_seq": next_seq,
-        "last_run_id": run_id,
-        "updated_at": now(),
-    })
-    return next_seq
+    lock_path = ledger.with_suffix(ledger.suffix + ".lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a+", encoding="utf-8") as lock_handle:
+        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+        current = 0
+        if ledger.exists():
+            payload = json.loads(ledger.read_text(encoding="utf-8"))
+            current = int(payload.get("last_checkpoint_seq", 0))
+        next_seq = current + 1
+        atomic_json(ledger, {
+            "schema_version": "monotonic-checkpoint-ledger.v1",
+            "repo": str(repo.resolve()),
+            "task_id": task_id,
+            "last_checkpoint_seq": next_seq,
+            "last_run_id": run_id,
+            "updated_at": now(),
+        })
+        return next_seq
 
 
 def _drain_pipe(pipe: TextIO | None, output_path: Path) -> None:

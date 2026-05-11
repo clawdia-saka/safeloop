@@ -43,12 +43,12 @@ class SideEffectAdapterIdentity:
     version: str
     supports_idempotency: bool = False
 
-    def to_record(self) -> dict[str, str]:
+    def to_record(self) -> dict[str, str | bool]:
         if not self.name:
             raise ValueError("adapter.name is required")
         if not self.version:
             raise ValueError("adapter.version is required")
-        return {"name": self.name, "version": self.version}
+        return {"name": self.name, "version": self.version, "supports_idempotency": self.supports_idempotency}
 
 
 @dataclass(frozen=True)
@@ -89,10 +89,16 @@ def _redact_value(value: Any) -> Any:
     return value
 
 
+def _sensitive_key(key: str) -> bool:
+    normalized = re.sub(r"[^a-z0-9]", "", key.lower())
+    sensitive = {re.sub(r"[^a-z0-9]", "", item) for item in _SENSITIVE_KEYS}
+    return normalized in sensitive or normalized.endswith(("token", "key", "secret", "password"))
+
+
 def _redact_target(target: dict[str, Any]) -> dict[str, Any]:
     redacted: dict[str, Any] = {}
     for key, value in target.items():
-        if key.lower() in _SENSITIVE_KEYS:
+        if _sensitive_key(key):
             continue
         redacted[key] = _redact_value(value)
     return redacted

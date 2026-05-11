@@ -23,6 +23,11 @@ def test_state_machine_spec_documents_terminal_semantics_payload() -> None:
         "`note`",
         "`TerminalBoundary`",
         "storage-only viewers cannot resume",
+        "`handed_off` marks an operator boundary",
+        "not a resumable checkpoint",
+        "not evidence that an external operator action occurred",
+        "Unlike an approval block",
+        "does not auto-run compensation for `handed_off`",
     ]
 
     for marker in required_markers:

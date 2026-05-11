@@ -162,7 +162,10 @@ def derive_terminal_semantics(
         note = "Checkpoint exists only for the live runtime; storage-only viewers cannot resume from it."
     elif state is JournalState.HANDED_OFF:
         boundary = TerminalBoundary.OPERATOR_HANDOFF
-        note = "Execution did not run; operator owns the next step."
+        note = (
+            "Execution did not run; this terminal operator boundary is not "
+            "recoverable or resumable by the automatic runtime."
+        )
     elif state is JournalState.FAILED:
         if normalized_reason in {JournalReason.APPROVAL_BLOCK, JournalReason.APPROVAL_ERROR}:
             boundary = TerminalBoundary.APPROVAL_BOUNDARY

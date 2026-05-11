@@ -94,7 +94,7 @@ def test_regression_handoff_stays_pre_execution_operator_boundary(tmp_path) -> N
     ]
 
 
-def test_regression_repeated_resume_keeps_checkpoint_truth_local_only(tmp_path) -> None:
+def test_regression_repeated_resume_reports_persisted_checkpoint_truth(tmp_path) -> None:
     storage_path = tmp_path / "journal.jsonl"
     runtime = Runtime(storage_path)
     action = ActionEnvelope(
@@ -131,7 +131,7 @@ def test_regression_repeated_resume_keeps_checkpoint_truth_local_only(tmp_path) 
         BoundaryAnnotation.SIDE_EFFECTS_POSSIBLE,
     ]
     assert runtime_view.has_checkpoint is True
-    assert storage_view.has_checkpoint is False
+    assert storage_view.has_checkpoint is True
 
     second = runtime.run(
         run_id=action.idempotency_key,

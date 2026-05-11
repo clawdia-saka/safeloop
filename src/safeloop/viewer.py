@@ -230,10 +230,9 @@ class RunViewer:
         if isinstance(runtime, Runtime):
             self.runtime = runtime
         else:
-            # Storage-only construction can inspect persisted journal history,
-            # but it cannot recover in-memory checkpoint payloads from another
-            # runtime instance. In that mode `has_checkpoint` will therefore be
-            # false even if the latest persisted state is `resumable`.
+            # Storage-only construction inspects persisted journal history.
+            # Resumable entries now carry checkpoint payloads, so a storage-backed
+            # viewer can report that a checkpoint is available for resume.
             self.runtime = Runtime(runtime)
 
     def list_runs(self) -> list[RunSummary]:

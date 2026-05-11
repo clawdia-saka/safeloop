@@ -52,7 +52,12 @@ class Runtime:
         return self.storage.read(run_id)
 
     def checkpoint_for(self, run_id: str) -> object | None:
-        return self._checkpoints.get(run_id)
+        if run_id in self._checkpoints:
+            return self._checkpoints[run_id]
+        current = self._current(run_id)
+        if current is not None and current.state == JournalState.RESUMABLE:
+            return current.checkpoint
+        return None
 
     def list_runs(self) -> list[RunRecord]:
         records: list[RunRecord] = []
@@ -87,6 +92,7 @@ class Runtime:
         approval_key: bytes | None = None,
         approval_now: datetime | None = None,
     ) -> JournalEntry:
+        checkpoint: object | None = None
         current = self._current(run_id)
         if current is not None and current.action_id != action.idempotency_key:
             raise ValueError(
@@ -136,7 +142,7 @@ class Runtime:
             self._append(run_id, action, JournalState.EXECUTING)
         elif current.state == JournalState.RESUMABLE:
             control_plane_approval = None
-            checkpoint = self._checkpoints.get(run_id)
+            checkpoint = self.checkpoint_for(run_id)
             if checkpoint is None:
                 # The persisted journal says the run paused earlier, but this
                 # runtime instance no longer has the live checkpoint payload
@@ -160,16 +166,15 @@ class Runtime:
                     reason=JournalReason.RESUME_APPROVAL_BLOCK,
                     error=str(exc),
                 )
+            self._checkpoints[run_id] = checkpoint
             self._append(run_id, action, JournalState.EXECUTING)
         else:
             return current
-
-        checkpoint = self._checkpoints.get(run_id)
         try:
             executor(checkpoint)
         except ResumableExecution as exc:
             self._checkpoints[run_id] = exc.checkpoint
-            return self._append(run_id, action, JournalState.RESUMABLE)
+            return self._append(run_id, action, JournalState.RESUMABLE, checkpoint=exc.checkpoint)
         except Exception as exc:
             if compensation_hooks is not None and action.effect is EffectClass.COMPENSATABLE_WRITE:
                 self._append(
@@ -322,6 +327,7 @@ class Runtime:
         *,
         reason: JournalReason | None = None,
         error: str | None = None,
+        checkpoint: object | None = None,
     ) -> JournalEntry:
         history = self.history(run_id)
         if history:
@@ -332,6 +338,7 @@ class Runtime:
             state=state,
             reason=reason,
             error=error,
+            checkpoint=checkpoint,
         )
         self.storage.append(entry)
         return entry

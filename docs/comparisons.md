@@ -64,7 +64,7 @@ SafeLoop is strongest at execution-state truth after something starts happening:
 - journaling
 - terminal state clarity
 - compensation tracking
-- resume checkpoints (live runtime only; not durable cross-process checkpoint persistence)
+- resume checkpoints persisted in the local journal for same-action resume across runtime instances
 
 It does not make model output safe by itself.
 

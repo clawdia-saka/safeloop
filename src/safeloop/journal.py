@@ -1,4 +1,5 @@
 from enum import Enum
+from typing import Any
 
 from pydantic import BaseModel
 
@@ -54,6 +55,7 @@ class JournalEntry(BaseModel):
     state: JournalState
     reason: JournalReason | str | None = None
     error: str | None = None
+    checkpoint: Any | None = None
 
 
 def validate_transition(current_state: JournalState, next_state: JournalState) -> None:

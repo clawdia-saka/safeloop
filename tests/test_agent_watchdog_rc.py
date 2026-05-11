@@ -587,3 +587,75 @@ def test_rollback_to_start_requires_matching_plan(tmp_path: Path) -> None:
     apply = run_cli("rollback", "apply", str(run_dir), run_id, "--to-start")
     assert apply.returncode == 0, apply.stderr
     assert (repo / "notes.txt").read_text() == "before\n"
+
+
+def test_changed_only_restore_blobs_large_modified_blocks_rollback(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(aw, "MAX_RESTORE_BLOB_BYTES", 4)
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "big.txt").write_text("before-big\n")
+    (repo / "agent.py").write_text("open('big.txt','w').write('after\\n')\n")
+
+    code, run_dir = aw.watch_run("large-mod", repo, [sys.executable, "agent.py"], tmp_path / "runs")
+
+    assert code == 0
+    restore = read_json(run_dir / "checkpoints" / "cp-0001" / "restore-manifest.json")
+    assert restore["before_blobs"]["big.txt"] is None
+    assert restore["restore_entries"]["big.txt"]["undo_supported"] is False
+    assert restore["restore_entries"]["big.txt"]["unsupported_reason"] == "restore_blob_too_large"
+    assert verify_run(run_dir)["status"] == "valid"
+    run_id = read_json(run_dir / "run.json")["run_id"]
+    plan = aw.undo(run_dir, run_id, "cp-0001", apply=False)
+    assert plan["status"] == "blocked"
+    assert plan["blocked_reason"] == "restore_blob_too_large"
+    apply = aw.undo(run_dir, run_id, "cp-0001", apply=True)
+    assert apply["status"] == "blocked"
+    assert (repo / "big.txt").read_text() == "after\n"
+
+
+def test_changed_only_restore_blobs_large_deleted_blocks_rollback(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(aw, "MAX_RESTORE_BLOB_BYTES", 4)
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "big.txt").write_text("before-big\n")
+    (repo / "agent.py").write_text("from pathlib import Path\nPath('big.txt').unlink()\n")
+
+    code, run_dir = aw.watch_run("large-del", repo, [sys.executable, "agent.py"], tmp_path / "runs")
+
+    assert code == 0
+    restore = read_json(run_dir / "checkpoints" / "cp-0001" / "restore-manifest.json")
+    assert restore["before_blobs"]["big.txt"] is None
+    assert restore["restore_entries"]["big.txt"]["unsupported_reason"] == "restore_blob_too_large"
+    run_id = read_json(run_dir / "run.json")["run_id"]
+    res = aw.undo(run_dir, run_id, "cp-0001", apply=False)
+    assert res["status"] == "blocked"
+    assert res["blocked_reason"] == "restore_blob_too_large"
+    assert not (repo / "big.txt").exists()
+
+
+def test_changed_only_restore_blobs_small_deleted_restores(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "gone.txt").write_text("before\n")
+    (repo / "agent.py").write_text("from pathlib import Path\nPath('gone.txt').unlink()\n")
+    code, run_dir = aw.watch_run("small-del", repo, [sys.executable, "agent.py"], tmp_path / "runs")
+    assert code == 0
+    run_id = read_json(run_dir / "run.json")["run_id"]
+    res = aw.undo(run_dir, run_id, "cp-0001", apply=True)
+    assert res["status"] == "applied"
+    assert (repo / "gone.txt").read_text() == "before\n"
+
+
+def test_snapshot_uses_discover_repo_files_gitignore_and_untracked(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init"], cwd=repo, check=True, stdout=subprocess.PIPE)
+    (repo / ".gitignore").write_text("ignored.txt\n")
+    (repo / "tracked.txt").write_text("tracked\n")
+    subprocess.run(["git", "add", ".gitignore", "tracked.txt"], cwd=repo, check=True)
+    (repo / "untracked.txt").write_text("untracked\n")
+    (repo / "ignored.txt").write_text("ignored\n")
+    snap = snapshot(repo)
+    assert "tracked.txt" in snap
+    assert "untracked.txt" in snap
+    assert "ignored.txt" not in snap

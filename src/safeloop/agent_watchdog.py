@@ -15,6 +15,7 @@ from typing import Any, TextIO
 
 from safeloop.local_anchor import create_local_anchor, verify_local_anchor
 from safeloop.storage import exclusive_lock
+from safeloop.watchdog_files import discover_repo_files
 
 
 REQUIRED_CHECKPOINT_ARTIFACTS = {
@@ -26,6 +27,8 @@ REQUIRED_CHECKPOINT_ARTIFACTS = {
 }
 REQUIRED_BASELINE_ARTIFACTS = {"baseline.json", "manifest.json", "summary.md"}
 BASELINE_MAX_BLOB_BYTES = 10 * 1024 * 1024
+MAX_RESTORE_BLOB_BYTES = 10 * 1024 * 1024
+RESTORE_BLOB_TOO_LARGE = "restore_blob_too_large"
 
 
 def now() -> str:
@@ -78,27 +81,11 @@ def _is_gitignored(repo: Path, rel: Path) -> bool:
 
 
 def rel_files(repo: Path) -> list[Path]:
-    repo = repo.resolve()
-    out: list[Path] = []
-    for p in repo.rglob("*"):
-        if not p.is_file() or p.is_symlink():
-            continue
-        rel = p.relative_to(repo)
-        parts = set(rel.parts)
-        if ".git" in parts or ".safeloop" in parts or "__pycache__" in parts or "node_modules" in parts:
-            continue
-        if _is_gitignored(repo, rel):
-            continue
-        out.append(rel)
-    return sorted(out)
+    return discover_repo_files(repo)
 
 
 def snapshot(repo: Path) -> dict[str, str]:
     return {str(r): sha_file(repo / r) for r in rel_files(repo)}
-
-
-def snapshot_bytes(repo: Path) -> dict[str, bytes]:
-    return {str(r): (repo / r).read_bytes() for r in rel_files(repo)}
 
 
 def _source_evidence(repo: Path, files: list[str]) -> list[dict[str, Any]]:
@@ -185,12 +172,66 @@ def _blob_path(cp: Path, digest: str) -> Path:
     return cp / "blobs" / digest.replace("sha256:", "sha256-")
 
 
-def _capture_before_blobs(cp: Path, before_bytes: dict[str, bytes], files: list[str]) -> dict[str, str | None]:
+def _find_prior_blob(run_dir: Path, before_hash: str) -> Path | None:
+    blob_name = before_hash.replace("sha256:", "sha256-")
+    for root in [run_dir / "baseline", *(sorted((run_dir / "checkpoints").glob("cp-*")) if (run_dir / "checkpoints").exists() else [])]:
+        candidate = root / "blobs" / blob_name
+        if candidate.exists() and candidate.is_file():
+            return candidate
+    return None
+
+
+def _baseline_unsupported_restore_entry(run_dir: Path, name: str) -> dict[str, Any] | None:
+    manifest_path = run_dir / "baseline" / "manifest.json"
+    if not manifest_path.exists():
+        return None
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    for item in manifest.get("unsupported_files", []):
+        if isinstance(item, dict) and item.get("file") == name and item.get("code") == "large_file_unsupported":
+            return {
+                "undo_supported": False,
+                "unsupported_reason": RESTORE_BLOB_TOO_LARGE,
+                "size_bytes": item.get("size_bytes"),
+                "limit_bytes": MAX_RESTORE_BLOB_BYTES,
+            }
+    return None
+
+
+def _capture_before_blobs(cp: Path, repo: Path, before: dict[str, str], files: list[str], run_dir: Path) -> tuple[dict[str, str | None], dict[str, dict[str, Any]]]:
     blobs: dict[str, str | None] = {}
+    entries: dict[str, dict[str, Any]] = {}
     for name in files:
-        data = before_bytes.get(name)
-        if data is None:
+        prior = _find_prior_blob(run_dir, before.get(name, ""))
+        if prior is not None:
+            size = prior.stat().st_size
+            if size > MAX_RESTORE_BLOB_BYTES:
+                blobs[name] = None
+                entries[name] = {"undo_supported": False, "unsupported_reason": RESTORE_BLOB_TOO_LARGE, "size_bytes": size, "limit_bytes": MAX_RESTORE_BLOB_BYTES}
+                continue
+            data = prior.read_bytes()
+        else:
+            path = _safe_repo_path(repo, name)
+            if not path.exists() or path.is_symlink() or not path.is_file():
+                blobs[name] = None
+                entries[name] = {"undo_supported": False, "unsupported_reason": "restore_blob_missing"}
+                continue
+            size = path.stat().st_size
+            if size > MAX_RESTORE_BLOB_BYTES:
+                blobs[name] = None
+                entries[name] = {"undo_supported": False, "unsupported_reason": RESTORE_BLOB_TOO_LARGE, "size_bytes": size, "limit_bytes": MAX_RESTORE_BLOB_BYTES}
+                continue
+            data = path.read_bytes()
+            if sha_bytes(data) != before.get(name):
+                blobs[name] = None
+                entries[name] = {"undo_supported": False, "unsupported_reason": "restore_blob_missing"}
+                continue
+        size = len(data)
+        if size > MAX_RESTORE_BLOB_BYTES:
             blobs[name] = None
+            entries[name] = {"undo_supported": False, "unsupported_reason": RESTORE_BLOB_TOO_LARGE, "size_bytes": size, "limit_bytes": MAX_RESTORE_BLOB_BYTES}
             continue
         digest = sha_bytes(data)
         dst = _blob_path(cp, digest)
@@ -198,22 +239,26 @@ def _capture_before_blobs(cp: Path, before_bytes: dict[str, bytes], files: list[
         if not dst.exists():
             dst.write_bytes(data)
         blobs[name] = str(dst.relative_to(cp))
-    return blobs
+        entries[name] = {"undo_supported": True, "blob": blobs[name], "size_bytes": size}
+    return blobs, entries
 
 
-def create_run_start_baseline(run_dir: Path, repo: Path, run_id: str, task_id: str, snap: dict[str, str], snap_bytes: dict[str, bytes]) -> None:
+def create_run_start_baseline(run_dir: Path, repo: Path, run_id: str, task_id: str, snap: dict[str, str]) -> None:
     base = run_dir / "baseline"
     base.mkdir(parents=True, exist_ok=True)
     blobs: dict[str, str | None] = {}
     unsupported: list[dict[str, Any]] = []
     for name in sorted(snap):
-        data = snap_bytes.get(name)
-        if data is None:
+        path = _safe_repo_path(repo, name)
+        if not path.exists() or path.is_symlink() or not path.is_file():
             blobs[name] = None
-        elif len(data) > BASELINE_MAX_BLOB_BYTES:
+            continue
+        size = path.stat().st_size
+        if size > BASELINE_MAX_BLOB_BYTES:
             blobs[name] = None
-            unsupported.append({"file": name, "code": "large_file_unsupported", "size_bytes": len(data), "limit_bytes": BASELINE_MAX_BLOB_BYTES})
+            unsupported.append({"file": name, "code": "large_file_unsupported", "size_bytes": size, "limit_bytes": BASELINE_MAX_BLOB_BYTES})
         else:
+            data = path.read_bytes()
             digest = sha_bytes(data)
             dst = _blob_path(base, digest)
             dst.parent.mkdir(parents=True, exist_ok=True)
@@ -236,14 +281,13 @@ def create_checkpoint(
     parent: str | None,
     before: dict[str, str],
     after: dict[str, str],
-    before_bytes: dict[str, bytes],
 ) -> None:
     cp = run_dir / "checkpoints" / cid
     cp.mkdir(parents=True, exist_ok=True)
     created = [f for f in after if f not in before]
     modified = [f for f in after if f in before and before[f] != after[f]]
     deleted = [f for f in before if f not in after]
-    before_blobs = _capture_before_blobs(cp, before_bytes, modified + deleted)
+    before_blobs, restore_entries = _capture_before_blobs(cp, repo, before, modified + deleted, run_dir)
     checkpoint = {
         "schema_version": "checkpoint.v1",
         "checkpoint_id": cid,
@@ -269,6 +313,7 @@ def create_checkpoint(
         "modified_files": modified,
         "deleted_files": deleted,
         "before_blobs": before_blobs,
+        "restore_entries": restore_entries,
         "after_hashes": {f: after[f] for f in created + modified if f in after},
         "before_hashes": {f: before[f] for f in modified + deleted if f in before},
     }
@@ -366,9 +411,8 @@ def watch_run(
     atomic_json(run_dir / "run.json", run)
 
     last_snap = snapshot(repo)
-    last_bytes = snapshot_bytes(repo)
     last_digest = state_digest(last_snap)
-    create_run_start_baseline(run_dir, repo, run_id, task_id, last_snap, last_bytes)
+    create_run_start_baseline(run_dir, repo, run_id, task_id, last_snap)
     base = run_dir / "baseline"
     prev = append_event(timeline, 1, "run_started", {"run_id": run_id, "task_id": task_id, "artifact_digests": {"baseline/baseline.json": sha_file(base / "baseline.json"), "baseline/manifest.json": sha_file(base / "manifest.json"), "baseline/summary.md": sha_file(base / "summary.md")}}, None)
     seq = 2
@@ -393,7 +437,7 @@ def watch_run(
     pending_since: float | None = None
 
     def maybe_checkpoint(force: bool = False) -> None:
-        nonlocal last_snap, last_bytes, last_digest, checkpoint_count, parent, prev, seq, pending_snap, pending_since
+        nonlocal last_snap, last_digest, checkpoint_count, parent, prev, seq, pending_snap, pending_since
         current = snapshot(repo)
         digest = state_digest(current)
         if digest == last_digest:
@@ -409,14 +453,13 @@ def watch_run(
         checkpoint_count += 1
         checkpoint_seq = allocate_checkpoint_seq(run_root_path, repo, task_id, run_id)
         cid = f"cp-{checkpoint_seq:04d}"
-        create_checkpoint(run_dir, repo, cid, checkpoint_seq, "monotonic-repo-task", parent, last_snap, current, last_bytes)
+        create_checkpoint(run_dir, repo, cid, checkpoint_seq, "monotonic-repo-task", parent, last_snap, current)
         cp = run_dir / "checkpoints" / cid
         digests = {name: sha_file(cp / name) for name in ["checkpoint.json", "manifest.json", "diff.patch", "restore-manifest.json", "summary.md"]}
         prev = append_event(timeline, seq, "checkpoint_created", {"checkpoint_id": cid, "parent_checkpoint_id": parent, "artifact_digests": digests}, prev)
         seq += 1
         parent = cid
         last_snap = current
-        last_bytes = snapshot_bytes(repo)
         last_digest = digest
         pending_snap = None; pending_since = None
 
@@ -586,6 +629,23 @@ def verify_run(run_dir: Path, *, check_source_evidence: bool = True) -> dict[str
             for rel_blob in restore.get("before_blobs", {}).values():
                 if rel_blob is not None and not safe_child_file(cp, rel_blob).exists():
                     issues.append(f"restore blob missing {cp.name}/{rel_blob}")
+            entries = restore.get("restore_entries", {})
+            if entries is not None and not isinstance(entries, dict):
+                issues.append(f"restore entries malformed {cp.name}")
+            elif isinstance(entries, dict):
+                for rel in sorted(set(restore.get("modified_files", [])) | set(restore.get("deleted_files", []))):
+                    entry = entries.get(rel)
+                    blob = restore.get("before_blobs", {}).get(rel)
+                    if not isinstance(entry, dict):
+                        issues.append(f"restore entry missing {cp.name}/{rel}")
+                        continue
+                    supported = entry.get("undo_supported")
+                    if supported is True and blob is None:
+                        issues.append(f"restore entry supported without blob {cp.name}/{rel}")
+                    if supported is False and not isinstance(entry.get("unsupported_reason"), str):
+                        issues.append(f"restore entry unsupported without reason {cp.name}/{rel}")
+                    if supported not in {True, False}:
+                        issues.append(f"restore entry support malformed {cp.name}/{rel}")
         if (run_dir / "side-effects.jsonl").exists() and not (run_dir / "side-effects.jsonl").read_text(encoding="utf-8").strip():
             pass
         anchor_result = verify_local_anchor(run_dir)
@@ -714,10 +774,16 @@ def undo(run_dir: Path, run_id: str, checkpoint_id: str, apply: bool = False) ->
     modified = restore.get("modified_files", [])
     deleted = restore.get("deleted_files", [])
     blockers: list[dict[str, str]] = []
+    restore_entries = restore.get("restore_entries", {}) if isinstance(restore.get("restore_entries", {}), dict) else {}
     for f in created + modified + deleted:
         blocker = _symlink_blocker(repo, f)
         if blocker is not None:
             blockers.append(blocker)
+    for f in modified + deleted:
+        entry = restore_entries.get(f, {}) if isinstance(restore_entries.get(f, {}), dict) else {}
+        blob = restore.get("before_blobs", {}).get(f)
+        if blob is None or entry.get("undo_supported") is False:
+            blockers.append({"file": f, "code": str(entry.get("unsupported_reason") or "missing_restore_blob"), "expected": "supported restore blob", "actual": "unsupported"})
     for f, expected_hash in restore.get("after_hashes", {}).items():
         if any(blocker["file"] == f for blocker in blockers):
             continue
@@ -752,7 +818,7 @@ def undo(run_dir: Path, run_id: str, checkpoint_id: str, apply: bool = False) ->
             blob = restore.get("before_blobs", {}).get(f)
             p = _safe_repo_path(repo, f)
             if blob is None:
-                blocker = _safe_unlink_for_undo(repo, p, f)
+                blocker = {"file": f, "code": "missing_restore_blob", "expected": "restore blob", "actual": "missing"}
             else:
                 blocker = _safe_write_for_undo(repo, p, f, safe_child_file(cp, blob).read_bytes())
             if blocker is not None:

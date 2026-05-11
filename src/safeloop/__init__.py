@@ -14,10 +14,14 @@ from safeloop.types import ActionEnvelope, EffectClass
 
 
 def __getattr__(name: str):
-    if name in {"RunViewer", "create_app"}:
-        from safeloop.api import RunViewer, create_app
+    if name == "RunViewer":
+        from safeloop.viewer import RunViewer
 
-        return {"RunViewer": RunViewer, "create_app": create_app}[name]
+        return RunViewer
+    if name == "create_app":
+        from safeloop.api import create_app
+
+        return create_app
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 

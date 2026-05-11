@@ -16,18 +16,39 @@ EVIDENCE_BUNDLE_SCHEMA_VERSION = "delta-audit-evidence-bundle.v1"
 REQUIRED_API_TRACE_STAGES = ("request", "runtime", "enforcement", "response")
 
 KNOWN_EVIDENCE = (
-    ("api_trace", "api-trace.json"),
-    ("side_effects", "side-effects-ledger.json"),
-    ("pr_lifecycle", "pr-lifecycle.json"),
+    ("api_trace", "api-trace.json", "json"),
+    ("side_effects", "side-effects.jsonl", "jsonl"),
+    ("side_effects_ledger", "side-effects-ledger.json", "json"),
+    ("pr_lifecycle", "pr-lifecycle.json", "json"),
 )
+SENSITIVE_KEYS = {
+    "authorization",
+    "cookie",
+    "set-cookie",
+    "token",
+    "access_token",
+    "refresh_token",
+    "api_key",
+    "apikey",
+    "secret",
+    "password",
+    "private_key",
+}
+SENSITIVE_SUFFIXES = ("_token", "_secret", "_key", "password")
 
 
-def build_delta_audit_packet(run_dir: str | Path, *, output_dir: str | Path) -> dict[str, Any]:
+def build_delta_audit_packet(
+    run_dir: str | Path,
+    *,
+    output_dir: str | Path,
+    include_payload: bool = False,
+) -> dict[str, Any]:
     """Build a local packet from evidence files already present in ``run_dir``.
 
     ``api-trace.json`` is required for this product/API trace slice. Other known
-    evidence files are bound when present. A present evidence file becomes
-    action-required when it cannot be parsed as JSON or lacks required structure.
+    evidence files are bound when present. By default the generated bundle stores
+    only digest/size/path/schema summaries; full evidence payloads require the
+    explicit local-debugging ``include_payload=True`` opt-in.
     """
 
     run_path = Path(run_dir)
@@ -38,7 +59,7 @@ def build_delta_audit_packet(run_dir: str | Path, *, output_dir: str | Path) -> 
     bound: list[dict[str, Any]] = []
     artifacts: dict[str, Any] = {}
 
-    for kind, filename in KNOWN_EVIDENCE:
+    for kind, filename, encoding in KNOWN_EVIDENCE:
         evidence_path = run_path / filename
         if not evidence_path.exists():
             if kind == "api_trace":
@@ -46,13 +67,20 @@ def build_delta_audit_packet(run_dir: str | Path, *, output_dir: str | Path) -> 
             continue
         try:
             raw = evidence_path.read_bytes()
-            payload = json.loads(raw.decode("utf-8"))
+            if encoding == "jsonl":
+                payload, parse_issues = _parse_jsonl(raw, filename)
+                issues.extend(parse_issues)
+            else:
+                payload = json.loads(raw.decode("utf-8"))
         except (OSError, UnicodeDecodeError, json.JSONDecodeError):
             issues.append(f"malformed evidence {filename}")
             continue
 
         if kind == "api_trace":
             issues.extend(_validate_api_trace(payload))
+        if kind == "side_effects":
+            issues.extend(_validate_side_effect_jsonl(payload, filename))
+        issues.extend(_scan_sensitive_keys(payload, prefix=filename))
 
         descriptor = {
             "kind": kind,
@@ -61,11 +89,15 @@ def build_delta_audit_packet(run_dir: str | Path, *, output_dir: str | Path) -> 
             "bytes": len(raw),
         }
         bound.append(descriptor)
-        artifacts[kind] = {
+        artifact = {
             "path": filename,
             "sha256": descriptor["sha256"],
-            "payload": payload,
+            "bytes": descriptor["bytes"],
+            "summary": _summarize_payload(payload, encoding=encoding),
         }
+        if include_payload:
+            artifact["payload"] = payload
+        artifacts[kind] = artifact
 
     action_required = bool(issues)
     manifest = {
@@ -82,6 +114,7 @@ def build_delta_audit_packet(run_dir: str | Path, *, output_dir: str | Path) -> 
         "run_dir": str(run_path),
         "bound_evidence": bound,
         "artifacts": artifacts,
+        "payload_included": include_payload,
         "action_required": action_required,
         "issues": issues,
     }
@@ -132,6 +165,72 @@ def verify_delta_audit_packet(packet_dir: str | Path) -> dict[str, Any]:
     return {"status": "invalid" if issues else "valid", "issues": issues}
 
 
+def _parse_jsonl(raw: bytes, filename: str) -> tuple[list[Any], list[str]]:
+    issues: list[str] = []
+    rows: list[Any] = []
+    for lineno, line in enumerate(raw.decode("utf-8").splitlines(), start=1):
+        if not line.strip():
+            continue
+        try:
+            rows.append(json.loads(line))
+        except json.JSONDecodeError:
+            issues.append(f"malformed jsonl evidence {filename} line {lineno}")
+    return rows, issues
+
+
+def _summarize_payload(payload: Any, *, encoding: str) -> dict[str, Any]:
+    if encoding == "jsonl":
+        summary: dict[str, Any] = {"encoding": "jsonl", "line_count": len(payload) if isinstance(payload, list) else 0}
+        if isinstance(payload, list):
+            phases = sorted({row.get("phase") for row in payload if isinstance(row, dict) and isinstance(row.get("phase"), str)})
+            if phases:
+                summary["phases"] = phases
+        return summary
+    if isinstance(payload, dict):
+        summary = {"encoding": "json", "top_level_keys": sorted(payload.keys())}
+        events = payload.get("events")
+        if isinstance(events, list):
+            summary["event_count"] = len(events)
+        return summary
+    if isinstance(payload, list):
+        return {"encoding": "json", "item_count": len(payload)}
+    return {"encoding": "json", "type": type(payload).__name__}
+
+
+def _validate_side_effect_jsonl(payload: Any, filename: str) -> list[str]:
+    if not isinstance(payload, list):
+        return [f"{filename} malformed schema"]
+    issues: list[str] = []
+    previous_hash: str | None = None
+    saw_hash_chain = False
+    for index, event in enumerate(payload, start=1):
+        if not isinstance(event, dict):
+            issues.append(f"{filename} malformed schema line {index}")
+            previous_hash = None
+            continue
+        event_hash = event.get("event_hash")
+        prev_hash = event.get("prev_event_hash")
+        if event_hash is None and prev_hash is None:
+            issues.append(f"{filename} missing hash chain line {index}")
+            previous_hash = None
+            continue
+        saw_hash_chain = True
+        if prev_hash != previous_hash:
+            issues.append(f"{filename} prev hash mismatch line {index}")
+        if not isinstance(event_hash, str) or not _is_hex_sha256(event_hash):
+            issues.append(f"{filename} malformed event hash line {index}")
+            previous_hash = None
+            continue
+        if _event_hash(event) != event_hash:
+            issues.append(f"{filename} hash mismatch line {index}")
+        previous_hash = event_hash
+    if saw_hash_chain and payload:
+        first = payload[0]
+        if isinstance(first, dict) and first.get("prev_event_hash") is not None:
+            issues.append(f"{filename} first event prev hash must be null")
+    return issues
+
+
 def _validate_api_trace(payload: Any) -> list[str]:
     if not isinstance(payload, dict):
         return ["api-trace malformed schema"]
@@ -153,6 +252,28 @@ def _validate_api_trace(payload: Any) -> list[str]:
             continue
         if not _has_digest_binding(event):
             issues.append(f"api-trace missing digest-bound stage {stage}")
+    return issues
+
+
+def _event_hash(event: dict[str, Any]) -> str:
+    payload = dict(event)
+    payload.pop("event_hash", None)
+    return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def _scan_sensitive_keys(value: Any, *, prefix: str) -> list[str]:
+    issues: list[str] = []
+    if isinstance(value, dict):
+        for key, child in value.items():
+            key_text = str(key)
+            lowered = key_text.lower()
+            path = f"{prefix}.{key_text}"
+            if lowered in SENSITIVE_KEYS or any(lowered.endswith(suffix) for suffix in SENSITIVE_SUFFIXES):
+                issues.append(f"{prefix} contains sensitive key {path.removeprefix(prefix + '.')}")
+            issues.extend(_scan_sensitive_keys(child, prefix=path))
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            issues.extend(_scan_sensitive_keys(child, prefix=f"{prefix}[{index}]"))
     return issues
 
 

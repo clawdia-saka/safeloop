@@ -162,3 +162,30 @@ def test_adapter_prepare_does_not_imply_commit(tmp_path: Path) -> None:
     assert event["external_ref"] is None
     assert read_events(tmp_path / "side-effects.jsonl")[0]["phase"] == "prepared"
     assert all(e["phase"] != "committed" for e in read_events(tmp_path / "side-effects.jsonl"))
+
+
+def test_side_effect_ledger_events_are_hash_chained(tmp_path: Path) -> None:
+    ledger = LocalSideEffectLedger(tmp_path / "side-effects.jsonl", run_id="run-005")
+
+    first = ledger.append(SideEffectRecord(phase="intent", effect_class="file", target={"path": "a"}))
+    second = ledger.append(SideEffectRecord(phase="prepared", effect_class="file", target={"path": "b"}))
+
+    assert first["prev_event_hash"] is None
+    assert isinstance(first["event_hash"], str) and len(first["event_hash"]) == 64
+    assert second["prev_event_hash"] == first["event_hash"]
+    assert second["event_hash"] != first["event_hash"]
+    persisted = read_events(tmp_path / "side-effects.jsonl")
+    assert persisted[1]["prev_event_hash"] == persisted[0]["event_hash"]
+
+
+def test_side_effect_ledger_rejects_appending_to_legacy_unhashed_history(tmp_path: Path) -> None:
+    path = tmp_path / "side-effects.jsonl"
+    path.write_text(json.dumps({"schema_version": "side-effect-ledger.v1", "phase": "intent"}) + "\n", encoding="utf-8")
+    ledger = LocalSideEffectLedger(path, run_id="run-005")
+
+    try:
+        ledger.append(SideEffectRecord(phase="prepared", effect_class="file", target={"path": "b"}))
+    except ValueError as exc:
+        assert "cannot append to unhashed legacy side-effect ledger" in str(exc)
+    else:
+        raise AssertionError("expected legacy append rejection")

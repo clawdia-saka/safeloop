@@ -413,10 +413,10 @@ def timeline_events(run_dir: Path) -> list[dict[str, Any]]:
     return [json.loads(l) for l in p.read_text(encoding="utf-8").splitlines() if l.strip()]
 
 
-def _verify_source_evidence(repo: Path, source_evidence: Any, issues: list[str]) -> None:
+def _verify_source_evidence(repo: Path, source_evidence: Any, issues: list[str], *, check_current_digest: bool = False) -> set[str]:
     if not isinstance(source_evidence, list):
         issues.append("source-evidence malformed")
-        return
+        return set()
     seen: set[str] = set()
     for item in source_evidence:
         if not isinstance(item, dict):
@@ -452,8 +452,9 @@ def _verify_source_evidence(repo: Path, source_evidence: Any, issues: list[str])
             current_mtime = path.stat().st_mtime_ns
         except OSError:
             continue
-        if current_mtime <= recorded_mtime and sha_file(path) != expected_digest:
+        if check_current_digest and sha_file(path) != expected_digest:
             issues.append(f"source-evidence-rewritten-after-packet {rel}")
+    return seen
 
 
 def verify_run(run_dir: Path, *, check_source_evidence: bool = True) -> dict[str, Any]:
@@ -508,14 +509,25 @@ def verify_run(run_dir: Path, *, check_source_evidence: bool = True) -> dict[str
         if r.get("final_event_hash") != prev:
             issues.append("run final hash mismatch")
         parent = None
-        for cp in sorted((run_dir / "checkpoints").glob("cp-*")) if (run_dir / "checkpoints").exists() else []:
+        checkpoints = sorted((run_dir / "checkpoints").glob("cp-*")) if (run_dir / "checkpoints").exists() else []
+        check_current_source_digest = check_source_evidence and not any((cp / "undo-result.json").exists() for cp in checkpoints)
+        for cp in checkpoints:
             cj = json.loads((cp / "checkpoint.json").read_text(encoding="utf-8"))
             if cj.get("parent_checkpoint_id") != parent:
                 issues.append(f"invalid parent chain {cp.name}")
             parent = cp.name
             manifest = json.loads((cp / "manifest.json").read_text(encoding="utf-8"))
+            restore = json.loads((cp / "restore-manifest.json").read_text(encoding="utf-8"))
             if check_source_evidence:
-                _verify_source_evidence(repo, manifest.get("source_evidence"), issues)
+                source_paths = _verify_source_evidence(
+                    repo,
+                    manifest.get("source_evidence"),
+                    issues,
+                    check_current_digest=check_current_source_digest and cp == checkpoints[-1],
+                )
+                expected_source_paths = set(restore.get("created_files", [])) | set(restore.get("modified_files", []))
+                for rel in sorted(expected_source_paths - source_paths):
+                    issues.append(f"missing-source-evidence {rel}")
             manifest_required = manifest.get("required_artifacts")
             if not isinstance(manifest_required, list) or any(not isinstance(item, str) for item in manifest_required):
                 issues.append(f"manifest required_artifacts malformed {cp.name}")
@@ -525,7 +537,6 @@ def verify_run(run_dir: Path, *, check_source_evidence: bool = True) -> dict[str
                     issues.append(f"manifest missing required_artifact {cp.name}/{required}")
                 for artifact in sorted(declared - REQUIRED_CHECKPOINT_ARTIFACTS):
                     issues.append(f"manifest unexpected required_artifact {cp.name}/{artifact}")
-            restore = json.loads((cp / "restore-manifest.json").read_text(encoding="utf-8"))
             for rel_blob in restore.get("before_blobs", {}).values():
                 if rel_blob is not None and not safe_child_file(cp, rel_blob).exists():
                     issues.append(f"restore blob missing {cp.name}/{rel_blob}")

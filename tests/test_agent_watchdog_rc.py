@@ -339,3 +339,39 @@ def test_verify_artifacts_fails_closed_on_duplicate_source_evidence_path(tmp_pat
 
     assert payload["status"] == "invalid"
     assert "duplicate-source-evidence-path tracked.txt" in payload["issues"]
+
+
+def test_verify_artifacts_detects_newer_mtime_source_evidence_rewrite(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    source = repo / "tracked.txt"
+    source.write_text("before\n", encoding="utf-8")
+    (repo / "agent.py").write_text("from pathlib import Path\nPath('tracked.txt').write_text('after\\n')\n")
+    result = run_cli("watch-run", "--task-id", "source-newer-rewrite", "--repo", str(repo), "--run-root", str(tmp_path / "runs"), "--", sys.executable, "agent.py")
+    assert result.returncode == 0
+    run_dir = Path([line.split(":", 1)[1].strip() for line in result.stdout.splitlines() if line.startswith("Run dir:")][0])
+    source.write_text("rewritten with newer mtime\n", encoding="utf-8")
+
+    payload = verify_run(run_dir)
+
+    assert payload["status"] == "invalid"
+    assert "source-evidence-rewritten-after-packet tracked.txt" in payload["issues"]
+
+
+def test_verify_artifacts_fails_closed_when_modified_file_lacks_source_evidence(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "tracked.txt").write_text("before\n", encoding="utf-8")
+    (repo / "agent.py").write_text("from pathlib import Path\nPath('tracked.txt').write_text('after\\n')\n")
+    result = run_cli("watch-run", "--task-id", "missing-source-evidence", "--repo", str(repo), "--run-root", str(tmp_path / "runs"), "--", sys.executable, "agent.py")
+    assert result.returncode == 0
+    run_dir = Path([line.split(":", 1)[1].strip() for line in result.stdout.splitlines() if line.startswith("Run dir:")][0])
+    manifest_path = run_dir / "checkpoints" / "cp-0001" / "manifest.json"
+    manifest = read_json(manifest_path)
+    manifest["source_evidence"] = []
+    manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+    payload = verify_run(run_dir)
+
+    assert payload["status"] == "invalid"
+    assert "missing-source-evidence tracked.txt" in payload["issues"]

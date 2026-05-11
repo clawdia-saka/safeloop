@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import re
+import subprocess
 import sys
 import tomllib
 from pathlib import Path
@@ -63,8 +64,21 @@ def check() -> tuple[int, list[str]]:
     cli_text = CLI.read_text(encoding="utf-8")
     demo_verifiers = ["verify-artifacts", "verify-anchor", "audit-control-plane-anchors"]
     missing_verifiers = [name for name in demo_verifiers if name not in cli_text]
+    cli_help_failures: list[str] = []
+    for name in demo_verifiers:
+        proc = subprocess.run(
+            [sys.executable, "-m", "safeloop.cli", name, "--help"],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        if proc.returncode != 0:
+            cli_help_failures.append(name)
     if missing_verifiers:
         failures.append("missing demo verifier CLI(s): " + ", ".join(missing_verifiers))
+    if cli_help_failures:
+        failures.append("demo verifier CLI help failed: " + ", ".join(cli_help_failures))
 
     version = project_version()
     if not re.fullmatch(r"\d+\.\d+\.\d+", version):
@@ -72,6 +86,7 @@ def check() -> tuple[int, list[str]]:
 
     messages.append(f"version={version}")
     messages.append("demo-verifier=present" if not missing_verifiers else "demo-verifier=missing")
+    messages.append("demo-verifier-help=ok" if not cli_help_failures else "demo-verifier-help=failed")
     messages.append("release-tag=not-created")
     messages.append("build-gate=pyproject-present")
 

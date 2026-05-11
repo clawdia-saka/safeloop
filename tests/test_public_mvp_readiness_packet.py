@@ -61,4 +61,5 @@ def test_public_readiness_script_check_verifies_packet_and_build_metadata() -> N
     assert "public-readiness: ok" in output
     assert "version=0.1.4" in output
     assert "demo-verifier=present" in output
+    assert "demo-verifier-help=ok" in output
     assert "release-tag=not-created" in output

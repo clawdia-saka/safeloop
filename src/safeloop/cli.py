@@ -5,9 +5,9 @@ import json
 import sys
 from pathlib import Path
 
-from safeloop.agent_watchdog import atomic_json, rollback_to_start, timeline_summary, undo, verify_run, watch_run
+from safeloop.agent_watchdog import atomic_json, append_event, rollback_to_start, sha_file, timeline_events, timeline_summary, undo, verify_run, watch_run
 from safeloop.control_plane.anchor_audit import audit_control_plane_anchors
-from safeloop.local_anchor import verify_local_anchor
+from safeloop.local_anchor import create_local_anchor, verify_local_anchor
 from safeloop.side_effect_ledger import read_side_effect_events
 
 
@@ -51,6 +51,61 @@ def _rollback_artifact(run_dir: Path, checkpoint_id: str, res: dict, *, apply: b
 
 def _load_json(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _append_rollback_event(run_dir: Path, event_type: str, payload: dict) -> None:
+    run = _load_json(run_dir / "run.json")
+    events = timeline_events(run_dir)
+    prev = events[-1]["event_hash"] if events else None
+    new_hash = append_event(run_dir / "timeline.jsonl", len(events) + 1, event_type, payload, prev)
+    run["latest_event_hash"] = new_hash
+    run["final_event_hash"] = new_hash
+    atomic_json(run_dir / "run.json", run)
+    create_local_anchor(run_dir)
+
+
+def _plan_target(plan: dict) -> tuple[str, str | None]:
+    return ("start", None) if plan.get("operation") == "rollback_to_start" else ("checkpoint", plan.get("checkpoint_id"))
+
+
+def _target_selection(artifact: dict) -> dict:
+    if artifact.get("operation") == "rollback_to_start":
+        return {"type": "start"}
+    return {"type": "checkpoint", "checkpoint_id": artifact.get("checkpoint_id")}
+
+
+def _require_matching_rollback_plan(run_dir: Path, run_id: str, *, checkpoint_id: str | None, to_start: bool) -> tuple[bool, str | None, dict | None]:
+    plan_path = run_dir / "rollback-plan.json"
+    if not plan_path.exists():
+        return False, "missing rollback-plan.json", None
+    try:
+        plan = _load_json(plan_path)
+    except (OSError, json.JSONDecodeError):
+        return False, "malformed rollback-plan.json", None
+    checks = [
+        (plan.get("schema_version") == "rollback-plan.v1", "schema_version mismatch"),
+        (plan.get("run_id") == run_id, "run_id mismatch"),
+        (plan.get("mode") == "dry-run", "mode mismatch"),
+        (plan.get("preflight", {}).get("status") == "pass", "preflight not pass"),
+    ]
+    target_type, target_checkpoint = _plan_target(plan)
+    if to_start:
+        checks.append((target_type == "start", "target mismatch"))
+    else:
+        checks.append((target_type == "checkpoint" and target_checkpoint == checkpoint_id, "target mismatch"))
+    for ok, reason in checks:
+        if not ok:
+            return False, reason, plan
+    return True, None, plan
+
+
+def _block_rollback_apply(run_dir: Path, run_id: str, *, checkpoint_id: str | None, to_start: bool, reason: str, plan: dict | None) -> dict:
+    target = {"type": "start"} if to_start else {"type": "checkpoint", "checkpoint_id": checkpoint_id}
+    payload = {"operation": "rollback_to_start" if to_start else "rollback_to_checkpoint", "run_id": run_id, "target": target, "reason": reason, "artifact_digests": {}}
+    if plan is not None and (run_dir / "rollback-plan.json").exists():
+        payload["artifact_digests"]["rollback-plan.json"] = sha_file(run_dir / "rollback-plan.json")
+    _append_rollback_event(run_dir, "rollback_blocked", payload)
+    return {"schema_version": "rollback-result.v1", "status": "blocked", "run_id": run_id, "target": target, "preflight": {"status": "blocked"}, "blocked_reason": reason}
 
 
 def _checkpoint_changes(cp: Path) -> dict[str, list[str]]:
@@ -289,11 +344,27 @@ def main(argv: list[str] | None = None) -> int:
         run_dir = Path(args.run_dir)
         apply_mode = args.rollback_cmd == "apply"
         if args.to_start:
+            if apply_mode:
+                ok, reason, plan = _require_matching_rollback_plan(run_dir, args.run_id, checkpoint_id=None, to_start=True)
+                if not ok:
+                    artifact = _block_rollback_apply(run_dir, args.run_id, checkpoint_id=None, to_start=True, reason=reason or "plan mismatch", plan=plan)
+                    atomic_json(run_dir / "rollback-result.json", artifact)
+                    print("Rollback apply blocked")
+                    print(f"blocked reason: {artifact['blocked_reason']}")
+                    print(f"rollback-result.json: {run_dir / 'rollback-result.json'}")
+                    return 1
             artifact = rollback_to_start(run_dir, args.run_id, apply=apply_mode)
             if apply_mode:
+                if artifact["status"] == "applied":
+                    event_type = "rollback_applied"
+                else:
+                    atomic_json(run_dir / "rollback-result.json", artifact)
+                    event_type = "rollback_blocked"
+                _append_rollback_event(run_dir, event_type, {"operation": "rollback_to_start", "rollback_status": artifact["status"], "target": {"type": "start"}, "artifact_digests": {"rollback-plan.json": sha_file(run_dir / "rollback-plan.json"), "rollback-result.json": sha_file(run_dir / "rollback-result.json")}})
                 print("Rollback apply complete" if artifact["status"] == "applied" else "Rollback apply blocked")
                 print(f"rollback-result.json: {run_dir / 'rollback-result.json'}")
             else:
+                _append_rollback_event(run_dir, "rollback_plan_created", {"operation": "rollback_to_start", "target": {"type": "start"}, "artifact_digests": {"rollback-plan.json": sha_file(run_dir / "rollback-plan.json")}})
                 print("Rollback plan: PASS" if artifact["preflight"]["status"] == "pass" else "Rollback plan: BLOCKED")
                 print(f"rollback-plan.json: {run_dir / 'rollback-plan.json'}")
             print("SafeLoop rollback operator summary")
@@ -308,14 +379,26 @@ def main(argv: list[str] | None = None) -> int:
         if not args.checkpoint_id:
             print("rollback requires checkpoint_id or --to-start", file=sys.stderr)
             return 2
+        if apply_mode:
+            ok, reason, plan = _require_matching_rollback_plan(run_dir, args.run_id, checkpoint_id=args.checkpoint_id, to_start=False)
+            if not ok:
+                artifact = _block_rollback_apply(run_dir, args.run_id, checkpoint_id=args.checkpoint_id, to_start=False, reason=reason or "plan mismatch", plan=plan)
+                atomic_json(run_dir / "checkpoints" / args.checkpoint_id / "rollback-result.json", artifact)
+                print("Rollback apply blocked")
+                print(f"blocked reason: {artifact['blocked_reason']}")
+                print(f"rollback-result.json: {run_dir / 'checkpoints' / args.checkpoint_id / 'rollback-result.json'}")
+                return 1
         res = undo(run_dir, args.run_id, args.checkpoint_id, apply=apply_mode)
         artifact = _rollback_artifact(run_dir, args.checkpoint_id, res, apply=apply_mode)
         if apply_mode:
             atomic_json(run_dir / "checkpoints" / args.checkpoint_id / "rollback-result.json", artifact)
+            event_type = "rollback_applied" if artifact["status"] == "applied" else "rollback_blocked"
+            _append_rollback_event(run_dir, event_type, {"operation": "rollback_to_checkpoint", "checkpoint_id": args.checkpoint_id, "rollback_status": artifact["status"], "target": _target_selection(artifact), "artifact_digests": {"rollback-plan.json": sha_file(run_dir / "rollback-plan.json"), "rollback-result.json": sha_file(run_dir / "checkpoints" / args.checkpoint_id / "rollback-result.json")}})
             print("Rollback apply complete" if artifact["status"] == "applied" else "Rollback apply blocked")
             print(f"rollback-result.json: {run_dir / 'checkpoints' / args.checkpoint_id / 'rollback-result.json'}")
         else:
             atomic_json(run_dir / "rollback-plan.json", artifact)
+            _append_rollback_event(run_dir, "rollback_plan_created", {"operation": "rollback_to_checkpoint", "target": _target_selection(artifact), "artifact_digests": {"rollback-plan.json": sha_file(run_dir / "rollback-plan.json")}})
             print("Rollback plan: PASS" if artifact["preflight"]["status"] == "pass" else "Rollback plan: BLOCKED")
             print(f"rollback-plan.json: {run_dir / 'rollback-plan.json'}")
         print("SafeLoop rollback operator summary")

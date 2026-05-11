@@ -473,11 +473,13 @@ def test_rollback_to_start_blocks_symlink_target(tmp_path: Path) -> None:
     result = run_cli("watch-run", "--task-id", "to-start-link", "--repo", str(repo), "--run-root", str(tmp_path / "runs"), "--", sys.executable, "agent.py")
     assert result.returncode == 0
     run_dir = Path([line.split(":", 1)[1].strip() for line in result.stdout.splitlines() if line.startswith("Run dir:")][0])
+    run_id = read_json(run_dir / "run.json")["run_id"]
+    plan = run_cli("rollback", "plan", str(run_dir), run_id, "--to-start")
+    assert plan.returncode == 0, plan.stderr
     outside = tmp_path / "outside.txt"
     outside.write_text("safe\n")
     (repo / "notes.txt").unlink()
     (repo / "notes.txt").symlink_to(outside)
-    run_id = read_json(run_dir / "run.json")["run_id"]
     apply = run_cli("rollback", "apply", str(run_dir), run_id, "--to-start")
     assert apply.returncode == 1
     assert "symlink_restore_target" in apply.stdout
@@ -496,3 +498,92 @@ def test_rollback_to_start_blocks_large_baseline_blob(tmp_path: Path, monkeypatc
     res = aw.rollback_to_start(run_dir, run_id, apply=False)
     assert res["status"] == "blocked"
     assert res["blocked_reason"] == "large_file_unsupported"
+
+
+def _make_rollback_run(tmp_path: Path) -> tuple[Path, Path, str]:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "notes.txt").write_text("before\n")
+    (repo / "agent.py").write_text("from pathlib import Path\nPath('notes.txt').write_text('after\\n')\n")
+    result = run_cli("watch-run", "--task-id", "rollback-guard", "--repo", str(repo), "--run-root", str(tmp_path / "runs"), "--", sys.executable, "agent.py")
+    assert result.returncode == 0, result.stderr
+    run_dir = Path([line.split(":", 1)[1].strip() for line in result.stdout.splitlines() if line.startswith("Run dir:")][0])
+    run_id = read_json(run_dir / "run.json")["run_id"]
+    return repo, run_dir, run_id
+
+
+def _timeline_types(run_dir: Path) -> list[str]:
+    return [json.loads(line)["type"] for line in (run_dir / "timeline.jsonl").read_text().splitlines() if line.strip()]
+
+
+def test_rollback_apply_without_plan_blocks(tmp_path: Path) -> None:
+    _, run_dir, run_id = _make_rollback_run(tmp_path)
+    result = run_cli("rollback", "apply", str(run_dir), run_id, "cp-0001")
+    assert result.returncode == 1
+    assert "missing rollback-plan.json" in result.stdout
+    assert "rollback_blocked" in _timeline_types(run_dir)
+
+
+def test_rollback_apply_with_mismatched_run_id_blocks(tmp_path: Path) -> None:
+    _, run_dir, run_id = _make_rollback_run(tmp_path)
+    assert run_cli("rollback", "plan", str(run_dir), run_id, "cp-0001").returncode == 0
+    plan = read_json(run_dir / "rollback-plan.json")
+    plan["run_id"] = "wrong-run"
+    (run_dir / "rollback-plan.json").write_text(json.dumps(plan, indent=2, sort_keys=True) + "\n")
+    result = run_cli("rollback", "apply", str(run_dir), run_id, "cp-0001")
+    assert result.returncode == 1
+    assert "run_id mismatch" in result.stdout
+
+
+def test_rollback_apply_with_mismatched_checkpoint_target_blocks(tmp_path: Path) -> None:
+    _, run_dir, run_id = _make_rollback_run(tmp_path)
+    assert run_cli("rollback", "plan", str(run_dir), run_id, "cp-0001").returncode == 0
+    plan = read_json(run_dir / "rollback-plan.json")
+    plan["checkpoint_id"] = "cp-9999"
+    (run_dir / "rollback-plan.json").write_text(json.dumps(plan, indent=2, sort_keys=True) + "\n")
+    result = run_cli("rollback", "apply", str(run_dir), run_id, "cp-0001")
+    assert result.returncode == 1
+    assert "target mismatch" in result.stdout
+
+
+def test_rollback_apply_with_matching_plan_succeeds_and_timeline_binds_digests(tmp_path: Path) -> None:
+    repo, run_dir, run_id = _make_rollback_run(tmp_path)
+    plan = run_cli("rollback", "plan", str(run_dir), run_id, "cp-0001")
+    assert plan.returncode == 0, plan.stderr
+    assert "rollback_plan_created" in _timeline_types(run_dir)
+    apply = run_cli("rollback", "apply", str(run_dir), run_id, "cp-0001")
+    assert apply.returncode == 0, apply.stderr
+    assert (repo / "notes.txt").read_text() == "before\n"
+    events = [json.loads(line) for line in (run_dir / "timeline.jsonl").read_text().splitlines() if line.strip()]
+    assert "rollback_applied" in [event["type"] for event in events]
+    applied = [event for event in events if event["type"] == "rollback_applied"][-1]
+    digests = applied["payload"]["artifact_digests"]
+    assert set(digests) == {"rollback-plan.json", "rollback-result.json"}
+    assert digests["rollback-plan.json"].startswith("sha256:")
+    assert digests["rollback-result.json"].startswith("sha256:")
+    assert verify_run(run_dir)["status"] == "valid"
+
+
+def test_verify_artifacts_detects_rollback_result_tampering(tmp_path: Path) -> None:
+    _, run_dir, run_id = _make_rollback_run(tmp_path)
+    assert run_cli("rollback", "plan", str(run_dir), run_id, "cp-0001").returncode == 0
+    assert run_cli("rollback", "apply", str(run_dir), run_id, "cp-0001").returncode == 0
+    result_path = run_dir / "checkpoints" / "cp-0001" / "rollback-result.json"
+    payload = read_json(result_path)
+    payload["status"] = "tampered"
+    result_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+    verify = run_cli("verify-artifacts", str(run_dir))
+    assert verify.returncode == 1
+    assert "digest mismatch checkpoints/cp-0001/rollback-result.json" in verify.stdout
+
+
+def test_rollback_to_start_requires_matching_plan(tmp_path: Path) -> None:
+    repo, run_dir, run_id = _make_rollback_run(tmp_path)
+    missing = run_cli("rollback", "apply", str(run_dir), run_id, "--to-start")
+    assert missing.returncode == 1
+    assert "missing rollback-plan.json" in missing.stdout
+    plan = run_cli("rollback", "plan", str(run_dir), run_id, "--to-start")
+    assert plan.returncode == 0, plan.stderr
+    apply = run_cli("rollback", "apply", str(run_dir), run_id, "--to-start")
+    assert apply.returncode == 0, apply.stderr
+    assert (repo / "notes.txt").read_text() == "before\n"

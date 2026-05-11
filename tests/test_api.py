@@ -365,7 +365,7 @@ def test_http_api_list_surfaces_terminal_semantics_for_boundary_states(tmp_path)
         "expected_terminal_state": "handed_off",
         "boundary": "operator_handoff",
         "scope_guess": "boundary_case",
-        "note": "Execution did not run; operator owns the next step.",
+        "note": "Execution did not run; this terminal operator boundary is not recoverable or resumable by the automatic runtime.",
     }
     assert by_id["run-comp-failed-list"]["terminal_semantics"] == {
         "terminal_state": "compensation_failed",

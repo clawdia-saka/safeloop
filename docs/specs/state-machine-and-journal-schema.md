@@ -179,6 +179,8 @@ This state is non-terminal. A later `run()` with the same `run_id` and `action_i
 ### `handed_off`
 Approval completed with `ApprovalDecision.ESCALATE`, so the runtime stopped automatic execution before calling the executor. This is terminal.
 
+`handed_off` marks an operator boundary: SafeLoop records that automation stopped pre-execution and an operator owns any next step outside this runtime invocation. It is not a resumable checkpoint, not a recoverable runtime pause, and not evidence that an external operator action occurred.
+
 Current metadata expectation:
 - `reason=handoff_requested`
 - `error` omitted
@@ -215,7 +217,7 @@ Path:
 Metadata:
 - `reason=handoff_requested`
 
-The executor is not called and no checkpoint is created.
+The executor is not called and no checkpoint is created. Unlike an approval block (`proposed -> failed`, `reason=approval_block`), escalation records approval as complete before the operator boundary. The runtime does not auto-run compensation for `handed_off` because no executor side effects have happened inside SafeLoop.
 
 ### Non-compensatable execution failure
 Path:

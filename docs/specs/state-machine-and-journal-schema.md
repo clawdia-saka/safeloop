@@ -153,6 +153,12 @@ Current metadata expectation:
 - `reason=compensation_error`
 - `error` contains the compensation hook exception text
 
+#### Compensation failure operator semantics
+
+A compensation failure preserves both failure causes in the ordered journal: the `compensating` entry preserves the original executor error, and the terminal `compensation_failed` entry preserves the compensation hook error. The runtime must not collapse these into a generic `failed` terminal state because operators need both facts to decide the next recovery step.
+
+`compensation_failed` is terminal and idempotent. Repeated `Runtime.run()` calls with the same `run_id` and action return the existing terminal entry. Runtime rule: do not retry automatically from `compensation_failed`. Any subsequent cleanup is operator-owned recovery outside the automatic runtime path.
+
 ### `failed`
 The automatic runtime path terminated unsuccessfully without ending in successful compensation.
 

@@ -75,6 +75,20 @@ def test_state_machine_spec_documents_api_shape_after_terminal_semantics() -> No
         assert marker in spec
 
 
+def test_state_machine_spec_documents_compensation_failure_operator_semantics() -> None:
+    spec = read_spec()
+
+    required_markers = [
+        "Compensation failure operator semantics",
+        "the `compensating` entry preserves the original executor error",
+        "the terminal `compensation_failed` entry preserves the compensation hook error",
+        "do not retry automatically from `compensation_failed`",
+        "operator-owned recovery",
+    ]
+    for marker in required_markers:
+        assert marker in spec
+
+
 def test_state_machine_spec_documents_every_journal_reason() -> None:
     spec = read_spec()
 

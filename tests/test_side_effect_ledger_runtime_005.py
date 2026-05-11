@@ -124,9 +124,25 @@ def test_committed_event_requires_adapter_identity_and_idempotency(tmp_path: Pat
             idempotency_key="email:msg-1",
         )
     )
-    assert event["adapter"] == {"name": "mock-email", "version": "test"}
+    assert event["adapter"] == {"name": "mock-email", "version": "test", "supports_idempotency": True}
     assert event["idempotency_key"] == "email:msg-1"
     assert event["external_ref"] == "msg-1"
+
+
+def test_camel_case_sensitive_keys_are_redacted(tmp_path: Path) -> None:
+    ledger = LocalSideEffectLedger(tmp_path / "side-effects.jsonl", run_id="run-005")
+
+    event = ledger.append(
+        SideEffectRecord(
+            phase="intent",
+            effect_class="http",
+            adapter=SideEffectAdapterIdentity(name="mock-http", version="test"),
+            target={"apiKey": "secret", "accessToken": "token", "nested": {"refreshToken": "token", "ok": "yes"}},
+            reason="camel_case_redaction",
+        )
+    )
+
+    assert event["target"] == {"nested": {"ok": "yes"}}
 
 
 def test_adapter_prepare_does_not_imply_commit(tmp_path: Path) -> None:

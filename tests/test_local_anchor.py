@@ -8,6 +8,7 @@ from safeloop.local_anchor import (
     canonical_sha256,
     create_local_anchor,
     journal_hash,
+    run_artifact_hashes,
     verify_local_anchor,
 )
 
@@ -74,3 +75,29 @@ def test_local_anchor_detects_artifact_and_journal_tampering(tmp_path):
     journal_result = verify_local_anchor(run_dir)
     assert journal_result["status"] == "invalid"
     assert "journal hash mismatch" in journal_result["issues"]
+
+
+def test_verify_local_anchor_reports_missing_run_and_timeline_without_crashing(tmp_path):
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    (run_dir / "local-anchor.json").write_text(
+        json.dumps({"schema_version": "local-anchor.v1", "anchor_hash": "sha256:" + "0" * 64}) + "\n",
+        encoding="utf-8",
+    )
+
+    result = verify_local_anchor(run_dir)
+
+    assert result["status"] == "invalid"
+    assert "missing run.json" in result["issues"]
+    assert "missing timeline.jsonl" in result["issues"]
+
+
+def test_run_artifact_hashes_skips_symlink_artifacts_pointing_external(tmp_path):
+    run_dir = _minimal_run_dir(tmp_path)
+    external = tmp_path / "external.txt"
+    external.write_text("secret\n", encoding="utf-8")
+    (run_dir / "linked-artifact.txt").symlink_to(external)
+
+    hashes = run_artifact_hashes(run_dir)
+
+    assert "linked-artifact.txt" not in hashes

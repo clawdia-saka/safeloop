@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
 
-from safeloop.agent_watchdog import verify_run
+import safeloop.agent_watchdog as aw
+from safeloop.agent_watchdog import allocate_checkpoint_seq, snapshot, verify_run
 
 
 def run_cli(*args: str, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
@@ -163,6 +165,33 @@ def test_security_guards_reject_path_traversal_and_unsafe_undo(tmp_path: Path) -
     assert traversal.returncode != 0
 
 
+def test_snapshot_skips_repo_symlink_to_external_file(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    external = tmp_path / "outside-secret.txt"
+    external.write_text("do not capture\n", encoding="utf-8")
+    (repo / "safe.txt").write_text("ok\n", encoding="utf-8")
+    (repo / "leak.txt").symlink_to(external)
+
+    snap = snapshot(repo)
+
+    assert "safe.txt" in snap
+    assert "leak.txt" not in snap
+
+
+def test_checkpoint_sequence_allocation_is_cross_process_safe(tmp_path: Path) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    run_root = tmp_path / "runs"
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        seqs = list(pool.map(lambda i: allocate_checkpoint_seq(run_root, repo, "task", f"run-{i}"), range(16)))
+
+    assert sorted(seqs) == list(range(1, 17))
+
+
 def test_undo_blocks_deleted_file_recreated_after_checkpoint(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -181,3 +210,76 @@ def test_undo_blocks_deleted_file_recreated_after_checkpoint(tmp_path: Path) -> 
     apply = run_cli("undo", str(run_dir), run_id, "cp-0001", "--apply")
     assert apply.returncode == 1
     assert (repo / "gone.txt").read_text() == "operator replacement\n"
+
+
+def test_undo_refuses_symlink_restore_target_without_touching_link_target(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "notes.txt").write_text("before\n")
+    (repo / "agent.py").write_text("open('notes.txt','w').write('after\\n')\n")
+    result = run_cli("watch-run", "--task-id", "symlink-race", "--repo", str(repo), "--run-root", str(tmp_path / "runs"), "--", sys.executable, "agent.py")
+    assert result.returncode == 0
+    run_dir = Path([line.split(":", 1)[1].strip() for line in result.stdout.splitlines() if line.startswith("Run dir:")][0])
+    symlink_target = tmp_path / "outside-target.txt"
+    symlink_target.write_text("do not overwrite\n", encoding="utf-8")
+    (repo / "notes.txt").unlink()
+    (repo / "notes.txt").symlink_to(symlink_target)
+
+    run_id = read_json(run_dir / "run.json")["run_id"]
+    apply = run_cli("undo", str(run_dir), run_id, "cp-0001", "--apply")
+
+    assert apply.returncode == 1
+    assert "symlink_restore_target" in apply.stdout
+    assert symlink_target.read_text(encoding="utf-8") == "do not overwrite\n"
+
+
+def test_undo_apply_blocks_symlink_swap_after_preflight_without_touching_target(tmp_path: Path, monkeypatch) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "notes.txt").write_text("before\n")
+    (repo / "agent.py").write_text("open('notes.txt','w').write('after\\n')\n")
+    result = run_cli("watch-run", "--task-id", "symlink-toctou", "--repo", str(repo), "--run-root", str(tmp_path / "runs"), "--", sys.executable, "agent.py")
+    assert result.returncode == 0
+    run_dir = Path([line.split(":", 1)[1].strip() for line in result.stdout.splitlines() if line.startswith("Run dir:")][0])
+    symlink_target = tmp_path / "outside-target.txt"
+    symlink_target.write_text("do not overwrite\n", encoding="utf-8")
+
+    def swap_after_preflight() -> None:
+        (repo / "notes.txt").unlink()
+        (repo / "notes.txt").symlink_to(symlink_target)
+
+    monkeypatch.setattr(aw, "_UNDO_APPLY_TEST_HOOK", swap_after_preflight)
+    run_id = read_json(run_dir / "run.json")["run_id"]
+
+    res = aw.undo(run_dir, run_id, "cp-0001", apply=True)
+
+    assert res["status"] == "blocked"
+    assert res["blocked_reason"] == "symlink_restore_target"
+    assert symlink_target.read_text(encoding="utf-8") == "do not overwrite\n"
+
+
+def test_undo_apply_blocks_intermediate_symlink_ancestor_swap_after_preflight(tmp_path: Path, monkeypatch) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "a" / "d").mkdir(parents=True)
+    (repo / "a" / "d" / "file.txt").write_text("before\n", encoding="utf-8")
+    (repo / "agent.py").write_text("from pathlib import Path\nPath('a/d/file.txt').write_text('after\\n')\n")
+    result = run_cli("watch-run", "--task-id", "ancestor-symlink-toctou", "--repo", str(repo), "--run-root", str(tmp_path / "runs"), "--", sys.executable, "agent.py")
+    assert result.returncode == 0
+    run_dir = Path([line.split(":", 1)[1].strip() for line in result.stdout.splitlines() if line.startswith("Run dir:")][0])
+    outside = tmp_path / "outside"
+    (outside / "d").mkdir(parents=True)
+    (outside / "d" / "file.txt").write_text("do not overwrite\n", encoding="utf-8")
+
+    def swap_ancestor_after_preflight() -> None:
+        shutil.rmtree(repo / "a")
+        (repo / "a").symlink_to(outside, target_is_directory=True)
+
+    monkeypatch.setattr(aw, "_UNDO_APPLY_TEST_HOOK", swap_ancestor_after_preflight)
+    run_id = read_json(run_dir / "run.json")["run_id"]
+
+    res = aw.undo(run_dir, run_id, "cp-0001", apply=True)
+
+    assert res["status"] == "blocked"
+    assert res["blocked_reason"] == "symlink_restore_ancestor"
+    assert (outside / "d" / "file.txt").read_text(encoding="utf-8") == "do not overwrite\n"

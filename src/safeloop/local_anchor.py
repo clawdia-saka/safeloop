@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -31,7 +33,11 @@ def approval_payload_hash(payload: dict[str, Any]) -> str:
 
 def artifact_hash(path: Path) -> str:
     """Hash artifact bytes exactly as stored on disk."""
-    return _HASH_PREFIX + hashlib.sha256(path.read_bytes()).hexdigest()
+    h = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            h.update(chunk)
+    return _HASH_PREFIX + h.hexdigest()
 
 
 def journal_hash(path: Path) -> str:
@@ -47,7 +53,7 @@ def journal_hash(path: Path) -> str:
 def run_artifact_hashes(run_dir: Path) -> dict[str, str]:
     """Return hashes for all local run artifacts except verification/anchor output."""
     hashes: dict[str, str] = {}
-    for path in sorted(p for p in run_dir.rglob("*") if p.is_file()):
+    for path in sorted(p for p in run_dir.rglob("*") if p.is_file() and not p.is_symlink()):
         rel = path.relative_to(run_dir).as_posix()
         if (
             rel == "local-anchor.json"
@@ -71,7 +77,10 @@ def create_local_anchor(run_dir: Path, approval_payload: dict[str, Any] | None =
         "artifact_hashes": run_artifact_hashes(run_dir),
     }
     anchor["anchor_hash"] = canonical_sha256(anchor)
-    (run_dir / "local-anchor.json").write_text(json.dumps(anchor, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    anchor_path = run_dir / "local-anchor.json"
+    tmp = anchor_path.with_name(f"{anchor_path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
+    tmp.write_text(json.dumps(anchor, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    tmp.replace(anchor_path)
     return anchor
 
 
@@ -88,9 +97,13 @@ def verify_local_anchor(run_dir: Path) -> dict[str, Any]:
     without_hash.pop("anchor_hash", None)
     if stored_hash != canonical_sha256(without_hash):
         issues.append("anchor hash mismatch")
-    if anchor.get("run_hash") != artifact_hash(run_dir / "run.json"):
+    if not (run_dir / "run.json").exists():
+        issues.append("missing run.json")
+    elif anchor.get("run_hash") != artifact_hash(run_dir / "run.json"):
         issues.append("run hash mismatch")
-    if anchor.get("journal_hash") != journal_hash(run_dir / "timeline.jsonl"):
+    if not (run_dir / "timeline.jsonl").exists():
+        issues.append("missing timeline.jsonl")
+    elif anchor.get("journal_hash") != journal_hash(run_dir / "timeline.jsonl"):
         issues.append("journal hash mismatch")
 
     actual_artifacts = run_artifact_hashes(run_dir)

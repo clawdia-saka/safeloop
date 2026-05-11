@@ -7,12 +7,14 @@ import os
 import re
 import subprocess
 import time
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import Thread
 from typing import Any, TextIO
 
 from safeloop.local_anchor import create_local_anchor, verify_local_anchor
+from safeloop.storage import exclusive_lock
 
 
 REQUIRED_CHECKPOINT_ARTIFACTS = {
@@ -33,7 +35,11 @@ def sha_bytes(data: bytes) -> str:
 
 
 def sha_file(path: Path) -> str:
-    return sha_bytes(path.read_bytes())
+    h = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            h.update(chunk)
+    return "sha256:" + h.hexdigest()
 
 
 def is_sha256_digest(value: Any) -> bool:
@@ -42,14 +48,14 @@ def is_sha256_digest(value: Any) -> bool:
 
 def atomic_json(path: Path, obj: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + ".tmp")
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
     tmp.write_text(json.dumps(obj, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     tmp.replace(path)
 
 
 def atomic_text(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + ".tmp")
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
     tmp.write_text(text, encoding="utf-8")
     tmp.replace(path)
 
@@ -73,7 +79,7 @@ def rel_files(repo: Path) -> list[Path]:
     repo = repo.resolve()
     out: list[Path] = []
     for p in repo.rglob("*"):
-        if not p.is_file():
+        if not p.is_file() or p.is_symlink():
             continue
         rel = p.relative_to(repo)
         parts = set(rel.parts)
@@ -248,20 +254,24 @@ def allocate_checkpoint_seq(run_root: Path, repo: Path, task_id: str, run_id: st
     directories while remaining local and inspectable.
     """
     ledger = _monotonic_ledger_path(run_root, repo, task_id)
-    current = 0
-    if ledger.exists():
-        payload = json.loads(ledger.read_text(encoding="utf-8"))
-        current = int(payload.get("last_checkpoint_seq", 0))
-    next_seq = current + 1
-    atomic_json(ledger, {
-        "schema_version": "monotonic-checkpoint-ledger.v1",
-        "repo": str(repo.resolve()),
-        "task_id": task_id,
-        "last_checkpoint_seq": next_seq,
-        "last_run_id": run_id,
-        "updated_at": now(),
-    })
-    return next_seq
+    lock_path = ledger.with_suffix(ledger.suffix + ".lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a+", encoding="utf-8") as lock_handle:
+        with exclusive_lock(lock_handle):
+            current = 0
+            if ledger.exists():
+                payload = json.loads(ledger.read_text(encoding="utf-8"))
+                current = int(payload.get("last_checkpoint_seq", 0))
+            next_seq = current + 1
+            atomic_json(ledger, {
+                "schema_version": "monotonic-checkpoint-ledger.v1",
+                "repo": str(repo.resolve()),
+                "task_id": task_id,
+                "last_checkpoint_seq": next_seq,
+                "last_run_id": run_id,
+                "updated_at": now(),
+            })
+            return next_seq
 
 
 def _drain_pipe(pipe: TextIO | None, output_path: Path) -> None:
@@ -474,10 +484,100 @@ def verify_run(run_dir: Path) -> dict[str, Any]:
 
 
 def _safe_repo_path(repo: Path, rel: str) -> Path:
-    path = (repo / rel).resolve()
-    if repo.resolve() not in path.parents and path != repo.resolve():
+    if Path(rel).is_absolute() or ".." in Path(rel).parts:
         raise ValueError(f"unsafe restore path: {rel}")
-    return path
+    return repo.resolve() / rel
+
+
+def _symlink_blocker(repo: Path, rel: str) -> dict[str, str] | None:
+    path = _safe_repo_path(repo, rel)
+    return _reject_symlink(path, rel)
+
+
+_UNDO_APPLY_TEST_HOOK = None
+
+
+def _path_exists_no_follow(path: Path) -> bool:
+    try:
+        path.lstat()
+        return True
+    except FileNotFoundError:
+        return False
+
+
+def _reject_symlink(path: Path, rel: str) -> dict[str, str] | None:
+    try:
+        path.lstat()
+    except FileNotFoundError:
+        return None
+    if path.is_symlink():
+        return {"file": rel, "code": "symlink_restore_target", "expected": "non-symlink", "actual": "symlink"}
+    return None
+
+
+def _reject_symlink_ancestor(repo: Path, path: Path, rel: str) -> dict[str, str] | None:
+    repo_root = repo.resolve()
+    try:
+        parent = path.parent.relative_to(repo_root)
+    except ValueError:
+        raise ValueError(f"unsafe restore path: {rel}")
+    cur = repo_root
+    for part in parent.parts:
+        cur = cur / part
+        try:
+            cur.lstat()
+        except FileNotFoundError:
+            break
+        if os.path.islink(cur):
+            return {"file": rel, "code": "symlink_restore_ancestor", "expected": "non-symlink ancestor", "actual": str(cur.relative_to(repo_root))}
+        if not os.path.isdir(cur):
+            return {"file": rel, "code": "restore_ancestor_not_directory", "expected": "directory ancestor", "actual": str(cur.relative_to(repo_root))}
+    return None
+
+
+def _safe_unlink_for_undo(repo: Path, path: Path, rel: str) -> dict[str, str] | None:
+    ancestor_blocker = _reject_symlink_ancestor(repo, path, rel)
+    if ancestor_blocker is not None:
+        return ancestor_blocker
+    blocker = _reject_symlink(path, rel)
+    if blocker is not None:
+        return blocker
+    if _path_exists_no_follow(path):
+        path.unlink()
+    return None
+
+
+def _safe_write_for_undo(repo: Path, path: Path, rel: str, data: bytes) -> dict[str, str] | None:
+    ancestor_blocker = _reject_symlink_ancestor(repo, path, rel)
+    if ancestor_blocker is not None:
+        return ancestor_blocker
+    blocker = _reject_symlink(path, rel)
+    if blocker is not None:
+        return blocker
+    path.parent.mkdir(parents=True, exist_ok=True)
+    ancestor_blocker = _reject_symlink_ancestor(repo, path, rel)
+    if ancestor_blocker is not None:
+        return ancestor_blocker
+    parent_blocker = _reject_symlink(path.parent, rel)
+    if parent_blocker is not None:
+        return parent_blocker
+    tmp = path.parent / f".{path.name}.safeloop-undo.tmp"
+    ancestor_blocker = _reject_symlink_ancestor(repo, tmp, rel)
+    if ancestor_blocker is not None:
+        return ancestor_blocker
+    tmp.write_bytes(data)
+    try:
+        ancestor_blocker = _reject_symlink_ancestor(repo, path, rel)
+        if ancestor_blocker is not None:
+            return ancestor_blocker
+        blocker = _reject_symlink(path, rel)
+        if blocker is not None:
+            return blocker
+        os.replace(tmp, path)
+    finally:
+        if _path_exists_no_follow(tmp):
+            tmp.unlink()
+    return None
 
 
 def undo(run_dir: Path, run_id: str, checkpoint_id: str, apply: bool = False) -> dict[str, Any]:
@@ -496,12 +596,20 @@ def undo(run_dir: Path, run_id: str, checkpoint_id: str, apply: bool = False) ->
     modified = restore.get("modified_files", [])
     deleted = restore.get("deleted_files", [])
     blockers: list[dict[str, str]] = []
+    for f in created + modified + deleted:
+        blocker = _symlink_blocker(repo, f)
+        if blocker is not None:
+            blockers.append(blocker)
     for f, expected_hash in restore.get("after_hashes", {}).items():
+        if any(blocker["file"] == f for blocker in blockers):
+            continue
         p = _safe_repo_path(repo, f)
         actual = sha_file(p) if p.exists() else None
         if actual != expected_hash:
             blockers.append({"file": f, "code": "current_hash_mismatch", "expected": expected_hash, "actual": str(actual)})
     for f in deleted:
+        if any(blocker["file"] == f for blocker in blockers):
+            continue
         p = _safe_repo_path(repo, f)
         if p.exists():
             actual = sha_file(p) if p.is_file() else "non_file_exists"
@@ -513,19 +621,27 @@ def undo(run_dir: Path, run_id: str, checkpoint_id: str, apply: bool = False) ->
     if blockers:
         return {**pre, "blocked_reason": blockers[0]["code"]}
     if apply:
+        if _UNDO_APPLY_TEST_HOOK is not None:
+            _UNDO_APPLY_TEST_HOOK()
+        apply_blockers: list[dict[str, str]] = []
         for f in created:
             p = _safe_repo_path(repo, f)
-            if p.exists():
-                p.unlink()
+            blocker = _safe_unlink_for_undo(repo, p, f)
+            if blocker is not None:
+                apply_blockers.append(blocker)
         for f in modified + deleted:
             blob = restore.get("before_blobs", {}).get(f)
             p = _safe_repo_path(repo, f)
             if blob is None:
-                if p.exists():
-                    p.unlink()
+                blocker = _safe_unlink_for_undo(repo, p, f)
             else:
-                p.parent.mkdir(parents=True, exist_ok=True)
-                p.write_bytes(safe_child_file(cp, blob).read_bytes())
+                blocker = _safe_write_for_undo(repo, p, f, safe_child_file(cp, blob).read_bytes())
+            if blocker is not None:
+                apply_blockers.append(blocker)
+        if apply_blockers:
+            blocked = {**pre, "schema_version": "undo-result.v1", "status": "blocked", "blockers": apply_blockers, "blocked_reason": apply_blockers[0]["code"]}
+            atomic_json(cp / "undo-result.json", blocked)
+            return blocked
         result = {**pre, "schema_version": "undo-result.v1", "status": "applied", "restored_file_count": len(created) + len(modified) + len(deleted), "undo_result_path": str(cp / "undo-result.json")}
         atomic_json(cp / "undo-result.json", result)
         evs = timeline_events(run_dir)

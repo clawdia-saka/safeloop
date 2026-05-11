@@ -58,6 +58,7 @@ def run_artifact_hashes(run_dir: Path) -> dict[str, str]:
         if (
             rel == "local-anchor.json"
             or rel == "rollback-plan.json"
+            or rel == "rollback-result.json"
             or rel.startswith("verification/")
             or rel.endswith("/undo-preflight.json")
             or rel.endswith("/undo-result.json")

@@ -411,3 +411,88 @@ def test_verify_artifacts_fails_closed_when_modified_file_lacks_source_evidence(
 
     assert payload["status"] == "invalid"
     assert "missing-source-evidence tracked.txt" in payload["issues"]
+
+
+def test_run_start_baseline_artifact_and_verify(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "notes.txt").write_text("before\n")
+    (repo / "agent.py").write_text("open('notes.txt','w').write('after\\n')\n")
+    result = run_cli("watch-run", "--task-id", "baseline", "--repo", str(repo), "--run-root", str(tmp_path / "runs"), "--", sys.executable, "agent.py")
+    assert result.returncode == 0, result.stderr
+    run_dir = Path([line.split(":", 1)[1].strip() for line in result.stdout.splitlines() if line.startswith("Run dir:")][0])
+    run = read_json(run_dir / "run.json")
+    baseline = read_json(run_dir / "baseline" / "baseline.json")
+    manifest = read_json(run_dir / "baseline" / "manifest.json")
+    assert baseline["schema_version"] == "run-start-baseline.v1"
+    assert baseline["run_id"] == run["run_id"]
+    assert baseline["task_id"] == "baseline"
+    assert baseline["repo"] == str(repo.resolve())
+    assert manifest["files"]["notes.txt"].startswith("sha256:")
+    assert baseline["state_digest"].startswith("sha256:")
+    assert verify_run(run_dir)["status"] == "valid"
+
+
+def test_rollback_to_start_plan_and_apply_restores_whole_run(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "modified.txt").write_text("before\n")
+    (repo / "deleted.txt").write_text("restore me\n")
+    (repo / "agent.py").write_text("from pathlib import Path\nPath('modified.txt').write_text('after\\n')\nPath('created.txt').write_text('new\\n')\nPath('deleted.txt').unlink()\n")
+    result = run_cli("watch-run", "--task-id", "to-start", "--repo", str(repo), "--run-root", str(tmp_path / "runs"), "--", sys.executable, "agent.py")
+    assert result.returncode == 0, result.stderr
+    run_dir = Path([line.split(":", 1)[1].strip() for line in result.stdout.splitlines() if line.startswith("Run dir:")][0])
+    run_id = read_json(run_dir / "run.json")["run_id"]
+
+    plan = run_cli("rollback", "plan", str(run_dir), run_id, "--to-start")
+    assert plan.returncode == 0, plan.stderr
+    payload = read_json(run_dir / "rollback-plan.json")
+    assert payload["schema_version"] == "rollback-plan.v1"
+    assert payload["operation"] == "rollback_to_start"
+    assert payload["covered_local_file_changes"] == {"created": ["created.txt"], "modified": ["modified.txt"], "deleted": ["deleted.txt"]}
+    assert payload["external_side_effects"] == {"classification": "manual_review", "exact_rollback": False, "note": "External side effects are not exact rollback; review side-effects.jsonl for compensation or handoff."}
+
+    apply = run_cli("rollback", "apply", str(run_dir), run_id, "--to-start")
+    assert apply.returncode == 0, apply.stderr
+    assert not (repo / "created.txt").exists()
+    assert (repo / "modified.txt").read_text() == "before\n"
+    assert (repo / "deleted.txt").read_text() == "restore me\n"
+    result_payload = read_json(run_dir / "rollback-result.json")
+    assert result_payload["schema_version"] == "rollback-result.v1"
+    assert result_payload["status"] == "applied"
+    assert result_payload["verification"]["status"] == "valid"
+    assert verify_run(run_dir, check_source_evidence=False)["status"] == "valid"
+    assert any(e["type"] == "rollback_applied" for e in aw.timeline_events(run_dir))
+
+
+def test_rollback_to_start_blocks_symlink_target(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "notes.txt").write_text("before\n")
+    (repo / "agent.py").write_text("open('notes.txt','w').write('after\\n')\n")
+    result = run_cli("watch-run", "--task-id", "to-start-link", "--repo", str(repo), "--run-root", str(tmp_path / "runs"), "--", sys.executable, "agent.py")
+    assert result.returncode == 0
+    run_dir = Path([line.split(":", 1)[1].strip() for line in result.stdout.splitlines() if line.startswith("Run dir:")][0])
+    outside = tmp_path / "outside.txt"
+    outside.write_text("safe\n")
+    (repo / "notes.txt").unlink()
+    (repo / "notes.txt").symlink_to(outside)
+    run_id = read_json(run_dir / "run.json")["run_id"]
+    apply = run_cli("rollback", "apply", str(run_dir), run_id, "--to-start")
+    assert apply.returncode == 1
+    assert "symlink_restore_target" in apply.stdout
+    assert outside.read_text() == "safe\n"
+
+
+def test_rollback_to_start_blocks_large_baseline_blob(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(aw, "BASELINE_MAX_BLOB_BYTES", 4)
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "big.txt").write_text("before-big\n")
+    (repo / "agent.py").write_text("open('big.txt','w').write('after\\n')\n")
+    code, run_dir = aw.watch_run("large", repo, [sys.executable, "agent.py"], tmp_path / "runs")
+    assert code == 0
+    run_id = read_json(run_dir / "run.json")["run_id"]
+    res = aw.rollback_to_start(run_dir, run_id, apply=False)
+    assert res["status"] == "blocked"
+    assert res["blocked_reason"] == "large_file_unsupported"

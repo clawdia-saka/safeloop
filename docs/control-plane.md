@@ -98,7 +98,7 @@ See [`../examples/control-plane-local-demo/README.md`](../examples/control-plane
 - No hosted control-plane daemon or HTTP API.
 - No production identity provider, session management, OAuth/OIDC, or secret-management integration.
 - No mutation of existing watchdog/runtime journal schemas.
-- No automatic lifecycle state transitions beyond inserting approval records.
+- Runtime lifecycle enforcement is local SQLite only; lookup-only registries are not accepted for mutating runtime actions.
 - No network transparency log or remote anchoring.
 - No dashboard v2, live UI, or browser-side authorization.
 
@@ -106,7 +106,7 @@ See [`../examples/control-plane-local-demo/README.md`](../examples/control-plane
 
 These items are intentionally documented as next work unless and until separately merged:
 
-- Lifecycle transition APIs for approval request/approve/reject/expire flows.
+- SQLite lifecycle transition APIs for approval request/approve/reject/revoke/reserve/complete flows are available via `SQLiteApprovalLifecycleStore`; hosted workflow APIs remain future work.
 - External anchor JSONL export and verification using `external_anchors`.
 - Dashboard v2 / hosted UI and authenticated browser workflow.
 - Production secret rotation and pluggable identity providers.

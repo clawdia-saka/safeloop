@@ -41,6 +41,7 @@ _ALLOWED_TRANSITIONS: dict[JournalState, set[JournalState]] = {
 class JournalReason(str, Enum):
     APPROVAL_ERROR = "approval_error"
     APPROVAL_BLOCK = "approval_block"
+    APPROVAL_COMPLETION_ERROR = "approval_completion_error"
     HANDOFF_REQUESTED = "handoff_requested"
     EXECUTION_ERROR = "execution_error"
     COMPENSATION_ERROR = "compensation_error"

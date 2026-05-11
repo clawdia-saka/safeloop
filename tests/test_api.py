@@ -445,6 +445,13 @@ def test_http_api_binds_journal_entries_to_digest_bound_trace_evidence(tmp_path)
         assert binding["required_stages"] == ["request", "runtime", "enforcement", "response"]
 
 
+def test_failed_approval_completion_error_is_side_effects_possible_boundary() -> None:
+    scope, boundaries = derive_annotations(JournalState.FAILED, JournalReason.APPROVAL_COMPLETION_ERROR)
+
+    assert scope.value == "boundary_case"
+    assert [boundary.value for boundary in boundaries] == ["side_effects_possible", "terminal"]
+
+
 def test_failed_unknown_reason_defaults_to_boundary_terminal_only() -> None:
     scope, boundaries = derive_annotations(JournalState.FAILED, None)
 

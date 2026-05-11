@@ -24,6 +24,8 @@ REQUIRED_CHECKPOINT_ARTIFACTS = {
     "restore-manifest.json",
     "summary.md",
 }
+REQUIRED_BASELINE_ARTIFACTS = {"baseline.json", "manifest.json", "summary.md"}
+BASELINE_MAX_BLOB_BYTES = 10 * 1024 * 1024
 
 
 def now() -> str:
@@ -199,6 +201,32 @@ def _capture_before_blobs(cp: Path, before_bytes: dict[str, bytes], files: list[
     return blobs
 
 
+def create_run_start_baseline(run_dir: Path, repo: Path, run_id: str, task_id: str, snap: dict[str, str], snap_bytes: dict[str, bytes]) -> None:
+    base = run_dir / "baseline"
+    base.mkdir(parents=True, exist_ok=True)
+    blobs: dict[str, str | None] = {}
+    unsupported: list[dict[str, Any]] = []
+    for name in sorted(snap):
+        data = snap_bytes.get(name)
+        if data is None:
+            blobs[name] = None
+        elif len(data) > BASELINE_MAX_BLOB_BYTES:
+            blobs[name] = None
+            unsupported.append({"file": name, "code": "large_file_unsupported", "size_bytes": len(data), "limit_bytes": BASELINE_MAX_BLOB_BYTES})
+        else:
+            digest = sha_bytes(data)
+            dst = _blob_path(base, digest)
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            if not dst.exists():
+                dst.write_bytes(data)
+            blobs[name] = str(dst.relative_to(base))
+    manifest = {"schema_version": "run-start-manifest.v1", "files": snap, "before_blobs": blobs, "unsupported_files": unsupported, "required_artifacts": sorted(REQUIRED_BASELINE_ARTIFACTS)}
+    atomic_json(base / "manifest.json", manifest)
+    atomic_text(base / "summary.md", f"# run-start baseline\n\nFiles captured: {len(snap)}\nUnsupported files: {len(unsupported)}\n")
+    baseline = {"schema_version": "run-start-baseline.v1", "run_id": run_id, "task_id": task_id, "repo": str(repo), "created_at": now(), "state_digest": state_digest(snap), "file_count": len(snap), "artifact_digests": {"manifest.json": sha_file(base / "manifest.json"), "summary.md": sha_file(base / "summary.md")}}
+    atomic_json(base / "baseline.json", baseline)
+
+
 def create_checkpoint(
     run_dir: Path,
     repo: Path,
@@ -336,12 +364,14 @@ def watch_run(
         "capture_status": "running",
     }
     atomic_json(run_dir / "run.json", run)
-    prev = append_event(timeline, 1, "run_started", {"run_id": run_id, "task_id": task_id}, None)
-    seq = 2
 
     last_snap = snapshot(repo)
     last_bytes = snapshot_bytes(repo)
     last_digest = state_digest(last_snap)
+    create_run_start_baseline(run_dir, repo, run_id, task_id, last_snap, last_bytes)
+    base = run_dir / "baseline"
+    prev = append_event(timeline, 1, "run_started", {"run_id": run_id, "task_id": task_id, "artifact_digests": {"baseline/baseline.json": sha_file(base / "baseline.json"), "baseline/manifest.json": sha_file(base / "manifest.json"), "baseline/summary.md": sha_file(base / "summary.md")}}, None)
+    seq = 2
     checkpoint_count = 0
     parent: str | None = None
 
@@ -501,6 +531,22 @@ def verify_run(run_dir: Path, *, check_source_evidence: bool = True) -> dict[str
                         issues.append(f"digest mismatch {path.relative_to(run_dir)}")
         r = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
         repo = Path(r.get("repo", ""))
+        baseline_dir = run_dir / "baseline"
+        baseline_exists = any((baseline_dir / required).exists() for required in REQUIRED_BASELINE_ARTIFACTS)
+        if baseline_exists:
+            for required in REQUIRED_BASELINE_ARTIFACTS:
+                if not (baseline_dir / required).exists():
+                    issues.append(f"baseline missing required_artifact {required}")
+        if baseline_exists and (baseline_dir / "baseline.json").exists() and (baseline_dir / "manifest.json").exists():
+            baseline = json.loads((baseline_dir / "baseline.json").read_text(encoding="utf-8"))
+            manifest = json.loads((baseline_dir / "manifest.json").read_text(encoding="utf-8"))
+            if baseline.get("run_id") != r.get("run_id") or baseline.get("task_id") != r.get("task_id") or baseline.get("repo") != r.get("repo"):
+                issues.append("baseline run binding mismatch")
+            if baseline.get("state_digest") != state_digest(manifest.get("files", {})):
+                issues.append("baseline state digest mismatch")
+            for rel_blob in manifest.get("before_blobs", {}).values():
+                if rel_blob is not None and not safe_child_file(baseline_dir, rel_blob).exists():
+                    issues.append(f"baseline blob missing {rel_blob}")
         for required in ["command.stdout.txt", "command.stderr.txt", "process-result.json", "side-effects.jsonl"]:
             if not (run_dir / required).exists():
                 issues.append(f"capture missing {required}")
@@ -725,6 +771,66 @@ def undo(run_dir: Path, run_id: str, checkpoint_id: str, apply: bool = False) ->
         create_local_anchor(run_dir)
         return result
     return pre
+
+
+def rollback_to_start(run_dir: Path, run_id: str, apply: bool = False) -> dict[str, Any]:
+    run = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
+    if run.get("run_id") != run_id:
+        raise ValueError(f"run_id mismatch: expected {run.get('run_id')}, got {run_id}")
+    baseline_check = verify_run(run_dir, check_source_evidence=False)
+    if baseline_check["status"] != "valid":
+        raise ValueError("cannot run rollback-to-start preflight: artifact verification is not valid")
+    repo = Path(run["repo"])
+    base = run_dir / "baseline"
+    manifest = json.loads((base / "manifest.json").read_text(encoding="utf-8"))
+    before = manifest.get("files", {})
+    current = snapshot(repo)
+    created = sorted(f for f in current if f not in before)
+    modified = sorted(f for f in current if f in before and current[f] != before[f])
+    deleted = sorted(f for f in before if f not in current)
+    blockers: list[dict[str, str]] = []
+    unsupported = {item.get("file"): item for item in manifest.get("unsupported_files", []) if isinstance(item, dict)}
+    for f in created + modified + deleted:
+        p = _safe_repo_path(repo, f)
+        blocker = _reject_symlink_ancestor(repo, p, f) or _reject_symlink(p, f)
+        if blocker is not None:
+            blockers.append(blocker)
+    for f in modified + deleted:
+        blob = manifest.get("before_blobs", {}).get(f)
+        if blob is None:
+            code = unsupported.get(f, {}).get("code", "missing_baseline_blob")
+            blockers.append({"file": f, "code": str(code), "expected": "baseline blob", "actual": "missing"})
+    side_effects = {"classification": "manual_review", "exact_rollback": False, "note": "External side effects are not exact rollback; review side-effects.jsonl for compensation or handoff."}
+    result = {"schema_version": "rollback-result.v1" if apply else "rollback-plan.v1", "operation": "rollback_to_start", "run_id": run_id, "mode": "apply" if apply else "dry-run", "status": "blocked" if blockers else "ok", "review_required": True, "covered_local_file_changes": {"created": created, "modified": modified, "deleted": deleted}, "file_counts": {"created": len(created), "modified": len(modified), "deleted": len(deleted)}, "blockers": blockers, "external_side_effects": side_effects, "preflight": {"status": "blocked" if blockers else "pass"}, "apply_command": f"safeloop rollback apply {run_dir} {run_id} --to-start"}
+    atomic_json(run_dir / "rollback-plan.json", result)
+    if blockers:
+        return {**result, "blocked_reason": blockers[0]["code"]}
+    if apply:
+        apply_blockers: list[dict[str, str]] = []
+        for f in created:
+            blocker = _safe_unlink_for_undo(repo, _safe_repo_path(repo, f), f)
+            if blocker is not None:
+                apply_blockers.append(blocker)
+        for f in modified + deleted:
+            blob = manifest.get("before_blobs", {}).get(f)
+            blocker = _safe_write_for_undo(repo, _safe_repo_path(repo, f), f, safe_child_file(base, blob).read_bytes()) if blob else {"file": f, "code": "missing_baseline_blob", "expected": "baseline blob", "actual": "missing"}
+            if blocker is not None:
+                apply_blockers.append(blocker)
+        if apply_blockers:
+            result.update({"status": "blocked", "blockers": apply_blockers, "blocked_reason": apply_blockers[0]["code"]})
+            atomic_json(run_dir / "rollback-result.json", result)
+            return result
+        result.update({"status": "applied", "restored_file_count": len(created) + len(modified) + len(deleted)})
+        result["verification"] = verify_run(run_dir, check_source_evidence=False)
+        atomic_json(run_dir / "rollback-result.json", result)
+        evs = timeline_events(run_dir)
+        prev = evs[-1]["event_hash"] if evs else None
+        new_hash = append_event(run_dir / "timeline.jsonl", len(evs) + 1, "rollback_applied", {"operation": "rollback_to_start", "rollback_status": "applied", "artifact_digests": {"rollback-result.json": sha_file(run_dir / "rollback-result.json")}}, prev)
+        run["latest_event_hash"] = new_hash
+        run["final_event_hash"] = new_hash
+        atomic_json(run_dir / "run.json", run)
+        create_local_anchor(run_dir)
+    return result
 
 
 def timeline_summary(run_dir: Path) -> dict[str, Any]:

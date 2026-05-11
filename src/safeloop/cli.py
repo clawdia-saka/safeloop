@@ -5,7 +5,7 @@ import json
 import sys
 from pathlib import Path
 
-from safeloop.agent_watchdog import atomic_json, timeline_summary, undo, verify_run, watch_run
+from safeloop.agent_watchdog import atomic_json, rollback_to_start, timeline_summary, undo, verify_run, watch_run
 from safeloop.control_plane.anchor_audit import audit_control_plane_anchors
 from safeloop.local_anchor import verify_local_anchor
 
@@ -92,11 +92,13 @@ def main(argv: list[str] | None = None) -> int:
     rb_plan = rb_sub.add_parser("plan")
     rb_plan.add_argument("run_dir")
     rb_plan.add_argument("run_id")
-    rb_plan.add_argument("checkpoint_id")
+    rb_plan.add_argument("checkpoint_id", nargs="?")
+    rb_plan.add_argument("--to-start", action="store_true")
     rb_apply = rb_sub.add_parser("apply")
     rb_apply.add_argument("run_dir")
     rb_apply.add_argument("run_id")
-    rb_apply.add_argument("checkpoint_id")
+    rb_apply.add_argument("checkpoint_id", nargs="?")
+    rb_apply.add_argument("--to-start", action="store_true")
     args = parser.parse_args(argv)
 
     if args.cmd in {"watch-run", "watch"}:
@@ -164,6 +166,26 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "rollback":
         run_dir = Path(args.run_dir)
         apply_mode = args.rollback_cmd == "apply"
+        if args.to_start:
+            artifact = rollback_to_start(run_dir, args.run_id, apply=apply_mode)
+            if apply_mode:
+                print("Rollback apply complete" if artifact["status"] == "applied" else "Rollback apply blocked")
+                print(f"rollback-result.json: {run_dir / 'rollback-result.json'}")
+            else:
+                print("Rollback plan: PASS" if artifact["preflight"]["status"] == "pass" else "Rollback plan: BLOCKED")
+                print(f"rollback-plan.json: {run_dir / 'rollback-plan.json'}")
+            print("SafeLoop rollback operator summary")
+            print(f"run id: {artifact['run_id']}")
+            print("checkpoint id: START")
+            print(f"mode: {artifact['mode']}")
+            print(f"file counts: {artifact['file_counts']}")
+            print(f"external side effects: {artifact['external_side_effects']['classification']}")
+            if artifact.get("blocked_reason"):
+                print(f"blocked reason: {artifact['blocked_reason']}")
+            return 1 if artifact["preflight"]["status"] == "blocked" and apply_mode else 0
+        if not args.checkpoint_id:
+            print("rollback requires checkpoint_id or --to-start", file=sys.stderr)
+            return 2
         res = undo(run_dir, args.run_id, args.checkpoint_id, apply=apply_mode)
         artifact = _rollback_artifact(run_dir, args.checkpoint_id, res, apply=apply_mode)
         if apply_mode:

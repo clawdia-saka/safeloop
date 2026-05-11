@@ -146,6 +146,42 @@ def test_timeline_and_undo_operator_ux_restores_modified_and_created_files(tmp_p
     assert '"undo_status": "applied"' in timeline_json.stdout
 
 
+def test_rollback_command_alias_writes_operator_plan_and_result_artifacts(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "notes.txt").write_text("before\n")
+    (repo / "agent.py").write_text("open('notes.txt','w').write('after\\n')\n")
+    result = run_cli("watch-run", "--task-id", "rollback", "--repo", str(repo), "--run-root", str(tmp_path / "runs"), "--", sys.executable, "agent.py")
+    assert result.returncode == 0, result.stderr
+    run_dir = Path([line.split(":", 1)[1].strip() for line in result.stdout.splitlines() if line.startswith("Run dir:")][0])
+    run_id = read_json(run_dir / "run.json")["run_id"]
+
+    plan = run_cli("rollback", "plan", str(run_dir), run_id, "cp-0001")
+
+    assert plan.returncode == 0, plan.stderr
+    assert "Rollback plan: PASS" in plan.stdout
+    rollback_plan = read_json(run_dir / "rollback-plan.json")
+    assert rollback_plan["schema_version"] == "rollback-plan.v1"
+    assert rollback_plan["operation"] == "rollback_to_checkpoint"
+    assert rollback_plan["mode"] == "dry-run"
+    assert rollback_plan["covered_local_file_changes"]["modified"] == ["notes.txt"]
+    assert rollback_plan["external_side_effects"]["classification"] == "manual_review"
+    assert rollback_plan["review_required"] is True
+    assert rollback_plan["apply_command"] == f"safeloop rollback apply {run_dir} {run_id} cp-0001"
+
+    apply = run_cli("rollback", "apply", str(run_dir), run_id, "cp-0001")
+
+    assert apply.returncode == 0, apply.stderr
+    assert "Rollback apply complete" in apply.stdout
+    assert (repo / "notes.txt").read_text() == "before\n"
+    rollback_result = read_json(run_dir / "checkpoints" / "cp-0001" / "rollback-result.json")
+    assert rollback_result["schema_version"] == "rollback-result.v1"
+    assert rollback_result["status"] == "applied"
+    assert rollback_result["verification"]["status"] == "valid"
+    anchor = run_cli("verify-anchor", str(run_dir))
+    assert anchor.returncode == 0, anchor.stdout
+
+
 def test_security_guards_reject_path_traversal_and_unsafe_undo(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()

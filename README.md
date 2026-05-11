@@ -37,20 +37,22 @@ python -m safeloop.cli watch --loop \
 
 The command prints the run directory, normally under `~/.safeloop/runs/<run-id>/` unless `--run-root` is provided.
 
-Inspect the timeline, verify the tamper-evident artifact packet, then dry-run local undo:
+Inspect the timeline, verify the tamper-evident artifact packet, then create an operator-readable rollback plan:
 
 ```bash
 python -m safeloop.cli timeline RUN_DIR
 python -m safeloop.cli timeline RUN_DIR --json
 python -m safeloop.cli timeline RUN_DIR --checkpoint cp-0001
 python -m safeloop.cli verify-artifacts RUN_DIR
-python -m safeloop.cli undo RUN_DIR RUN_ID cp-0001 --dry-run
+python -m safeloop.cli rollback plan RUN_DIR RUN_ID cp-0001
 ```
 
-Apply local undo only after reviewing the dry-run output:
+Apply covered local-file rollback only after reviewing `rollback-plan.json`:
 
 ```bash
-python -m safeloop.cli undo RUN_DIR RUN_ID cp-0001 --apply
+python -m safeloop.cli rollback apply RUN_DIR RUN_ID cp-0001
+
+# `undo RUN_DIR RUN_ID cp-0001 --dry-run|--apply` remains available as a compatibility alias.
 ```
 
 Or run the checked-in demo script for the release packet flow (`watch-run` → `timeline` → `verify-artifacts` → `undo --dry-run`):
@@ -92,7 +94,8 @@ Implemented surfaces:
 - Checkpoint parent binding: each checkpoint records parent, sequence, allocation mode, previous state digest, current state digest, and artifact digests.
 - `verify-artifacts`: checks timeline hash chain, bound artifact digests, checkpoint parent chain, process-result digest, command capture completeness, invalid partial finalization, and run final hash; writes `verification/verify-artifacts-result.json`.
 - `timeline`: prints run status, command metadata, checkpoint table, undo status, side-effect status, and latest hash.
-- `undo`: demo-ready dry-run/apply UX for covered local file creations, including operator-readable artifact paths for `undo-preflight.json`, `rollback-plan.json`, and `undo-result.json`.
+- `rollback plan` / `rollback apply`: baseline operator UX for covered local file changes. `rollback plan` writes deterministic `rollback-plan.json` (`schema_version: rollback-plan.v1`) and `rollback apply` writes checkpoint-local `rollback-result.json` (`schema_version: rollback-result.v1`) with post-apply `verify-artifacts` status. External side effects are classified for manual review/compensation, never exact rollback.
+- `undo`: compatibility alias for the older dry-run/apply UX and artifact paths (`undo-preflight.json`, `rollback-plan.json`, and `undo-result.json`).
 - Existing runtime boundary demos, including repeated resume, remain documented as local lifecycle examples alongside the watchdog RC.
 
 ## Compensation is not rollback

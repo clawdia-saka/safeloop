@@ -1,43 +1,58 @@
-# Approval lifecycle notes
+# Approval lifecycle
 
-This note describes the 0.1.0 control-plane approval model as implemented today and separates it from planned lifecycle work.
+SafeLoop now has two approval layers:
 
-## Implemented record shape
+- `ControlPlaneRegistry`: lookup/audit registry for users, tokens, approval rows, and events.
+- `SQLiteApprovalLifecycleStore`: durable lifecycle state machine for runtime enforcement.
 
-Approval records are stored in the control-plane SQLite registry as immutable inserts with these statuses allowed by schema:
+Runtime enforcement must use a lifecycle store. A lookup-only `ControlPlaneRegistry` is intentionally rejected by `Runtime.run(...)` for mutating actions because it cannot atomically reserve or complete approvals.
 
-- `pending`
-- `approved`
-- `rejected`
-- `expired`
+## Durable state machine
 
-Each record includes a `signed_payload` and `signature`. The HMAC covers the approval ID, action, subject, status, requester, and creation timestamp.
+`SQLiteApprovalLifecycleStore(path, key, ttl=...)` persists the current approval state in the existing `approvals` table and appends every transition to `approval_events`.
 
-## Current MVP flow
+Supported states:
 
-1. Construct an `ApprovalRecord` with the intended status, action, subject, requester, and timestamp.
-2. Sign it with `sign_approval_record(record, key)`.
-3. Optionally verify it with `verify_approval_record(record, key)` before persistence.
-4. Persist it with `ControlPlaneRegistry.record_approval(...)` or with `record_approval_as(...)` after RBAC enforcement.
-5. Inspect persisted records with `list_approvals(...)`, `get_approval(...)`, or the static dashboard renderer.
+- `REQUESTED`
+- `APPROVED`
+- `IN_FLIGHT`
+- `REJECTED`
+- `EXECUTED`
+- `EXPIRED`
+- `REVOKED`
 
-The current helper `record_approval_as` requires the `approve` permission. Admin and operator roles have that permission; viewer does not.
+Normal execution flow:
 
-## Important 0.1.0 limitation
+1. `request(...)` creates a signed `REQUESTED` approval.
+2. `approve(...)` transitions `REQUESTED -> APPROVED`.
+3. `reserve_for_execution(...)` verifies the presented record against the stored row, checks the HMAC, checks TTL/scope, and transitions `APPROVED -> IN_FLIGHT`.
+4. `complete_execution(...)` verifies the in-flight record and transitions `IN_FLIGHT -> EXECUTED`.
 
-0.1.0 does not yet implement a state-transition engine. The registry stores approval records and enforces status constraints, but it does not yet provide a first-class API that transitions an existing approval from `pending` to `approved`, `rejected`, or `expired`.
+Single-step consumers can call `execute_once(...)`, which verifies and transitions `APPROVED -> EXECUTED` atomically.
 
-Until lifecycle APIs land, callers should treat approval records as signed audit entries and avoid implying that SafeLoop automatically gates or resumes runtime actions based on registry contents.
+Reject/revoke flows:
 
-## Expected future lifecycle
+- `reject(...)` can terminally reject pending/approved work.
+- `revoke(...)` can terminally revoke requested/approved/in-flight work.
+- Expired records fail closed and are durably marked `EXPIRED` when a transition/validation observes them after TTL.
 
-Planned follow-up work should define explicit operations such as:
+## Fail-closed validation
 
-- request approval
-- approve approval
-- reject approval
-- expire stale approval
-- resume a run only after a verified approval decision
-- preserve a transition history or append-only decision log
+Every transition re-reads the stored row. The store rejects:
 
-Those operations should verify the HMAC, enforce RBAC at each transition, and make replay/tamper behavior explicit.
+- unknown approvals;
+- stale presented records after any status change;
+- tampered `signed_payload` or HMAC signatures;
+- expired approvals, which are marked `EXPIRED`;
+- scope mismatches for requester/action/subject;
+- replay attempts after reservation or execution.
+
+The signed payload remains deterministic JSON over approval ID, action, subject, status, requester, and creation timestamp.
+
+## Restart behavior
+
+The lifecycle store is SQLite-backed. `APPROVED`, `IN_FLIGHT`, and `EXECUTED` states survive process restarts. Runtime startup can reserve a previously approved record after restart, and resume validation can verify a persisted `IN_FLIGHT` approval when the runtime still has the checkpoint needed to resume safely.
+
+## Boundary notes
+
+This work does not add hosted auth, KMS, remote transparency logs, or rollback CLI changes. It is a local durable lifecycle foundation and runtime enforcement path.

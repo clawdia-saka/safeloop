@@ -8,6 +8,7 @@ from pathlib import Path
 from safeloop.agent_watchdog import atomic_json, rollback_to_start, timeline_summary, undo, verify_run, watch_run
 from safeloop.control_plane.anchor_audit import audit_control_plane_anchors
 from safeloop.local_anchor import verify_local_anchor
+from safeloop.side_effect_ledger import read_side_effect_events
 
 
 def _rollback_artifact(run_dir: Path, checkpoint_id: str, res: dict, *, apply: bool) -> dict:
@@ -46,6 +47,117 @@ def _rollback_artifact(run_dir: Path, checkpoint_id: str, res: dict, *, apply: b
         artifact["verification"] = verify_run(run_dir)
         artifact["undo_result_path"] = res.get("undo_result_path")
     return artifact
+
+
+def _load_json(path: Path) -> dict:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _checkpoint_changes(cp: Path) -> dict[str, list[str]]:
+    restore = _load_json(cp / "restore-manifest.json") if (cp / "restore-manifest.json").exists() else {}
+    return {
+        "created": sorted(restore.get("created_files", [])),
+        "modified": sorted(restore.get("modified_files", [])),
+        "deleted": sorted(restore.get("deleted_files", [])),
+    }
+
+
+def _side_effect_review(run_dir: Path) -> dict:
+    events = read_side_effect_events(run_dir / "side-effects.jsonl")
+    count = len(events)
+    kinds = sorted({str(e.get("type") or e.get("kind") or e.get("effect_type") or "unknown") for e in events})
+    return {
+        "count": count,
+        "types": kinds,
+        "support_status": "manual_review",
+        "compensation_required": count > 0,
+        "exact_rollback": False,
+        "raw_payloads_included": False,
+        "note": "External side effects are not exact rollback; review source ledger manually for compensation.",
+    }
+
+
+def _review_summary(run_dir: Path) -> dict:
+    run_dir = run_dir.resolve()
+    run = _load_json(run_dir / "run.json")
+    checkpoints = []
+    recommended_commands = []
+    blockers: list[dict] = []
+    for item in timeline_summary(run_dir)["checkpoints"]:
+        cp_dir = run_dir / "checkpoints" / item["id"]
+        changes = _checkpoint_changes(cp_dir)
+        rollback_target = {
+            "run_id": run["run_id"],
+            "checkpoint_id": item["id"],
+            "plan_command": f"safeloop rollback plan {run_dir} {run['run_id']} {item['id']}",
+            "apply_command": f"safeloop rollback apply {run_dir} {run['run_id']} {item['id']}",
+        }
+        if item.get("blocked_reason"):
+            blockers.append({"checkpoint_id": item["id"], "reason": item["blocked_reason"]})
+        checkpoints.append({
+            "checkpoint_id": item["id"],
+            "parent_checkpoint_id": item.get("parent"),
+            "timestamp": item.get("timestamp"),
+            "rollback_support_status": item.get("undo_status", "unknown"),
+            "digest_status": item.get("digest_status"),
+            "blocker": item.get("blocked_reason"),
+            "changed_files": changes,
+            "rollback_target": rollback_target,
+        })
+        recommended_commands.extend([
+            {"checkpoint_id": item["id"], "purpose": "preflight rollback plan", "command": rollback_target["plan_command"]},
+            {"checkpoint_id": item["id"], "purpose": "apply rollback after operator approval", "command": rollback_target["apply_command"]},
+        ])
+    recommended_commands.extend([
+        {"checkpoint_id": "START", "purpose": "preflight rollback-to-start plan", "command": f"safeloop rollback plan {run_dir} {run['run_id']} --to-start"},
+        {"checkpoint_id": "START", "purpose": "apply rollback-to-start after operator approval", "command": f"safeloop rollback apply {run_dir} {run['run_id']} --to-start"},
+    ])
+    summary = {
+        "schema_version": "review-summary.v1",
+        "run": {
+            "run_id": run.get("run_id"),
+            "task_id": run.get("task_id"),
+            "status": run.get("status"),
+            "exit_code": run.get("exit_code"),
+            "checkpoint_count": run.get("checkpoint_count"),
+        },
+        "checkpoints": checkpoints,
+        "rollback_targets": [c["rollback_target"] for c in checkpoints],
+        "changed_files": {
+            "created": sorted({p for c in checkpoints for p in c["changed_files"]["created"]}),
+            "modified": sorted({p for c in checkpoints for p in c["changed_files"]["modified"]}),
+            "deleted": sorted({p for c in checkpoints for p in c["changed_files"]["deleted"]}),
+        },
+        "side_effects": _side_effect_review(run_dir),
+        "rollback_support_status": "blocked" if blockers else "review_required",
+        "blockers": blockers,
+        "recommended_commands": recommended_commands,
+    }
+    atomic_json(run_dir / "review-summary.json", summary)
+    return summary
+
+
+def _print_review(summary: dict) -> None:
+    run = summary["run"]
+    print("SafeLoop rollback review")
+    print(f"run id: {run['run_id']}")
+    print(f"task id: {run['task_id']}")
+    print(f"status: {run['status']}")
+    print(f"checkpoints: {run['checkpoint_count']}")
+    print("checkpoints:")
+    for cp in summary["checkpoints"]:
+        print(f"  {cp['checkpoint_id']} parent={cp['parent_checkpoint_id']} rollback={cp['rollback_support_status']} blocker={cp['blocker']}")
+        print("    changed files:")
+        for kind, paths in cp["changed_files"].items():
+            print(f"      {kind}: {', '.join(paths) if paths else '-'}")
+    se = summary["side_effects"]
+    print("side effects:")
+    print(f"  support: {se['support_status']}")
+    print(f"  compensation: {'compensation_required' if se['compensation_required'] else 'none_recorded'}")
+    print(f"  exact rollback: {str(se['exact_rollback']).lower()}")
+    print("recommended commands:")
+    for cmd in summary["recommended_commands"]:
+        print(f"  {cmd['command']}")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -87,6 +199,9 @@ def main(argv: list[str] | None = None) -> int:
     g = u.add_mutually_exclusive_group()
     g.add_argument("--dry-run", action="store_true")
     g.add_argument("--apply", action="store_true")
+    r = sub.add_parser("review")
+    r.add_argument("run_dir")
+    r.add_argument("--json", action="store_true")
     rb = sub.add_parser("rollback")
     rb_sub = rb.add_subparsers(dest="rollback_cmd", required=True)
     rb_plan = rb_sub.add_parser("plan")
@@ -162,6 +277,13 @@ def main(argv: list[str] | None = None) -> int:
                 f"  {c['id']} parent={c['parent']} digest={c['digest_status']} undo={c['undo_status']} "
                 f"blocked={c['blocked_reason']} side_effects={c['side_effect_status']} timestamp={c['timestamp']}"
             )
+        return 0
+    if args.cmd == "review":
+        summary = _review_summary(Path(args.run_dir))
+        if args.json:
+            print(json.dumps(summary, indent=2, sort_keys=True))
+        else:
+            _print_review(summary)
         return 0
     if args.cmd == "rollback":
         run_dir = Path(args.run_dir)

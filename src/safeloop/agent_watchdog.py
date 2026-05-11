@@ -515,7 +515,30 @@ def _reject_symlink(path: Path, rel: str) -> dict[str, str] | None:
     return None
 
 
-def _safe_unlink_for_undo(path: Path, rel: str) -> dict[str, str] | None:
+def _reject_symlink_ancestor(repo: Path, path: Path, rel: str) -> dict[str, str] | None:
+    repo_root = repo.resolve()
+    try:
+        parent = path.parent.relative_to(repo_root)
+    except ValueError:
+        raise ValueError(f"unsafe restore path: {rel}")
+    cur = repo_root
+    for part in parent.parts:
+        cur = cur / part
+        try:
+            cur.lstat()
+        except FileNotFoundError:
+            break
+        if os.path.islink(cur):
+            return {"file": rel, "code": "symlink_restore_ancestor", "expected": "non-symlink ancestor", "actual": str(cur.relative_to(repo_root))}
+        if not os.path.isdir(cur):
+            return {"file": rel, "code": "restore_ancestor_not_directory", "expected": "directory ancestor", "actual": str(cur.relative_to(repo_root))}
+    return None
+
+
+def _safe_unlink_for_undo(repo: Path, path: Path, rel: str) -> dict[str, str] | None:
+    ancestor_blocker = _reject_symlink_ancestor(repo, path, rel)
+    if ancestor_blocker is not None:
+        return ancestor_blocker
     blocker = _reject_symlink(path, rel)
     if blocker is not None:
         return blocker
@@ -524,17 +547,29 @@ def _safe_unlink_for_undo(path: Path, rel: str) -> dict[str, str] | None:
     return None
 
 
-def _safe_write_for_undo(path: Path, rel: str, data: bytes) -> dict[str, str] | None:
+def _safe_write_for_undo(repo: Path, path: Path, rel: str, data: bytes) -> dict[str, str] | None:
+    ancestor_blocker = _reject_symlink_ancestor(repo, path, rel)
+    if ancestor_blocker is not None:
+        return ancestor_blocker
     blocker = _reject_symlink(path, rel)
     if blocker is not None:
         return blocker
     path.parent.mkdir(parents=True, exist_ok=True)
+    ancestor_blocker = _reject_symlink_ancestor(repo, path, rel)
+    if ancestor_blocker is not None:
+        return ancestor_blocker
     parent_blocker = _reject_symlink(path.parent, rel)
     if parent_blocker is not None:
         return parent_blocker
     tmp = path.parent / f".{path.name}.safeloop-undo.tmp"
+    ancestor_blocker = _reject_symlink_ancestor(repo, tmp, rel)
+    if ancestor_blocker is not None:
+        return ancestor_blocker
     tmp.write_bytes(data)
     try:
+        ancestor_blocker = _reject_symlink_ancestor(repo, path, rel)
+        if ancestor_blocker is not None:
+            return ancestor_blocker
         blocker = _reject_symlink(path, rel)
         if blocker is not None:
             return blocker
@@ -591,16 +626,16 @@ def undo(run_dir: Path, run_id: str, checkpoint_id: str, apply: bool = False) ->
         apply_blockers: list[dict[str, str]] = []
         for f in created:
             p = _safe_repo_path(repo, f)
-            blocker = _safe_unlink_for_undo(p, f)
+            blocker = _safe_unlink_for_undo(repo, p, f)
             if blocker is not None:
                 apply_blockers.append(blocker)
         for f in modified + deleted:
             blob = restore.get("before_blobs", {}).get(f)
             p = _safe_repo_path(repo, f)
             if blob is None:
-                blocker = _safe_unlink_for_undo(p, f)
+                blocker = _safe_unlink_for_undo(repo, p, f)
             else:
-                blocker = _safe_write_for_undo(p, f, safe_child_file(cp, blob).read_bytes())
+                blocker = _safe_write_for_undo(repo, p, f, safe_child_file(cp, blob).read_bytes())
             if blocker is not None:
                 apply_blockers.append(blocker)
         if apply_blockers:

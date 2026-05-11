@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -255,3 +256,30 @@ def test_undo_apply_blocks_symlink_swap_after_preflight_without_touching_target(
     assert res["status"] == "blocked"
     assert res["blocked_reason"] == "symlink_restore_target"
     assert symlink_target.read_text(encoding="utf-8") == "do not overwrite\n"
+
+
+def test_undo_apply_blocks_intermediate_symlink_ancestor_swap_after_preflight(tmp_path: Path, monkeypatch) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "a" / "d").mkdir(parents=True)
+    (repo / "a" / "d" / "file.txt").write_text("before\n", encoding="utf-8")
+    (repo / "agent.py").write_text("from pathlib import Path\nPath('a/d/file.txt').write_text('after\\n')\n")
+    result = run_cli("watch-run", "--task-id", "ancestor-symlink-toctou", "--repo", str(repo), "--run-root", str(tmp_path / "runs"), "--", sys.executable, "agent.py")
+    assert result.returncode == 0
+    run_dir = Path([line.split(":", 1)[1].strip() for line in result.stdout.splitlines() if line.startswith("Run dir:")][0])
+    outside = tmp_path / "outside"
+    (outside / "d").mkdir(parents=True)
+    (outside / "d" / "file.txt").write_text("do not overwrite\n", encoding="utf-8")
+
+    def swap_ancestor_after_preflight() -> None:
+        shutil.rmtree(repo / "a")
+        (repo / "a").symlink_to(outside, target_is_directory=True)
+
+    monkeypatch.setattr(aw, "_UNDO_APPLY_TEST_HOOK", swap_ancestor_after_preflight)
+    run_id = read_json(run_dir / "run.json")["run_id"]
+
+    res = aw.undo(run_dir, run_id, "cp-0001", apply=True)
+
+    assert res["status"] == "blocked"
+    assert res["blocked_reason"] == "symlink_restore_ancestor"
+    assert (outside / "d" / "file.txt").read_text(encoding="utf-8") == "do not overwrite\n"

@@ -91,6 +91,10 @@ def snapshot(repo: Path) -> dict[str, str]:
     return {str(r): sha_file(repo / r) for r in rel_files(repo)}
 
 
+def snapshot_bytes(repo: Path) -> dict[str, bytes]:
+    return {str(r): (repo / r).read_bytes() for r in rel_files(repo)}
+
+
 def _source_evidence(repo: Path, files: list[str]) -> list[dict[str, Any]]:
     evidence: list[dict[str, Any]] = []
     for name in sorted(files):
@@ -318,7 +322,7 @@ def _baseline_unsupported_restore_entry(run_dir: Path, name: str) -> dict[str, A
     return None
 
 
-def _capture_before_blobs(cp: Path, repo: Path, before: dict[str, str], files: list[str], run_dir: Path) -> tuple[dict[str, str | None], dict[str, dict[str, Any]]]:
+def _capture_before_blobs(cp: Path, repo: Path, before: dict[str, str], files: list[str], run_dir: Path, before_bytes: dict[str, bytes] | None = None) -> tuple[dict[str, str | None], dict[str, dict[str, Any]]]:
     blobs: dict[str, str | None] = {}
     entries: dict[str, dict[str, Any]] = {}
     for name in files:
@@ -330,6 +334,17 @@ def _capture_before_blobs(cp: Path, repo: Path, before: dict[str, str], files: l
                 entries[name] = {"undo_supported": False, "unsupported_reason": RESTORE_BLOB_TOO_LARGE, "size_bytes": size, "limit_bytes": MAX_RESTORE_BLOB_BYTES}
                 continue
             data = prior.read_bytes()
+        elif before_bytes is not None and name in before_bytes:
+            data = before_bytes[name]
+            size = len(data)
+            if size > MAX_RESTORE_BLOB_BYTES:
+                blobs[name] = None
+                entries[name] = {"undo_supported": False, "unsupported_reason": RESTORE_BLOB_TOO_LARGE, "size_bytes": size, "limit_bytes": MAX_RESTORE_BLOB_BYTES}
+                continue
+            if sha_bytes(data) != before.get(name):
+                blobs[name] = None
+                entries[name] = {"undo_supported": False, "unsupported_reason": "restore_blob_missing"}
+                continue
         else:
             path = _safe_repo_path(repo, name)
             if not path.exists() or path.is_symlink() or not path.is_file():
@@ -399,13 +414,16 @@ def create_checkpoint(
     parent: str | None,
     before: dict[str, str],
     after: dict[str, str],
+    before_bytes: dict[str, bytes] | None = None,
 ) -> None:
     cp = run_dir / "checkpoints" / cid
     cp.mkdir(parents=True, exist_ok=True)
     created = [f for f in after if f not in before]
     modified = [f for f in after if f in before and before[f] != after[f]]
     deleted = [f for f in before if f not in after]
-    before_blobs, restore_entries = _capture_before_blobs(cp, repo, before, modified + deleted, run_dir)
+    if before_bytes is None:
+        before_bytes = {}
+    before_blobs, restore_entries = _capture_before_blobs(cp, repo, before, modified + deleted, run_dir, before_bytes)
     checkpoint = {
         "schema_version": "checkpoint.v1",
         "checkpoint_id": cid,

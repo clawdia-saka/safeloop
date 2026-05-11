@@ -143,3 +143,15 @@ python -m build --wheel
 For the public MVP readiness boundary, see [`docs/public-mvp-readiness.md`](docs/public-mvp-readiness.md). Historical watchdog contract notes remain in [`docs/safeloop-0.0.3-agent-watchdog-rc.md`](docs/safeloop-0.0.3-agent-watchdog-rc.md) and [`docs/release-notes-0.0.3.md`](docs/release-notes-0.0.3.md).
 
 For the 0.1.0 local control-plane MVP, see [`docs/control-plane.md`](docs/control-plane.md), [`docs/approval-lifecycle.md`](docs/approval-lifecycle.md), [`docs/control-plane-threat-model.md`](docs/control-plane-threat-model.md), and [`docs/release-notes-0.1.0.md`](docs/release-notes-0.1.0.md). A local demo is in [`examples/control-plane-local-demo/`](examples/control-plane-local-demo/).
+
+## Rollback public readiness skeleton
+
+The public readiness skeleton for SafeLoop 0.1.4 demonstrates the local rollback workflow end to end:
+watch a long-running local task, review and explain rollback groups, plan/apply rollback to start,
+plan/apply selected files, plan/apply selected hunks, and run `policy-check`. The scripted demo is
+`examples/rollback_selective_demo.sh`.
+
+Boundary language for public docs: exact rollback is only claimed for covered local file changes.
+External side effects require compensation or manual review and are not exact rollback. Local artifacts
+are tamper-evident review aids, not tamper-proof guarantees. SafeLoop does not claim a remote
+transparency log unless one is explicitly implemented and configured.

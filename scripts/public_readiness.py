@@ -12,6 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 DOC = ROOT / "docs" / "public-mvp-readiness.md"
 PYPROJECT = ROOT / "pyproject.toml"
 CLI = ROOT / "src" / "safeloop" / "cli.py"
+DEMO = ROOT / "examples" / "rollback_selective_demo.sh"
 
 REQUIRED_DOC_MARKERS = [
     "# SafeLoop Public MVP Readiness Packet",
@@ -63,9 +64,11 @@ def check() -> tuple[int, list[str]]:
 
     cli_text = CLI.read_text(encoding="utf-8")
     demo_verifiers = ["verify-artifacts", "verify-anchor", "audit-control-plane-anchors"]
+    readiness_commands = ["review", "explain", "policy-check", "rollback"]
     missing_verifiers = [name for name in demo_verifiers if name not in cli_text]
+    missing_commands = [name for name in readiness_commands if f'add_parser("{name}")' not in cli_text]
     cli_help_failures: list[str] = []
-    for name in demo_verifiers:
+    for name in [*demo_verifiers, *readiness_commands]:
         proc = subprocess.run(
             [sys.executable, "-m", "safeloop.cli", name, "--help"],
             cwd=ROOT,
@@ -77,8 +80,19 @@ def check() -> tuple[int, list[str]]:
             cli_help_failures.append(name)
     if missing_verifiers:
         failures.append("missing demo verifier CLI(s): " + ", ".join(missing_verifiers))
+    if missing_commands:
+        failures.append("missing readiness CLI(s): " + ", ".join(missing_commands))
     if cli_help_failures:
-        failures.append("demo verifier CLI help failed: " + ", ".join(cli_help_failures))
+        failures.append("readiness CLI help failed: " + ", ".join(cli_help_failures))
+    if not DEMO.exists():
+        failures.append(f"missing demo script: {DEMO.relative_to(ROOT)}")
+    else:
+        demo_text = DEMO.read_text(encoding="utf-8")
+        for marker in ["watch --loop", "rollback plan", "--to-start", "--files", "--hunks", "policy-check"]:
+            if marker not in demo_text:
+                failures.append(f"demo script missing marker: {marker}")
+        if "compens" in cli_text and "compens" not in demo_text:
+            failures.append("compensation CLI appears present but demo lacks compensation/manual-review hook")
 
     version = project_version()
     if not re.fullmatch(r"\d+\.\d+\.\d+", version):
@@ -86,6 +100,8 @@ def check() -> tuple[int, list[str]]:
 
     messages.append(f"version={version}")
     messages.append("demo-verifier=present" if not missing_verifiers else "demo-verifier=missing")
+    messages.append("readiness-cli=present" if not missing_commands else "readiness-cli=missing")
+    messages.append("demo-script=present" if DEMO.exists() else "demo-script=missing")
     messages.append("demo-verifier-help=ok" if not cli_help_failures else "demo-verifier-help=failed")
     messages.append("release-tag=not-created")
     messages.append("build-gate=pyproject-present")

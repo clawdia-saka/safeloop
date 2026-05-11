@@ -29,7 +29,7 @@ _ALLOWED_TRANSITIONS: dict[JournalState, set[JournalState]] = {
         JournalState.COMPENSATED,
         JournalState.COMPENSATION_FAILED,
     },
-    JournalState.RESUMABLE: {JournalState.EXECUTING},
+    JournalState.RESUMABLE: {JournalState.EXECUTING, JournalState.FAILED},
     JournalState.APPLIED: set(),
     JournalState.COMPENSATED: set(),
     JournalState.COMPENSATION_FAILED: set(),
@@ -42,6 +42,7 @@ class JournalReason(str, Enum):
     APPROVAL_ERROR = "approval_error"
     APPROVAL_BLOCK = "approval_block"
     APPROVAL_COMPLETION_ERROR = "approval_completion_error"
+    RESUME_APPROVAL_BLOCK = "resume_approval_block"
     HANDOFF_REQUESTED = "handoff_requested"
     EXECUTION_ERROR = "execution_error"
     COMPENSATION_ERROR = "compensation_error"

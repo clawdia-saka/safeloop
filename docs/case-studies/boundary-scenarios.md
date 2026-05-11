@@ -38,4 +38,4 @@ What they should help a reader answer is:
 - `boundary` means the example demonstrates an honest edge where the runtime must be precise about ownership, cleanup, or resumability.
 - `unsupported` means the repo is explaining a common misread or overclaim, not promising that the current runtime solves it.
 
-Issue #12 will later make similar scope/boundary labels explicit in the viewer/API. For issue #11, the examples and docs now carry that classification directly.
+The viewer/API already expose related `scope` and `boundaries` fields. This document keeps `in_scope`, `boundary`, and `unsupported` as reader-facing example classifications so unsupported rollback expectations stay clearly separate from emitted API enums.

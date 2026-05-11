@@ -80,6 +80,12 @@ def derive_annotations(
                 BoundaryAnnotation.PRE_EXECUTION,
                 BoundaryAnnotation.TERMINAL,
             ]
+        if normalized_reason is JournalReason.RESUME_APPROVAL_BLOCK:
+            return ScopeAnnotation.BOUNDARY_CASE, [
+                BoundaryAnnotation.CHECKPOINT_RECORDED,
+                BoundaryAnnotation.SIDE_EFFECTS_POSSIBLE,
+                BoundaryAnnotation.TERMINAL,
+            ]
         if normalized_reason is JournalReason.APPROVAL_COMPLETION_ERROR:
             return ScopeAnnotation.BOUNDARY_CASE, [
                 BoundaryAnnotation.SIDE_EFFECTS_POSSIBLE,
@@ -162,6 +168,9 @@ def derive_terminal_semantics(
         if normalized_reason in {JournalReason.APPROVAL_BLOCK, JournalReason.APPROVAL_ERROR}:
             boundary = TerminalBoundary.APPROVAL_BOUNDARY
             note = "Failure happened before executor entry."
+        elif normalized_reason is JournalReason.RESUME_APPROVAL_BLOCK:
+            boundary = TerminalBoundary.CHECKPOINT_RESUME
+            note = "Resume approval failed after a checkpoint; executor is not re-entered, but prior side effects may exist."
         elif normalized_reason is JournalReason.APPROVAL_COMPLETION_ERROR:
             boundary = TerminalBoundary.EXECUTION_FAILURE
             note = "Executor completed, but approval completion failed; side effects may already exist."

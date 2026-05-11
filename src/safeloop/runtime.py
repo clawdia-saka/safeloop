@@ -149,13 +149,15 @@ class Runtime:
                     approvals=control_plane_approvals,
                     approval_id=approval_id,
                     approval_key=approval_key,
+                    now=approval_now,
                 )
             except ApprovalGateError as exc:
+                self._checkpoints.pop(run_id, None)
                 return self._append(
                     run_id,
                     action,
                     JournalState.FAILED,
-                    reason=JournalReason.APPROVAL_BLOCK,
+                    reason=JournalReason.RESUME_APPROVAL_BLOCK,
                     error=str(exc),
                 )
             self._append(run_id, action, JournalState.EXECUTING)
@@ -283,6 +285,7 @@ class Runtime:
         approvals: object | None,
         approval_id: str | None,
         approval_key: bytes | None,
+        now: datetime | None,
     ) -> ApprovalRecord | None:
         if action.effect is EffectClass.READ_ONLY or approvals is None:
             return None
@@ -300,7 +303,7 @@ class Runtime:
                 record,
                 action=action.name,
                 subject=action.target,
-                now=datetime.now().astimezone(),
+                now=now if now is not None else datetime.now().astimezone(),
             )
         except ApprovalValidationError as exc:
             raise ApprovalGateError(str(exc)) from exc

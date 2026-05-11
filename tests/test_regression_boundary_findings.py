@@ -161,10 +161,15 @@ def test_regression_repeated_resume_keeps_checkpoint_truth_local_only(tmp_path) 
 
 def test_regression_unsupported_rollback_expectation_stays_docs_only() -> None:
     root = Path(__file__).resolve().parents[1]
+    readme = (root / "README.md").read_text()
     boundary_doc = (root / "docs/case-studies/boundary-scenarios.md").read_text()
     faq_doc = (root / "docs/faq.md").read_text()
 
+    assert "## Compensation is not rollback" in readme
+    assert "does not mean exact rollback" in readme
     assert "Unsupported rollback expectation" in boundary_doc
+    assert "Issue #12 will later" not in boundary_doc
+    assert "viewer/API already expose" in boundary_doc
     assert "| `unsupported` |" in boundary_doc or "| `unsupported` means" in boundary_doc
     assert "Compensation should not be misread as perfect rollback" in boundary_doc
     assert "does **not** claim that external side effects were perfectly rolled back" in faq_doc

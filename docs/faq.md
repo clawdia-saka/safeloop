@@ -4,9 +4,15 @@
 
 No. SafeLoop narrows scope to execution discipline around actions: explicit action description, effect classification, journaled lifecycle state, and clearer recovery semantics.
 
-## Does SafeLoop guarantee rollback?
+## Compensation is not rollback
 
 No. SafeLoop distinguishes between reversible, compensatable, and irreversible effects so the system can be honest about what recovery might mean. Compensation is a defined cleanup path, not time travel.
+
+| Term | Means | Does not mean |
+| --- | --- | --- |
+| Local rollback | A reviewed rollback operation for covered local file changes or a truly reversible write. | A blanket promise that external side effects disappeared. |
+| Compensation | A configured cleanup hook SafeLoop may call after a compensatable action has begun. | Exact rollback, time travel, or “rollback guaranteed.” |
+| `compensation_failed` | Cleanup was attempted but the compensation hook itself failed. | Hidden rollback success or a generic failure with no operator follow-up needed. |
 
 The easiest way to read the current semantics correctly is:
 

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import difflib
 import json
 import os
 import re
@@ -22,6 +23,8 @@ REQUIRED_CHECKPOINT_ARTIFACTS = {
     "checkpoint.json",
     "manifest.json",
     "diff.patch",
+    "changes.patch",
+    "hunk-manifest.json",
     "restore-manifest.json",
     "summary.md",
 }
@@ -166,6 +169,121 @@ def make_diff(before: dict[str, str], after: dict[str, str]) -> str:
         elif before[f] != after[f]:
             lines.append(f"M {f}\n")
     return "".join(lines)
+
+
+MAX_HUNK_TEXT_BYTES = 1024 * 1024
+
+
+def _is_binary(data: bytes) -> bool:
+    return b"\x00" in data
+
+
+def _decode_text(data: bytes) -> str | None:
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+
+
+def _operation(name: str, before: dict[str, str], after: dict[str, str]) -> str:
+    if name not in before:
+        return "created"
+    if name not in after:
+        return "deleted"
+    return "modified"
+
+
+def _parse_hunk_header(line: str) -> tuple[int, int, int, int]:
+    match = re.match(r"@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@", line)
+    if not match:
+        raise ValueError(f"malformed hunk header: {line}")
+    old_start = int(match.group(1))
+    old_lines = int(match.group(2) or "1")
+    new_start = int(match.group(3))
+    new_lines = int(match.group(4) or "1")
+    return old_start, old_lines, new_start, new_lines
+
+
+def make_unified_diff_and_hunk_manifest(
+    cid: str,
+    repo: Path,
+    before: dict[str, str],
+    after: dict[str, str],
+    before_bytes: dict[str, bytes],
+) -> tuple[str, dict[str, Any]]:
+    patch_lines: list[str] = []
+    hunks: list[dict[str, Any]] = []
+    hunk_seq = 1
+    for name in sorted(set(before) | set(after)):
+        if before.get(name) == after.get(name):
+            continue
+        op = _operation(name, before, after)
+        old_data = before_bytes.get(name, b"") if op != "created" else b""
+        new_data = (repo / name).read_bytes() if op != "deleted" else b""
+        binary = _is_binary(old_data) or _is_binary(new_data)
+        unsupported_reason = None
+        old_text = _decode_text(old_data) if not binary else None
+        new_text = _decode_text(new_data) if not binary else None
+        if old_text is None or new_text is None:
+            binary = True
+            unsupported_reason = "binary_file"
+        elif len(old_data) > MAX_HUNK_TEXT_BYTES or len(new_data) > MAX_HUNK_TEXT_BYTES:
+            unsupported_reason = "large_file"
+
+        if binary:
+            patch_lines.extend([f"diff --git a/{name} b/{name}\n", f"Binary files a/{name} and b/{name} differ\n"])
+            hunks.append({
+                "hunk_id": f"hunk-{hunk_seq:04d}",
+                "checkpoint_id": cid,
+                "path": name,
+                "operation": op,
+                "old_start": 0,
+                "old_lines": 0,
+                "new_start": 0,
+                "new_lines": 0,
+                "before_text_hash": None,
+                "after_text_hash": None,
+                "binary": True,
+                "undo_supported": False,
+                "unsupported_reason": unsupported_reason or "binary_file",
+            })
+            hunk_seq += 1
+            continue
+
+        assert old_text is not None and new_text is not None
+        old_lines = old_text.splitlines(keepends=True)
+        new_lines = new_text.splitlines(keepends=True)
+        fromfile = "/dev/null" if op == "created" else f"a/{name}"
+        tofile = "/dev/null" if op == "deleted" else f"b/{name}"
+        diff = list(difflib.unified_diff(old_lines, new_lines, fromfile=fromfile, tofile=tofile, lineterm=""))
+        normalized = [line if line.endswith("\n") else line + "\n" for line in diff]
+        patch_lines.extend(normalized)
+        for line in normalized:
+            if not line.startswith("@@ "):
+                continue
+            old_start, old_count, new_start, new_count = _parse_hunk_header(line)
+            if op == "created":
+                old_start = 0
+            if op == "deleted":
+                new_start = 0
+            hunks.append({
+                "hunk_id": f"hunk-{hunk_seq:04d}",
+                "checkpoint_id": cid,
+                "path": name,
+                "operation": op,
+                "old_start": old_start,
+                "old_lines": old_count,
+                "new_start": new_start,
+                "new_lines": new_count,
+                "before_text_hash": sha_bytes(old_data),
+                "after_text_hash": sha_bytes(new_data),
+                "binary": False,
+                "undo_supported": unsupported_reason is None,
+                "unsupported_reason": unsupported_reason,
+            })
+            hunk_seq += 1
+    manifest = {"schema_version": "hunk-manifest.v1", "checkpoint_id": cid, "hunks": hunks}
+    return "".join(patch_lines), manifest
 
 
 def _blob_path(cp: Path, digest: str) -> Path:
@@ -319,12 +437,15 @@ def create_checkpoint(
     }
     atomic_json(cp / "manifest.json", manifest)
     atomic_text(cp / "diff.patch", make_diff(before, after))
+    changes_patch, hunk_manifest = make_unified_diff_and_hunk_manifest(cid, repo, before, after, before_bytes)
+    atomic_text(cp / "changes.patch", changes_patch)
+    atomic_json(cp / "hunk-manifest.json", hunk_manifest)
     atomic_json(cp / "restore-manifest.json", restore)
     changed = len(created) + len(modified) + len(deleted)
     atomic_text(cp / "summary.md", f"# {cid}\n\nFiles changed: {changed}\n")
     checkpoint["artifact_digests"] = {
         name: sha_file(cp / name)
-        for name in ["manifest.json", "diff.patch", "restore-manifest.json", "summary.md"]
+        for name in ["manifest.json", "diff.patch", "changes.patch", "hunk-manifest.json", "restore-manifest.json", "summary.md"]
     }
     atomic_json(cp / "checkpoint.json", checkpoint)
 
@@ -455,7 +576,7 @@ def watch_run(
         cid = f"cp-{checkpoint_seq:04d}"
         create_checkpoint(run_dir, repo, cid, checkpoint_seq, "monotonic-repo-task", parent, last_snap, current)
         cp = run_dir / "checkpoints" / cid
-        digests = {name: sha_file(cp / name) for name in ["checkpoint.json", "manifest.json", "diff.patch", "restore-manifest.json", "summary.md"]}
+        digests = {name: sha_file(cp / name) for name in ["checkpoint.json", "manifest.json", "diff.patch", "changes.patch", "hunk-manifest.json", "restore-manifest.json", "summary.md"]}
         prev = append_event(timeline, seq, "checkpoint_created", {"checkpoint_id": cid, "parent_checkpoint_id": parent, "artifact_digests": digests}, prev)
         seq += 1
         parent = cid

@@ -79,7 +79,7 @@ def test_checkpoint_artifact_hash_binding_is_recorded_in_checkpoint(tmp_path: Pa
     cp = run_dir_from(result.stdout) / "checkpoints" / "cp-0001"
     checkpoint = read_json(cp / "checkpoint.json")
     bound = checkpoint["artifact_digests"]
-    assert set(bound) == {"manifest.json", "diff.patch", "restore-manifest.json", "summary.md"}
+    assert set(bound) == {"manifest.json", "diff.patch", "changes.patch", "hunk-manifest.json", "restore-manifest.json", "summary.md"}
     for name, digest in bound.items():
         assert digest.startswith("sha256:"), name
 
@@ -159,8 +159,10 @@ def test_checkpoint_manifest_declares_required_artifacts(tmp_path: Path) -> None
     cp = run_dir_from(result.stdout) / "checkpoints" / "cp-0001"
     manifest = read_json(cp / "manifest.json")
     assert manifest["required_artifacts"] == [
+        "changes.patch",
         "checkpoint.json",
         "diff.patch",
+        "hunk-manifest.json",
         "manifest.json",
         "restore-manifest.json",
         "summary.md",

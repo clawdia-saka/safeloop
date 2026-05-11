@@ -34,7 +34,7 @@ class ApprovalHookRegistry:
     def evaluate(self, action: ActionEnvelope) -> ApprovalDecision:
         decision = ApprovalDecision.ALLOW
         for hook in self._hooks:
-            decision = hook(action)
+            decision = ApprovalDecision(hook(action))
             if decision is not ApprovalDecision.ALLOW:
                 return decision
         return decision

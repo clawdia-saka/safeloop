@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from safeloop.control_plane.lifecycle import ApprovalLifecycleStore, EXECUTED, IN_FLIGHT
+from safeloop.control_plane.lifecycle import ApprovalLifecycleStore, ApprovalValidationError, EXECUTED, IN_FLIGHT
 from safeloop.control_plane.registry import ApprovalRecord, ControlPlaneRegistry
 from safeloop.control_plane.signing import sign_approval_record
 from safeloop.hooks import (
@@ -114,6 +114,55 @@ def test_control_plane_gate_consumes_valid_approval_before_write_execution(tmp_p
         JournalState.APPROVED,
         JournalState.EXECUTING,
         JournalState.APPLIED,
+    ]
+
+
+def test_control_plane_completion_failure_is_not_reported_as_pre_execution_block(tmp_path) -> None:
+    key = b"runtime-gate-test-key"
+    now = datetime(2026, 5, 3, 5, 32, tzinfo=timezone.utc)
+    runtime = make_runtime(tmp_path)
+    lifecycle = ApprovalLifecycleStore(key)
+    lifecycle.approve(
+        lifecycle.request(
+            approval_id="approval-runtime-complete-fail",
+            requested_by="tester",
+            action="demo",
+            subject="system",
+            created_at=now,
+        ).approval_id,
+        now=now,
+    )
+    action = make_action(EffectClass.REVERSIBLE_WRITE, key="runtime-gated-complete-fail")
+    executions: list[object | None] = []
+
+    class CompletionFailingApprovals:
+        def get(self, approval_id: str):
+            return lifecycle.get(approval_id)
+
+        def reserve_for_execution(self, *args, **kwargs):
+            return lifecycle.reserve_for_execution(*args, **kwargs)
+
+        def complete_execution(self, *args, **kwargs):
+            raise ApprovalValidationError("completion store unavailable")
+
+    result = runtime.run(
+        run_id="run-runtime-gated-complete-fail",
+        action=action,
+        executor=lambda checkpoint: executions.append(checkpoint),
+        control_plane_approvals=CompletionFailingApprovals(),
+        approval_id="approval-runtime-complete-fail",
+        approval_key=key,
+        approval_now=now,
+    )
+
+    assert executions == [None]
+    assert result.state == JournalState.FAILED
+    assert result.reason == JournalReason.APPROVAL_COMPLETION_ERROR
+    assert [entry.state for entry in runtime.history("run-runtime-gated-complete-fail")] == [
+        JournalState.PROPOSED,
+        JournalState.APPROVED,
+        JournalState.EXECUTING,
+        JournalState.FAILED,
     ]
 
 
@@ -239,6 +288,42 @@ def test_escalated_action_hands_off_before_execution(tmp_path) -> None:
         JournalState.HANDED_OFF,
     ]
     assert runtime.history("run-handoff")[-1].reason == JournalReason.HANDOFF_REQUESTED
+
+
+def test_escalated_control_plane_gated_action_hands_off_without_reserving_approval(tmp_path) -> None:
+    key = b"runtime-gate-test-key"
+    now = datetime(2026, 5, 3, 5, 45, tzinfo=timezone.utc)
+    runtime = make_runtime(tmp_path)
+    lifecycle = ApprovalLifecycleStore(key)
+    lifecycle.approve(
+        lifecycle.request(
+            approval_id="approval-runtime-handoff",
+            requested_by="tester",
+            action="demo",
+            subject="system",
+            created_at=now,
+        ).approval_id,
+        now=now,
+    )
+    approvals = ApprovalHookRegistry()
+    approvals.register(lambda envelope: ApprovalDecision.ESCALATE)
+    action = make_action(EffectClass.IRREVERSIBLE_WRITE, key="runtime-gated-handoff")
+    executed: list[object | None] = []
+
+    result = runtime.run(
+        run_id="run-runtime-gated-handoff",
+        action=action,
+        executor=lambda checkpoint: executed.append(checkpoint),
+        approval_hooks=approvals,
+        control_plane_approvals=lifecycle,
+        approval_id="approval-runtime-handoff",
+        approval_key=key,
+        approval_now=now,
+    )
+
+    assert result.state == JournalState.HANDED_OFF
+    assert executed == []
+    assert lifecycle.get("approval-runtime-handoff").status == "APPROVED"
 
 
 def test_escalated_action_does_not_run_compensation_hooks(tmp_path) -> None:

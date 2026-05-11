@@ -108,6 +108,14 @@ class Runtime:
                 )
             if decision is ApprovalDecision.BLOCK:
                 return self._append(run_id, action, JournalState.FAILED, reason=JournalReason.APPROVAL_BLOCK)
+            if decision is ApprovalDecision.ESCALATE:
+                self._append(run_id, action, JournalState.APPROVED)
+                return self._append(
+                    run_id,
+                    action,
+                    JournalState.HANDED_OFF,
+                    reason=JournalReason.HANDOFF_REQUESTED,
+                )
             try:
                 control_plane_approval = self._control_plane_gate(
                     action,
@@ -125,13 +133,6 @@ class Runtime:
                     error=str(exc),
                 )
             self._append(run_id, action, JournalState.APPROVED)
-            if decision is ApprovalDecision.ESCALATE:
-                return self._append(
-                    run_id,
-                    action,
-                    JournalState.HANDED_OFF,
-                    reason=JournalReason.HANDOFF_REQUESTED,
-                )
             self._append(run_id, action, JournalState.EXECUTING)
         elif current.state == JournalState.RESUMABLE:
             control_plane_approval = None
@@ -210,7 +211,7 @@ class Runtime:
                 run_id,
                 action,
                 JournalState.FAILED,
-                reason=JournalReason.APPROVAL_BLOCK,
+                reason=JournalReason.APPROVAL_COMPLETION_ERROR,
                 error=str(exc),
             )
         return self._append(run_id, action, JournalState.APPLIED)

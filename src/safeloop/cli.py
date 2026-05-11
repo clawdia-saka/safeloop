@@ -24,6 +24,7 @@ from safeloop.agent_watchdog import (
     verify_run,
     watch_run,
 )
+from safeloop.compensation import build_compensation_plan, compensation_section_for_rollback
 from safeloop.control_plane.anchor_audit import audit_control_plane_anchors
 from safeloop.local_anchor import create_local_anchor, verify_local_anchor
 from safeloop.policy_check import PolicyCheckError, run_policy_check
@@ -603,6 +604,12 @@ def main(argv: list[str] | None = None) -> int:
     pc.add_argument("run_dir")
     pc.add_argument("--policy", required=True)
     pc.add_argument("--json", action="store_true")
+    comp = sub.add_parser("compensate")
+    comp.add_argument("run_dir")
+    comp.add_argument("--side-effect", dest="side_effect_id")
+    comp.add_argument("--action", dest="action_id")
+    comp.add_argument("--dry-run", action="store_true")
+    comp.add_argument("--json", action="store_true")
     rb = sub.add_parser("rollback")
     rb_sub = rb.add_subparsers(dest="rollback_cmd", required=True)
     rb_plan = rb_sub.add_parser("plan")
@@ -614,6 +621,7 @@ def main(argv: list[str] | None = None) -> int:
     rb_plan.add_argument("--files", nargs="+", default=[])
     rb_plan.add_argument("--hunks", nargs="+", default=[])
     rb_plan.add_argument("--action")
+    rb_plan.add_argument("--include-compensation", action="store_true")
     rb_apply = rb_sub.add_parser("apply")
     rb_apply.add_argument("run_dir")
     rb_apply.add_argument("run_id")
@@ -722,6 +730,16 @@ def main(argv: list[str] | None = None) -> int:
             print(f"violations: {result['violation_count']}")
             print(f"policy-check-result.json: {Path(args.run_dir) / 'policy-check-result.json'}")
         return 1 if result["violations"] else 0
+    if args.cmd == "compensate":
+        artifact = build_compensation_plan(Path(args.run_dir), side_effect_id=args.side_effect_id, action_id=args.action_id, dry_run=args.dry_run)
+        if args.json:
+            print(json.dumps(artifact, indent=2, sort_keys=True))
+        else:
+            print("SafeLoop compensation plan")
+            print(f"status: {artifact['status']}")
+            print(f"exact rollback: {str(artifact['exact_rollback']).lower()}")
+            print(f"compensation-plan.json: {Path(args.run_dir) / 'compensation-plan.json'}")
+        return 0
     if args.cmd == "rollback":
         run_dir = Path(args.run_dir)
         apply_mode = args.rollback_cmd == "apply"
@@ -740,6 +758,9 @@ def main(argv: list[str] | None = None) -> int:
                     print(f"rollback-result.json: {run_dir / 'rollback-result.json'}")
                     return 1
             artifact = _action_rollback(run_dir, args.run_id, args.action, apply=apply_mode)
+            if not apply_mode:
+                artifact["compensation"] = compensation_section_for_rollback(run_dir, action_id=args.action, include_compensation=args.include_compensation)
+                atomic_json(run_dir / "rollback-plan.json", artifact)
             if apply_mode:
                 event_type = "rollback_applied" if artifact["status"] == "applied" else "rollback_blocked"
                 _append_rollback_event(run_dir, event_type, {"operation": "rollback_action", "action_id": args.action, "rollback_status": artifact["status"], "artifact_digests": {"rollback-plan.json": sha_file(run_dir / "rollback-plan.json"), "rollback-result.json": sha_file(run_dir / "rollback-result.json")}})
@@ -786,6 +807,8 @@ def main(argv: list[str] | None = None) -> int:
                 print("Rollback apply complete" if artifact["status"] == "applied" else "Rollback apply blocked")
                 print(f"rollback-result.json: {run_dir / 'rollback-result.json'}")
             else:
+                artifact["compensation"] = compensation_section_for_rollback(run_dir, action_id=args.action, include_compensation=args.include_compensation)
+                atomic_json(run_dir / "rollback-plan.json", artifact)
                 _append_rollback_event(run_dir, "rollback_plan_created", {"operation": "rollback_selected_hunks", "selected_hunks": selected, "artifact_digests": {"rollback-plan.json": sha_file(run_dir / "rollback-plan.json")}})
                 print("Rollback plan: PASS" if artifact["preflight"]["status"] == "pass" else "Rollback plan: BLOCKED")
                 print(f"rollback-plan.json: {run_dir / 'rollback-plan.json'}")
@@ -835,6 +858,8 @@ def main(argv: list[str] | None = None) -> int:
                 print("Rollback apply complete" if artifact["status"] == "applied" else "Rollback apply blocked")
                 print(f"rollback-result.json: {run_dir / 'rollback-result.json'}")
             else:
+                artifact["compensation"] = compensation_section_for_rollback(run_dir, action_id=args.action, include_compensation=args.include_compensation)
+                atomic_json(run_dir / "rollback-plan.json", artifact)
                 _append_rollback_event(run_dir, "rollback_plan_created", {"operation": "rollback_selected_files", "target": artifact["target"], "selected_files": selected, "artifact_digests": {"rollback-plan.json": sha_file(run_dir / "rollback-plan.json")}})
                 print("Rollback plan: PASS" if artifact["preflight"]["status"] == "pass" else "Rollback plan: BLOCKED")
                 print(f"rollback-plan.json: {run_dir / 'rollback-plan.json'}")
@@ -867,6 +892,8 @@ def main(argv: list[str] | None = None) -> int:
                 print("Rollback apply complete" if artifact["status"] == "applied" else "Rollback apply blocked")
                 print(f"rollback-result.json: {run_dir / 'rollback-result.json'}")
             else:
+                artifact["compensation"] = compensation_section_for_rollback(run_dir, action_id=args.action, include_compensation=args.include_compensation)
+                atomic_json(run_dir / "rollback-plan.json", artifact)
                 _append_rollback_event(run_dir, "rollback_plan_created", {"operation": "rollback_to_start", "target": {"type": "start"}, "artifact_digests": {"rollback-plan.json": sha_file(run_dir / "rollback-plan.json")}})
                 print("Rollback plan: PASS" if artifact["preflight"]["status"] == "pass" else "Rollback plan: BLOCKED")
                 print(f"rollback-plan.json: {run_dir / 'rollback-plan.json'}")
@@ -900,6 +927,7 @@ def main(argv: list[str] | None = None) -> int:
             print("Rollback apply complete" if artifact["status"] == "applied" else "Rollback apply blocked")
             print(f"rollback-result.json: {run_dir / 'checkpoints' / args.checkpoint_id / 'rollback-result.json'}")
         else:
+            artifact["compensation"] = compensation_section_for_rollback(run_dir, action_id=args.action, include_compensation=args.include_compensation)
             atomic_json(run_dir / "rollback-plan.json", artifact)
             _append_rollback_event(run_dir, "rollback_plan_created", {"operation": "rollback_to_checkpoint", "target": _target_selection(artifact), "artifact_digests": {"rollback-plan.json": sha_file(run_dir / "rollback-plan.json")}})
             print("Rollback plan: PASS" if artifact["preflight"]["status"] == "pass" else "Rollback plan: BLOCKED")

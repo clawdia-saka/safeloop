@@ -19,6 +19,7 @@ REQUIRED_API_TRACE_STAGES = ("request", "runtime", "enforcement", "response")
 KNOWN_EVIDENCE = (
     ("api_trace", "api-trace.json", "json"),
     ("side_effects", "side-effects.jsonl", "jsonl"),
+    ("compensation_plan", "compensation-plan.json", "json"),
     ("side_effects_ledger", "side-effects-ledger.json", "json"),
     ("pr_lifecycle", "pr-lifecycle.json", "json"),
 )

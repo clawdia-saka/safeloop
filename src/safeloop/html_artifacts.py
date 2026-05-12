@@ -84,3 +84,53 @@ def write_readiness_html(run_dir: Path, output: Path | None = None) -> Path:
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(render_readiness_html(run_dir), encoding="utf-8")
     return output
+
+
+def _markdown_preview(path: Path, *, max_chars: int = 12000) -> str:
+    text = path.read_text(encoding="utf-8") if path.exists() else ""
+    if len(text) > max_chars:
+        text = text[:max_chars] + "\n\n[truncated for local HTML review artifact]"
+    return html.escape(text)
+
+
+def render_markdown_doc_html(path: Path, *, title: str | None = None) -> str:
+    """Render a canonical Markdown doc as a self-contained HTML review card."""
+    title = title or path.name
+    boundary_items = "\n".join(f"<li>{html.escape(note)}</li>" for note in BOUNDARY_NOTES)
+    preview = _markdown_preview(path)
+    return f"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>{html.escape(title)}</title><style>
+body {{ font-family: system-ui, -apple-system, Segoe UI, sans-serif; margin: 2rem; color: #172033; background: #f7f8fb; }}
+main {{ max-width: 1040px; margin: 0 auto; }} .card {{ background:white; border:1px solid #d8deea; border-radius:12px; padding:1rem 1.25rem; margin:1rem 0; }}
+pre {{ white-space:pre-wrap; overflow-wrap:anywhere; background:#0f172a; color:#e2e8f0; padding:1rem; border-radius:8px; }} .badge {{ display:inline-block; background:#eaf2ff; color:#123e73; border-radius:999px; padding:.2rem .55rem; font-size:.85rem; }} .boundary {{ border-left:5px solid #b7791f; }}
+</style></head><body><main><h1>{html.escape(title)}</h1><p class="badge">self-contained local HTML artifact; canonical source remains Markdown</p><section class="card boundary"><h2>Claim boundaries</h2><ul>{boundary_items}</ul></section><section class="card"><h2>Canonical Markdown preview</h2><p>Source: <code>{html.escape(str(path))}</code></p><pre>{preview}</pre></section></main></body></html>"""
+
+
+def render_docs_packet_html(repo_root: Path) -> str:
+    repo_root = repo_root.resolve()
+    docs = [
+        repo_root / "docs" / "public-mvp-readiness.md",
+        repo_root / "docs" / "specs" / "state-machine-and-journal-schema.md",
+        repo_root / "docs" / "case-studies" / "github-pr-demo.md",
+        repo_root / "docs" / "case-studies" / "boundary-scenarios.md",
+        repo_root / "examples" / "rollback_selective_demo.sh",
+    ]
+    sections = []
+    for doc in docs:
+        label = doc.relative_to(repo_root) if doc.exists() else doc
+        sections.append(f"<section class='card'><h2>{html.escape(str(label))}</h2><pre>{_markdown_preview(doc) if doc.exists() else 'missing'}</pre></section>")
+    boundary_items = "\n".join(f"<li>{html.escape(note)}</li>" for note in BOUNDARY_NOTES)
+    return f"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>SafeLoop docs/demo HTML packet</title><style>body{{font-family:system-ui,-apple-system,Segoe UI,sans-serif;margin:2rem;color:#172033;background:#f7f8fb}}main{{max-width:1120px;margin:0 auto}}.card{{background:white;border:1px solid #d8deea;border-radius:12px;padding:1rem 1.25rem;margin:1rem 0}}pre{{white-space:pre-wrap;overflow-wrap:anywhere;background:#0f172a;color:#e2e8f0;padding:1rem;border-radius:8px}}.boundary{{border-left:5px solid #b7791f}}</style></head><body><main><h1>SafeLoop docs/demo HTML packet</h1><p>Human-review artifact only; Markdown and shell scripts remain canonical.</p><section class="card boundary"><h2>Rollback boundary language</h2><ul>{boundary_items}</ul></section>{''.join(sections)}</main></body></html>"""
+
+
+def write_markdown_doc_html(path: Path, output: Path) -> Path:
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(render_markdown_doc_html(path), encoding="utf-8")
+    return output
+
+
+def write_docs_packet_html(repo_root: Path, output: Path | None = None) -> Path:
+    output = output or (repo_root / "docs" / "safeloop-docs-demo-packet.html")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(render_docs_packet_html(repo_root), encoding="utf-8")
+    return output

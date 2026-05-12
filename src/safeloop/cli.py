@@ -26,6 +26,7 @@ from safeloop.agent_watchdog import (
 )
 from safeloop.compensation import build_compensation_plan, compensation_section_for_rollback
 from safeloop.control_plane.anchor_audit import audit_control_plane_anchors
+from safeloop.html_artifacts import write_readiness_html
 from safeloop.local_anchor import create_local_anchor, verify_local_anchor
 from safeloop.policy_check import PolicyCheckError, build_policy_rollback_suggestion, run_policy_check
 from safeloop.rollback_groups import build_rollback_groups, print_rollback_groups
@@ -615,6 +616,9 @@ def main(argv: list[str] | None = None) -> int:
     comp.add_argument("--action", dest="action_id")
     comp.add_argument("--dry-run", action="store_true")
     comp.add_argument("--json", action="store_true")
+    hr = sub.add_parser("html-report")
+    hr.add_argument("run_dir")
+    hr.add_argument("--output", help="HTML output path; defaults to <run_dir>/safeloop-readiness-report.html")
     rb = sub.add_parser("rollback")
     rb_sub = rb.add_subparsers(dest="rollback_cmd", required=True)
     rb_plan = rb_sub.add_parser("plan")
@@ -756,6 +760,10 @@ def main(argv: list[str] | None = None) -> int:
             print(f"status: {artifact['status']}")
             print(f"exact rollback: {str(artifact['exact_rollback']).lower()}")
             print(f"compensation-plan.json: {Path(args.run_dir) / 'compensation-plan.json'}")
+        return 0
+    if args.cmd == "html-report":
+        output = write_readiness_html(Path(args.run_dir), Path(args.output) if args.output else None)
+        print(f"SafeLoop HTML readiness report: {output}")
         return 0
     if args.cmd == "rollback":
         run_dir = Path(args.run_dir)

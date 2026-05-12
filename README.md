@@ -16,9 +16,49 @@ Agents can run for minutes or hours and leave operators asking:
 
 SafeLoop 0.1.4 hardens the local watchdog, delta-audit packet, and control-plane evidence workflow for those questions.
 
+## Quickstart
+
+One-line install from the public release tag:
+
+```bash
+pipx install git+https://github.com/clawdia-saka/safeloop.git@v0.1.4
+```
+
+If you do not use `pipx`, install into a local virtual environment instead:
+
+```bash
+python3 -m venv .venv && . .venv/bin/activate && python -m pip install 'safeloop @ git+https://github.com/clawdia-saka/safeloop.git@v0.1.4'
+```
+
+Minimal end-to-end local rollback smoke test:
+
+```bash
+rm -rf /tmp/safeloop-demo-repo /tmp/safeloop-demo-runs
+mkdir -p /tmp/safeloop-demo-repo
+cd /tmp/safeloop-demo-repo
+git init -q
+git config user.email demo@example.test
+git config user.name demo
+echo base > note.txt
+git add note.txt && git commit -q -m init
+
+safeloop watch-run --task-id demo --repo "$PWD" --run-root /tmp/safeloop-demo-runs -- \
+  python -c "from pathlib import Path; Path('note.txt').write_text('changed by safeloop\\n')"
+
+RUN_DIR="$(find /tmp/safeloop-demo-runs -maxdepth 1 -type d -name 'run-*' | head -1)"
+RUN_ID="$(basename "$RUN_DIR")"
+safeloop review "$RUN_DIR"
+safeloop explain "$RUN_DIR"
+safeloop rollback plan "$RUN_DIR" "$RUN_ID" --files note.txt
+safeloop rollback apply "$RUN_DIR" "$RUN_ID" --files note.txt
+cat note.txt  # base
+```
+
+External side effects are manual-review/compensation only; SafeLoop never claims exact rollback for external systems.
+
 ## Demo commands
 
-Install for local development:
+Install for local development from a checkout:
 
 ```bash
 python -m pip install -e .

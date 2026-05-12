@@ -33,6 +33,15 @@ def test_recoverability_demo_html_shows_five_command_flow_and_boundary() -> None
     assert 'undo' in html
 
 
+def test_readme_links_lightweight_recoverability_gif() -> None:
+    readme = Path('README.md').read_text(encoding='utf-8')
+    gif_path = Path('docs/assets/safeloop-readme-demo.gif')
+
+    assert '![SafeLoop recoverability demo](docs/assets/safeloop-readme-demo.gif)' in readme
+    assert gif_path.exists()
+    assert gif_path.stat().st_size < 1_000_000
+
+
 def test_recoverability_external_effect_demo_script_documents_not_exact_external_rollback() -> None:
     script = Path('examples/recoverability_external_effect_demo.sh').read_text(encoding='utf-8')
 

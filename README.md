@@ -8,6 +8,8 @@ It records local file side effects, checkpoints repo changes, verifies tamper-ev
 
 In short: **roll back covered local files, compensate or manually review external effects, and audit everything.** See [`docs/recoverability-first.md`](docs/recoverability-first.md) for the product boundary.
 
+![SafeLoop recoverability demo](docs/assets/safeloop-readme-demo.gif)
+
 ## Problem
 
 Agents can run for minutes or hours and leave operators asking:

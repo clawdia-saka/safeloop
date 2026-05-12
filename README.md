@@ -6,6 +6,8 @@ SafeLoop is a non-blocking watchdog and reversible local timeline for long-runni
 
 It records local file side effects, checkpoints repo changes, verifies tamper-evident artifacts, supports exact local undo for covered file changes, and marks external side effects as **not tracked** in this release instead of pretending they are blindly reversible.
 
+In short: **roll back covered local files, compensate or manually review external effects, and audit everything.** See [`docs/recoverability-first.md`](docs/recoverability-first.md) for the product boundary.
+
 ## Problem
 
 Agents can run for minutes or hours and leave operators asking:
@@ -60,6 +62,16 @@ External side effects are manual-review/compensation only; SafeLoop never claims
 
 ## Demo commands
 
+The public demo path is intentionally five commands:
+
+```bash
+safeloop watch-run
+safeloop timeline
+safeloop verify-artifacts
+safeloop rollback plan
+safeloop rollback apply
+```
+
 Install for local development from a checkout:
 
 ```bash
@@ -104,6 +116,14 @@ Or run the checked-in demo script for the release packet flow (`watch-run` → `
 bash examples/watchdog_demo.sh
 ```
 
+For the external side-effect boundary, run:
+
+```bash
+bash examples/recoverability_external_effect_demo.sh
+```
+
+That demo rolls back a covered local file while leaving fake external API evidence marked `external_review_required`. A static one-page visual is available at [`examples/recoverability_demo.html`](examples/recoverability_demo.html).
+
 ## What it does today
 
 SafeLoop 0.1.4 writes local watchdog and review-aid artifacts such as:
@@ -139,7 +159,8 @@ Implemented surfaces:
 - `timeline`: prints run status, command metadata, checkpoint table, undo status, side-effect status, and latest hash.
 - `rollback plan` / `rollback apply`: baseline operator UX for covered local file changes. `rollback plan` writes deterministic `rollback-plan.json` (`schema_version: rollback-plan.v1`) and `rollback apply` writes checkpoint-local `rollback-result.json` (`schema_version: rollback-result.v1`) with post-apply `verify-artifacts` status. External side effects are classified for manual review/compensation, never exact rollback.
 - `undo`: compatibility alias for the older dry-run/apply UX and artifact paths (`undo-preflight.json`, `rollback-plan.json`, and `undo-result.json`).
-- Existing runtime boundary demos, including repeated resume, remain documented as local lifecycle examples alongside the watchdog RC.
+- Existing runtime boundary demos, including repeated resume, remain documented as local lifecycle examples alongside the watchdog release.
+- Framework integrations (LangGraph, CrewAI, AutoGen, browser agents, hosted adapters) are future surfaces; the current public path is the local CLI flow above.
 
 ## Compensation is not rollback
 

@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>SafeLoop recoverability demo</title>
+  <style>
+    :root { color-scheme: dark; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #0b1020; color: #e7edf7; }
+    body { margin: 0; padding: 40px; background: radial-gradient(circle at top left, #1f3b73 0, #0b1020 40%, #070a12 100%); }
+    main { max-width: 1120px; margin: 0 auto; }
+    .eyebrow { color: #8fd3ff; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; font-size: 13px; }
+    h1 { font-size: 44px; line-height: 1.05; margin: 10px 0 14px; }
+    p { color: #b8c5d9; font-size: 18px; line-height: 1.6; }
+    .grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 14px; margin: 34px 0; }
+    .step { border: 1px solid rgba(143, 211, 255, .25); border-radius: 18px; padding: 18px; background: rgba(15, 23, 42, .74); box-shadow: 0 16px 40px rgba(0,0,0,.24); }
+    .step strong { display: block; color: white; font-size: 16px; margin-bottom: 8px; }
+    .step code { color: #9ee8b6; }
+    .panels { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+    .panel { border-radius: 22px; padding: 22px; background: rgba(7, 10, 18, .78); border: 1px solid rgba(255,255,255,.12); }
+    .good { border-color: rgba(72, 211, 126, .45); }
+    .warn { border-color: rgba(255, 199, 89, .45); }
+    pre { overflow-x: auto; background: #05070d; border-radius: 14px; padding: 16px; color: #d7e3f4; }
+    .tag { display:inline-block; padding: 4px 10px; border-radius: 999px; background: rgba(143,211,255,.15); color: #9bdcff; font-size: 13px; font-weight: 700; }
+    .footer { margin-top: 26px; color: #93a4bb; font-size: 15px; }
+  </style>
+</head>
+<body>
+<main>
+  <div class="eyebrow">SafeLoop 0.1.4 · recoverability-first runtime</div>
+  <h1>Know what changed. Roll back covered local files. Never pretend external effects vanished.</h1>
+  <p>SafeLoop's first-run story is intentionally narrow: wrap a local agent run, inspect the timeline, verify tamper-evident artifacts, review a rollback plan, then apply rollback for covered local file changes.</p>
+
+  <section class="grid" aria-label="Five command public UX">
+    <div class="step"><strong>1. Watch</strong><code>safeloop watch-run</code></div>
+    <div class="step"><strong>2. Inspect</strong><code>safeloop timeline</code></div>
+    <div class="step"><strong>3. Verify</strong><code>safeloop verify-artifacts</code></div>
+    <div class="step"><strong>4. Plan</strong><code>safeloop rollback plan</code></div>
+    <div class="step"><strong>5. Apply</strong><code>safeloop rollback apply</code></div>
+  </section>
+
+  <section class="panels">
+    <div class="panel good">
+      <span class="tag">Covered local file</span>
+      <h2>Rollback succeeds</h2>
+      <pre>note.txt
+- changed by agent
++ base
+
+rollback-result.json
+status: applied
+post_apply_verify: passed</pre>
+      <p>SafeLoop can apply a reviewed rollback plan when the file change is inside the configured repo scope and still matches the expected state.</p>
+    </div>
+    <div class="panel warn">
+      <span class="tag">External side effect</span>
+      <h2>Manual review remains</h2>
+      <pre>fake-api-call.log
+external_review_required
+compensation_possible: maybe
+exact_rollback: false</pre>
+      <p>External systems are not exact rollback. SafeLoop should record evidence and require compensation or operator review instead of claiming an as-if-never-happened state.</p>
+    </div>
+  </section>
+
+  <p class="footer">Compatibility aliases such as <code>watch --loop</code> and <code>undo</code> remain for older scripts, but the public README should lead with the five-command flow above.</p>
+</main>
+</body>
+</html>

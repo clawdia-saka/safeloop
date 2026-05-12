@@ -26,7 +26,7 @@ from safeloop.agent_watchdog import (
 )
 from safeloop.compensation import build_compensation_plan, compensation_section_for_rollback
 from safeloop.control_plane.anchor_audit import audit_control_plane_anchors
-from safeloop.html_artifacts import write_readiness_html
+from safeloop.html_artifacts import write_docs_packet_html, write_markdown_doc_html, write_readiness_html
 from safeloop.local_anchor import create_local_anchor, verify_local_anchor
 from safeloop.policy_check import PolicyCheckError, build_policy_rollback_suggestion, run_policy_check
 from safeloop.rollback_groups import build_rollback_groups, print_rollback_groups
@@ -619,6 +619,12 @@ def main(argv: list[str] | None = None) -> int:
     hr = sub.add_parser("html-report")
     hr.add_argument("run_dir")
     hr.add_argument("--output", help="HTML output path; defaults to <run_dir>/safeloop-readiness-report.html")
+    dh = sub.add_parser("html-doc")
+    dh.add_argument("path")
+    dh.add_argument("--output", required=True)
+    dp = sub.add_parser("html-docs-packet")
+    dp.add_argument("repo_root", nargs="?", default=".")
+    dp.add_argument("--output", help="HTML output path; defaults to docs/safeloop-docs-demo-packet.html")
     rb = sub.add_parser("rollback")
     rb_sub = rb.add_subparsers(dest="rollback_cmd", required=True)
     rb_plan = rb_sub.add_parser("plan")
@@ -764,6 +770,14 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "html-report":
         output = write_readiness_html(Path(args.run_dir), Path(args.output) if args.output else None)
         print(f"SafeLoop HTML readiness report: {output}")
+        return 0
+    if args.cmd == "html-doc":
+        output = write_markdown_doc_html(Path(args.path), Path(args.output))
+        print(f"SafeLoop HTML doc report: {output}")
+        return 0
+    if args.cmd == "html-docs-packet":
+        output = write_docs_packet_html(Path(args.repo_root), Path(args.output) if args.output else None)
+        print(f"SafeLoop HTML docs/demo packet: {output}")
         return 0
     if args.cmd == "rollback":
         run_dir = Path(args.run_dir)

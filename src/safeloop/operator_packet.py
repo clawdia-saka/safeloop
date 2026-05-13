@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 from typing import Iterable
 
+from safeloop.external_effects import read_external_effects
+
 BOUNDARY_LINES = [
     "Exact rollback only applies to covered local file changes.",
     "External side effects are manual-review/compensation only.",
@@ -122,6 +124,12 @@ def render_operator_packet_v2(
     outbox_items = _external_outbox_items(run_path)
     unsafe_outbox_boundary = _unsafe_outbox_boundary(run, outbox_items)
     external_items = list(external_evidence or [])
+    external_effect_records = read_external_effects(run_path)
+    external_effect_by_item: dict[str, dict] = {}
+    for effect in external_effect_records:
+        item_ref = f"{effect.get('kind', 'unknown')}:{effect.get('target', effect.get('effect_id', 'unknown'))}"
+        external_items.append(item_ref)
+        external_effect_by_item[item_ref] = effect
     for index, item in enumerate(outbox_items):
         external_items.append(_outbox_item_id(item, index))
 
@@ -171,9 +179,10 @@ def render_operator_packet_v2(
         lines.append(_row([file_path, "local_file", file_path, "rollback_available", "true", "rollback-plan.json"]))
     lines.append(_row([checkpoint_id, "action_group", checkpoint_id, "rollback_available", "true", "rollback-plan.json"]))
     for item in external_items:
-        lines.append(_row([item, "external_side_effect", item, "manual_review_required", "false", item]))
-        lines.append(_row([item, "manual_review_item", item, "queued", "false", item]))
-        lines.append(_row([item, "compensation_item", item, "compensation_review_required", "false", item]))
+        evidence_ref = "external-effects.jsonl" if item in external_effect_by_item else item
+        lines.append(_row([item, "external_side_effect", item, "manual_review_required", "false", evidence_ref]))
+        lines.append(_row([item, "manual_review_item", item, "queued", "false", evidence_ref]))
+        lines.append(_row([item, "compensation_item", item, "compensation_review_required", "false", evidence_ref]))
 
     first_file = files[0] if files else "service.md"
     no_blockers = "none" if verification_status in {"valid", "ok"} else "verify-artifacts not valid"
@@ -197,7 +206,9 @@ def render_operator_packet_v2(
             required_action = "Review and compensate manually; do not treat local rollback as external rollback."
             if unsafe_outbox_boundary:
                 required_action = "Do not dispatch externally; pending shadow review only until approval/waiver lifecycle binding exists."
-            lines.append(_row([item, compensation_adapter, "manual", "false", required_action, item]))
+            capability = external_effect_by_item.get(item, {}).get("compensation_capability", "manual")
+            evidence_ref = "external-effects.jsonl" if item in external_effect_by_item else item
+            lines.append(_row([item, compensation_adapter, capability, "false", required_action, evidence_ref]))
     else:
         lines.append(_row(["none recorded", "none", "none", "false", "No external side effect compensation item recorded.", "review-summary.json"]))
 

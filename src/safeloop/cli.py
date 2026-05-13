@@ -26,6 +26,7 @@ from safeloop.agent_watchdog import (
 )
 from safeloop.compensation import build_compensation_plan, compensation_section_for_rollback
 from safeloop.control_plane.anchor_audit import audit_control_plane_anchors
+from safeloop.external_effects import ExternalEffectValidationError, record_external_effect
 from safeloop.html_artifacts import write_docs_packet_html, write_markdown_doc_html, write_readiness_html
 from safeloop.local_anchor import create_local_anchor, verify_local_anchor
 from safeloop.operator_packet import write_operator_packet_v2
@@ -627,6 +628,16 @@ def main(argv: list[str] | None = None) -> int:
     comp.add_argument("--action", dest="action_id")
     comp.add_argument("--dry-run", action="store_true")
     comp.add_argument("--json", action="store_true")
+    external = sub.add_parser("external", help="Record external side effects for compensation/manual review.")
+    external_sub = external.add_subparsers(dest="external_cmd", required=True)
+    external_record = external_sub.add_parser("record", help="Append RUN_DIR/external-effects.jsonl.")
+    external_record.add_argument("run_dir")
+    external_record.add_argument("--kind", required=True)
+    external_record.add_argument("--target", required=True)
+    external_record.add_argument("--action", required=True)
+    external_record.add_argument("--evidence", required=True)
+    external_record.add_argument("--quote-or-field", required=True)
+    external_record.add_argument("--capability", default="manual")
     op = sub.add_parser("operator-packet", help="Generate a SafeLoop operator packet from a run directory.")
     op.add_argument("run_dir")
     op.add_argument("--v2", action="store_true", help="Generate Operator Packet v2 (default).")
@@ -784,6 +795,25 @@ def main(argv: list[str] | None = None) -> int:
             print(f"exact rollback: {str(artifact['exact_rollback']).lower()}")
             print(f"compensation-plan.json: {Path(args.run_dir) / 'compensation-plan.json'}")
         return 0
+    if args.cmd == "external":
+        if args.external_cmd == "record":
+            try:
+                effect = record_external_effect(
+                    Path(args.run_dir),
+                    kind=args.kind,
+                    target=args.target,
+                    action=args.action,
+                    evidence_path_or_url=args.evidence,
+                    quote_or_field=args.quote_or_field,
+                    compensation_capability=args.capability,
+                )
+            except ExternalEffectValidationError as exc:
+                print(str(exc), file=sys.stderr)
+                return 2
+            print(f"External side effect recorded: {effect['effect_id']}")
+            print("exact rollback: false")
+            print(f"status: {effect['status']}")
+            return 0
     if args.cmd == "operator-packet":
         run_dir = Path(args.run_dir)
         if not (run_dir / "run.json").exists():

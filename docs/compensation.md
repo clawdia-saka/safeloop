@@ -71,3 +71,7 @@ bash examples/compensation_message_demo.sh
 - A single run may have both: local rollback succeeds while compensation for a GitHub issue, message, email, or webhook remains pending.
 
 That is expected. SafeLoop should surface both states instead of collapsing them into one unsafe success label.
+
+## External side-effect registry
+
+SafeLoop v0.2 tracks actions outside the local repo in `RUN_DIR/external-effects.jsonl` using `external-side-effect.v1` records. These records are for compensation/manual review only: every external effect keeps `exact_rollback: false`, requires evidence with a path or URL plus `quote_or_field`, and must not store raw sensitive payloads. See `docs/specs/external-side-effect-v1.md`.

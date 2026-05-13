@@ -32,6 +32,6 @@ The script prints the retained temp workspace and writes:
 - `gbrain-mock/retrieved_context.brief.md`: operator-readable retrieval brief.
 - SafeLoop run directory with copied `retrieved_context.json` and `retrieved_context.brief.md`.
 - `review-summary.json`, `rollback-plan.json`, and `rollback-result.json` in the run directory.
-- `operator-packet.md` with the role split, evidence paths, manual-review notes, and rollback commands.
+- `operator-packet.md` using the [operator packet v1](specs/operator-packet-v1.md) structure, with the role split, evidence paths, compensation/recovery options, manual-review decision, and explicit non-goals/boundary.
 
-The demo applies rollback at the end to prove exact local rollback is possible for the covered file change.
+The demo applies rollback at the end to prove exact local rollback is possible for the covered file change. That rollback claim is limited to the covered local repository file change; actions outside the local repo remain manual-review or separate-compensation territory.

@@ -9,6 +9,25 @@ ROOT = Path(__file__).resolve().parents[1]
 DOC = ROOT / "docs" / "gbrain-integration-demo.md"
 SCRIPT = ROOT / "examples" / "gbrain_context_demo.sh"
 README = ROOT / "README.md"
+SPEC = ROOT / "docs" / "specs" / "operator-packet-v1.md"
+
+OPERATOR_PACKET_V1_REQUIRED = [
+    "## Operator packet v1 metadata",
+    "Schema: safeloop.operator-packet.v1",
+    "Run directory:",
+    "Run ID:",
+    "Checkpoint ID:",
+    "Scope:",
+    "## Summary",
+    "## Action and evidence",
+    "## Compensation and recovery options",
+    "## Manual review decision",
+    "## Non-goals and boundary",
+    "Gbrain role: retrieved context evidence only",
+    "SafeLoop role: action evidence, rollback plan, manual review",
+    "covered local repository file changes",
+    "actions outside the local repo require manual review or separate compensation",
+]
 
 
 def test_gbrain_demo_docs_define_role_split_and_boundaries() -> None:
@@ -27,6 +46,25 @@ def test_gbrain_demo_docs_define_role_split_and_boundaries() -> None:
 
 def test_readme_links_gbrain_demo() -> None:
     assert "docs/gbrain-integration-demo.md" in README.read_text(encoding="utf-8")
+
+
+def test_operator_packet_v1_spec_and_demo_template_define_required_handoff_fields() -> None:
+    spec = SPEC.read_text(encoding="utf-8")
+    script = SCRIPT.read_text(encoding="utf-8")
+    docs = DOC.read_text(encoding="utf-8")
+
+    for phrase in [
+        "Operator packet v1",
+        "not a scheduler, approval service, control plane, or external rollback mechanism",
+        "Actions outside the local repository require manual review or separate compensation",
+    ]:
+        assert phrase in spec
+
+    for required in OPERATOR_PACKET_V1_REQUIRED:
+        assert required in script
+
+    assert "operator packet v1" in docs
+    assert "actions outside the local repo remain manual-review or separate-compensation territory" in docs
 
 
 def test_gbrain_context_demo_runs_offline_and_preserves_real_gbrain_home(tmp_path) -> None:
@@ -73,8 +111,8 @@ def test_gbrain_context_demo_runs_offline_and_preserves_real_gbrain_home(tmp_pat
     assert copied_context["boundaries"]["scheduler"] is False
 
     packet = (demo_root / "operator-packet.md").read_text(encoding="utf-8")
-    assert "Gbrain role: retrieved context evidence only" in packet
-    assert "SafeLoop role: action evidence, rollback plan, manual review" in packet
+    for required in OPERATOR_PACKET_V1_REQUIRED:
+        assert required in packet
     assert str(run_dir) in packet
 
     assert (repo / "service.md").read_text(encoding="utf-8") == "base service contract\n"

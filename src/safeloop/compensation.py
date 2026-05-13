@@ -74,6 +74,7 @@ def _plan_item(run_dir: Path, event: dict[str, Any]) -> dict[str, Any]:
         "adapter": event.get("adapter") if isinstance(event.get("adapter"), dict) else {"name": str(event.get("adapter") or "unknown")},
         "external_ref": event.get("external_ref"),
         "compensation": {"capability": capability, **comp},
+        "compensation_action_recorded": bool(comp.get("action")),
         "exact_rollback": False,
         "required_operator_action": _required_operator_action(capability, str(event.get("effect_class") or "unknown")),
         "blockers": blockers,
@@ -99,13 +100,16 @@ def build_compensation_plan(run_dir: str | Path, *, side_effect_id: str | None =
         warnings.append("manual_review_required: no matching side effects found")
     if any(item.get("compensation", {}).get("capability") == "manual" for item in items):
         warnings.append("manual_review_required")
+    if any(item.get("compensation", {}).get("capability") in {"best_effort", "verified"} for item in items):
+        warnings.append("operator_review_required: external compensation requires operator verification")
+    status = "blocked" if blockers else "manual_review_required" if any("manual_review_required" in warning for warning in warnings) else "operator_review_required" if warnings else "ok"
     plan = {
         "schema_version": SCHEMA_VERSION,
         "run_id": _load_json(run_path / "run.json").get("run_id") if (run_path / "run.json").exists() else None,
         "mode": "dry-run" if dry_run else "plan",
         "side_effect_id": side_effect_id,
         "action_id": action_id,
-        "status": "blocked" if blockers else "manual_review_required" if warnings else "ok",
+        "status": status,
         "exact_rollback": False,
         "items": items,
         "blockers": blockers,

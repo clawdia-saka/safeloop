@@ -6,7 +6,7 @@ SafeLoop is a non-blocking watchdog and reversible local timeline for long-runni
 
 It records local file side effects, checkpoints repo changes, verifies tamper-evident artifacts, supports exact local undo for covered file changes, and marks external side effects as **not tracked** in this release instead of pretending they are blindly reversible.
 
-In short: **roll back covered local files, compensate or manually review external effects, and audit everything.** See [`docs/recoverability-first.md`](docs/recoverability-first.md) for the product boundary.
+In short: **roll back covered local files, compensate or manually review external effects, and audit everything.** See [`docs/recoverability-first.md`](docs/recoverability-first.md) for the product boundary and the [threat model](docs/threat-model.md) for audit boundaries.
 
 ![SafeLoop recoverability demo](docs/assets/safeloop-readme-demo.gif)
 

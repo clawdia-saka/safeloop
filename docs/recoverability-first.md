@@ -5,8 +5,17 @@ SafeLoop is intentionally a **recoverability-first** runtime, not a promise that
 The product boundary is:
 
 1. **Covered local file changes** can be planned, reviewed, and rolled back when SafeLoop can verify the covered state at apply time. These are the covered local file changes SafeLoop can reason about.
-2. **External side effects** are never treated as exact rollback. They require manual review or compensation, and the artifacts must say so.
+2. **Actions outside the local repo** are never treated as exact rollback. They require manual review or compensation, and the artifacts must say so.
 3. **Audit artifacts** should answer what ran, what changed, what was verified, and which risks remain.
+
+Older artifacts may call actions outside the local repo **External side effects**; the operator-facing meaning is the same boundary, not exact rollback.
+
+## Operator vocabulary
+
+- **Rollback** means restoring covered local repo files from verified SafeLoop artifacts. It does not mean undoing emails, API calls, tickets, browser actions, database writes, or other actions outside the local repo.
+- **Compensation** means recording a cleanup or correction path for an action outside the local repo, such as closing an issue or sending a correction message. Compensation remains `exact_rollback: false` because the outside action already happened.
+- **Manual handoff** means SafeLoop has surfaced the evidence and an operator must decide or complete the next step. Use this when SafeLoop cannot safely verify or perform the recovery action on its own.
+- **Action groups** are operator review bundles: related files, hunks, checkpoints, and optional action IDs grouped so a person can review one unit of work before choosing rollback, compensation, or handoff.
 
 ## Public UX to keep first-class
 
@@ -32,7 +41,7 @@ A broad claim such as “AI agent actions can be rolled back” is unsafe. It hi
 
 SafeLoop should instead make the boundary explicit:
 
-> Roll back covered local files. Compensate or manually review external effects. Audit everything.
+> Roll back covered local files. Compensate or manually review actions outside the local repo. Audit everything.
 
 That is the product value: fewer surprises after long-running agents, not magical time travel.
 

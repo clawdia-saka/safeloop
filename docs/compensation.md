@@ -5,6 +5,7 @@ SafeLoop separates **covered local file rollback** from **compensation for actio
 - Covered local file changes can be planned, reviewed, and rolled back when SafeLoop can verify the covered state.
 - Actions outside the local repo are never treated as exact rollback. They remain `exact_rollback: false` even when a cleanup or correction action is available.
 - Compensation is an operator-facing mitigation plan: SafeLoop records what happened, which compensation action is possible, and whether `manual_review_required` still applies.
+- Manual handoff is the expected next step when the compensation action needs human judgment, credentials, or verification in the outside system.
 
 This boundary is the product point: SafeLoop does not pretend actions outside the local repo vanished.
 

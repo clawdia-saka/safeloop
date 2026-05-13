@@ -36,9 +36,13 @@ def test_explain_creates_rollback_groups_json_and_human_output(tmp_path: Path) -
     run_dir = make_run(tmp_path)
     result = run_cli("explain", str(run_dir))
     assert result.returncode == 0, result.stderr
-    assert "SafeLoop rollback groups" in result.stdout
+    assert "SafeLoop explain: rollback groups and recovery boundaries" in result.stdout
     assert "grp-0001" in result.stdout
-    assert "rollback:" in result.stdout
+    assert "rollback modes:" in result.stdout
+    assert "compensation:" in result.stdout
+    assert "manual handoff:" in result.stdout
+    assert "action groups:" in result.stdout
+    assert "actions outside the local repo" in result.stdout
     artifact = read_json(run_dir / "rollback-groups.json")
     assert artifact["schema_version"] == "rollback-groups.v1"
     assert artifact["run"]["task_id"] == "groups-task"
@@ -107,5 +111,14 @@ def test_review_groups_alias_still_works(tmp_path: Path) -> None:
     run_dir = make_run(tmp_path)
     result = run_cli("review", str(run_dir), "--groups")
     assert result.returncode == 0, result.stderr
-    assert "SafeLoop rollback groups" in result.stdout
+    assert "SafeLoop explain: rollback groups and recovery boundaries" in result.stdout
     assert (run_dir / "rollback-groups.json").exists()
+
+
+def test_explain_help_uses_operator_language() -> None:
+    result = run_cli("explain", "--help")
+    assert result.returncode == 0, result.stderr
+    assert "rollback covers verified local repo files" in result.stdout
+    assert "actions outside the local repo" in result.stdout
+    assert "compensation/manual handoff" in result.stdout
+    assert "action groups" in result.stdout

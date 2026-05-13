@@ -602,7 +602,17 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("run_dir")
     r.add_argument("--json", action="store_true")
     r.add_argument("--groups", action="store_true")
-    ex = sub.add_parser("explain")
+    ex = sub.add_parser(
+        "explain",
+        help="Explain rollback, compensation, manual handoff, and action groups for a run.",
+        formatter_class=argparse.RawTextHelpFormatter,
+        description=(
+            "Explain a SafeLoop run in operator language:\n"
+            "- rollback covers verified local repo files.\n"
+            "- compensation/manual handoff covers actions outside the local repo.\n"
+            "- action groups bundle related files, hunks, and checkpoints for review."
+        ),
+    )
     ex.add_argument("run_dir")
     ex.add_argument("--json", action="store_true")
     pc = sub.add_parser("policy-check")

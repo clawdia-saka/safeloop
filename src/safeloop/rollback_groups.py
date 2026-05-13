@@ -172,14 +172,30 @@ def build_rollback_groups(run_dir: Path) -> dict[str, Any]:
 
 
 def print_rollback_groups(artifact: dict[str, Any]) -> None:
-    print("SafeLoop rollback groups")
+    print("SafeLoop explain: rollback groups and recovery boundaries")
+    print("What these words mean:")
+    print("  rollback: restore covered local repo files from verified SafeLoop artifacts.")
+    print("  compensation: record a cleanup or correction plan for actions outside the local repo; this is not exact rollback.")
+    print("  manual handoff: an operator must review or complete work that SafeLoop cannot safely do automatically.")
+    print("  action groups: related files/hunks/checkpoints bundled so an operator can review one unit of work.")
+    print("Boundary: actions outside the local repo stay exact_rollback=false and require compensation or manual handoff.")
     run = artifact["run"]
     print(f"run id: {run['run_id']}")
     print(f"task id: {run['task_id']}")
+    side_effects = artifact.get("side_effects", {})
+    print(
+        "actions outside local repo: "
+        f"{side_effects.get('count', 0)} "
+        f"(support={side_effects.get('support_status', 'manual_review')}, "
+        f"exact_rollback={str(side_effects.get('exact_rollback', False)).lower()})"
+    )
     for g in artifact["groups"]:
         print(f"{g['group_id']} {g['title']}")
         print(f"  files: {', '.join(g['files']) if g['files'] else '-'}")
-        print(f"  rollback: {', '.join(g['rollback_modes'])}")
+        print(f"  rollback modes: {', '.join(g['rollback_modes'])}")
+        print(f"  action group source: {g['source']}")
         print(f"  risk: {g['risk']}")
         if g["blockers"]:
             print(f"  blockers: {', '.join(g['blockers'])}")
+        if g.get("dependency_warnings"):
+            print("  operator note: compensation or manual handoff may be needed for actions outside the local repo")

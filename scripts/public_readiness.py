@@ -112,6 +112,7 @@ def check() -> tuple[int, list[str]]:
             "review",
             "rollback plan",
             "operator-packet.md",
+            "operator-packet-v2.md",
             "rollback apply",
             "public_readiness.py --check",
             "external_review_required",

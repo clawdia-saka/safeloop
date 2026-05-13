@@ -1,0 +1,155 @@
+from __future__ import annotations
+
+import json
+import subprocess
+from pathlib import Path
+
+from safeloop.operator_packet import render_operator_packet_v2, write_operator_packet_v2
+
+ROOT = Path(__file__).resolve().parents[1]
+SPEC = ROOT / "docs" / "specs" / "operator-packet-v2.md"
+EXAMPLE = ROOT / "examples" / "operator_packet_v2.md"
+FULL_DEMO = ROOT / "examples" / "full_demo.sh"
+
+
+def make_run_dir(tmp_path: Path) -> Path:
+    run_dir = tmp_path / "run"
+    (run_dir / "verification").mkdir(parents=True)
+    (run_dir / "checkpoints" / "cp-0001").mkdir(parents=True)
+    (run_dir / "run.json").write_text(
+        json.dumps(
+            {
+                "run_id": "run-demo",
+                "task_id": "operator-packet-v2-demo",
+                "status": "completed",
+                "started_at": "2026-05-13T00:00:00+00:00",
+                "ended_at": "2026-05-13T00:00:02+00:00",
+                "latest_event_hash": "sha256:abc123",
+                "checkpoint_count": 1,
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    (run_dir / "verification" / "verify-artifacts-result.json").write_text(
+        json.dumps(
+            {
+                "status": "valid",
+                "issues": [],
+                "warnings": ["demo warning"],
+                "latest_event_hash": "sha256:abc123",
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    (run_dir / "rollback-plan.json").write_text(
+        json.dumps(
+            {
+                "status": "planned",
+                "run_id": "run-demo",
+                "checkpoint_id": "cp-0001",
+                "files": {"modified": ["service.md"], "created": [], "deleted": []},
+                "commands": [
+                    "python -m safeloop.cli rollback apply /tmp/run run-demo cp-0001 --files service.md"
+                ],
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    (run_dir / "external-evidence.log").write_text(
+        "fake-ticket: created outside repo; external_review_required; exact_rollback=false\n",
+        encoding="utf-8",
+    )
+    return run_dir
+
+
+def test_packet_v2_includes_required_decision_sections(tmp_path: Path) -> None:
+    packet = render_operator_packet_v2(
+        make_run_dir(tmp_path),
+        external_evidence=["external-evidence.log"],
+        compensation_adapter="manual_ticket_adapter",
+    )
+
+    for required in [
+        "# SafeLoop Operator Packet v2",
+        "## 1. Run summary",
+        "run_id: run-demo",
+        "task_id: operator-packet-v2-demo",
+        "verification status: valid",
+        "## 2. Artifact verification",
+        "verify-artifacts status: valid",
+        "local anchor status:",
+        "evidence packet status:",
+        "## 3. Change summary",
+        "| Item | Type | Path / Ref | Status | Exact rollback | Evidence |",
+        "## 4. Rollback decision table",
+        "| Selection | Scope | Rollback status | Exact rollback | Blockers | Suggested command |",
+        "all covered local files",
+        "selected file rollback",
+        "selected hunk rollback",
+        "selected action group rollback",
+        "## 5. Compensation decision table",
+        "| Side effect | Adapter | Compensation capability | Exact rollback | Required action | Evidence |",
+        "manual_ticket_adapter",
+        "## 6. Manual review queue",
+        "| Item | Reason | Risk | Recommended operator action |",
+        "## 7. Recommended next action",
+        "compensation_review_required",
+        "## 8. Boundary statement",
+    ]:
+        assert required in packet
+
+
+def test_packet_v2_boundary_never_claims_external_exact_rollback(tmp_path: Path) -> None:
+    packet = render_operator_packet_v2(make_run_dir(tmp_path), external_evidence=["external-evidence.log"])
+
+    assert "Exact rollback only applies to covered local file changes." in packet
+    assert "External side effects are manual-review/compensation only." in packet
+    assert "SafeLoop does not claim exact rollback for actions outside the local repo." in packet
+    assert "| external-evidence.log | external_side_effect | external-evidence.log | manual_review_required | false |" in packet
+    assert "| external-evidence.log | manual | manual | false | Review and compensate manually; do not treat local rollback as external rollback. |" in packet
+    assert "external_side_effect | external-evidence.log | manual_review_required | true" not in packet
+
+
+def test_write_operator_packet_v2_is_stable(tmp_path: Path) -> None:
+    run_dir = make_run_dir(tmp_path)
+    first = write_operator_packet_v2(run_dir, output_path=run_dir / "operator-packet-v2.md")
+    first_text = first.read_text(encoding="utf-8")
+    second = write_operator_packet_v2(run_dir, output_path=run_dir / "operator-packet-v2.md")
+    assert second.read_text(encoding="utf-8") == first_text
+
+
+def test_packet_v2_spec_and_example_document_required_boundaries() -> None:
+    spec = SPEC.read_text(encoding="utf-8")
+    example = EXAMPLE.read_text(encoding="utf-8")
+    for text in [spec, example]:
+        assert "# SafeLoop Operator Packet v2" in text
+        assert "Compensation capability enum" in text
+        assert "Exact rollback only applies to covered local file changes." in text
+        assert "External side effects are manual-review/compensation only." in text
+        assert "SafeLoop does not claim exact rollback for actions outside the local repo." in text
+        assert "hosted systems" in text or "third-party services" in text
+
+
+def test_full_demo_produces_operator_packet_v2(tmp_path: Path) -> None:
+    env = {**dict(), **__import__("os").environ}
+    env["SAFELOOP_FULL_DEMO_ROOT"] = str(tmp_path / "full-demo")
+    result = subprocess.run(
+        ["bash", str(FULL_DEMO)],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=90,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    run_line = next(line for line in result.stdout.splitlines() if line.startswith("Operator packet v2: "))
+    packet_path = Path(run_line.removeprefix("Operator packet v2: "))
+    packet = packet_path.read_text(encoding="utf-8")
+    assert "# SafeLoop Operator Packet v2" in packet
+    assert "## 4. Rollback decision table" in packet
+    assert "## 5. Compensation decision table" in packet
+    assert "External side effects are manual-review/compensation only." in packet

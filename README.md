@@ -135,6 +135,16 @@ bash examples/compensation_message_demo.sh
 
 They show that covered local rollback and external service compensation are separate: the compensation plan records a concrete cleanup/correction action, keeps `exact_rollback: false`, and preserves manual review when the outside system must be verified.
 
+For realistic local-only agent run examples, see [`docs/real-world-agent-runs.md`](docs/real-world-agent-runs.md):
+
+```bash
+python examples/coding_agent_run.py --output-dir /tmp/safeloop-real-world/coding
+python examples/research_intel_run.py --output-dir /tmp/safeloop-real-world/research
+python examples/browser_api_action_run.py --output-dir /tmp/safeloop-real-world/outside-action
+```
+
+These examples cover a coding run with test evidence and a rollback plan, a research/intel brief with a stale/low-confidence marker, and a browser/API-like outside action that remains blocked for manual review with `exact_rollback: false`.
+
 ## What it does today
 
 SafeLoop 0.1.4 writes local watchdog and review-aid artifacts such as:

@@ -62,6 +62,13 @@ cat note.txt  # base
 
 Actions outside the local repo are manual-review/compensation only; SafeLoop never claims exact rollback for GitHub, messaging, email, webhook, or other systems beyond the repo.
 
+`safeloop explain RUN_DIR` is the operator-language view:
+
+- **Rollback:** restore covered local repo files from verified artifacts.
+- **Compensation:** record a cleanup or correction plan for actions outside the local repo; this remains `exact_rollback: false`.
+- **Manual handoff:** route evidence to an operator when SafeLoop cannot safely verify or complete recovery automatically.
+- **Action groups:** bundle related files, hunks, checkpoints, and optional action IDs so a person can review one unit of work.
+
 ## Demo commands
 
 The public demo path is intentionally five commands:

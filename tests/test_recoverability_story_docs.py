@@ -8,6 +8,9 @@ def test_recoverability_first_doc_keeps_safe_public_framing() -> None:
     assert 'covered local file changes' in doc
     assert 'External side effects' in doc
     assert 'never treated as exact rollback' in doc
+    assert 'Actions outside the local repo' in doc
+    assert 'Action groups' in doc
+    assert 'Manual handoff' in doc
     assert 'safeloop watch-run' in doc
     assert 'safeloop rollback plan' in doc
     assert 'safeloop rollback apply' in doc

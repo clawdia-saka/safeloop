@@ -28,6 +28,7 @@ from safeloop.compensation import build_compensation_plan, compensation_section_
 from safeloop.control_plane.anchor_audit import audit_control_plane_anchors
 from safeloop.html_artifacts import write_docs_packet_html, write_markdown_doc_html, write_readiness_html
 from safeloop.local_anchor import create_local_anchor, verify_local_anchor
+from safeloop.operator_packet import write_operator_packet_v2
 from safeloop.policy_check import PolicyCheckError, build_policy_rollback_suggestion, run_policy_check
 from safeloop.rollback_groups import build_rollback_groups, print_rollback_groups
 from safeloop.side_effect_ledger import read_side_effect_events
@@ -626,6 +627,12 @@ def main(argv: list[str] | None = None) -> int:
     comp.add_argument("--action", dest="action_id")
     comp.add_argument("--dry-run", action="store_true")
     comp.add_argument("--json", action="store_true")
+    op = sub.add_parser("operator-packet", help="Generate a SafeLoop operator packet from a run directory.")
+    op.add_argument("run_dir")
+    op.add_argument("--v2", action="store_true", help="Generate Operator Packet v2 (default).")
+    op.add_argument("--output", help="Output path; defaults to RUN_DIR/operator-packet-v2.md")
+    op.add_argument("--external-evidence", action="append", default=[], help="Path or reference for outside-action evidence. Can be repeated.")
+    op.add_argument("--compensation-adapter", default="manual", help="Compensation adapter label for external evidence rows.")
     hr = sub.add_parser("html-report")
     hr.add_argument("run_dir")
     hr.add_argument("--output", help="HTML output path; defaults to <run_dir>/safeloop-readiness-report.html")
@@ -776,6 +783,26 @@ def main(argv: list[str] | None = None) -> int:
             print(f"status: {artifact['status']}")
             print(f"exact rollback: {str(artifact['exact_rollback']).lower()}")
             print(f"compensation-plan.json: {Path(args.run_dir) / 'compensation-plan.json'}")
+        return 0
+    if args.cmd == "operator-packet":
+        run_dir = Path(args.run_dir)
+        if not (run_dir / "run.json").exists():
+            print(f"missing run.json in run directory: {run_dir}", file=sys.stderr)
+            return 2
+        output = Path(args.output) if args.output else run_dir / "operator-packet-v2.md"
+        out = write_operator_packet_v2(
+            run_dir,
+            output_path=output,
+            external_evidence=args.external_evidence,
+            compensation_adapter=args.compensation_adapter,
+        )
+        packet = out.read_text(encoding="utf-8")
+        marker = "## 7. Recommended next action\n"
+        next_action = "unknown"
+        if marker in packet:
+            next_action = packet.split(marker, 1)[1].splitlines()[0].strip() or "unknown"
+        print(f"Operator packet v2 written: {out}")
+        print(f"recommended next action: {next_action}")
         return 0
     if args.cmd == "html-report":
         output = write_readiness_html(Path(args.run_dir), Path(args.output) if args.output else None)

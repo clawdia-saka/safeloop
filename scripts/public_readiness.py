@@ -13,12 +13,14 @@ DOC = ROOT / "docs" / "public-mvp-readiness.md"
 PYPROJECT = ROOT / "pyproject.toml"
 CLI = ROOT / "src" / "safeloop" / "cli.py"
 DEMO = ROOT / "examples" / "rollback_selective_demo.sh"
+FULL_DEMO = ROOT / "examples" / "full_demo.sh"
 
 REQUIRED_DOC_MARKERS = [
     "# SafeLoop Public MVP Readiness Packet",
     "## Release boundary",
     "## Local evidence gate",
     "## Demo verifier presence",
+    "## Full demo flow",
     "## Version and build gates",
     "## Claim boundary / banned public overclaims",
     "tamper-evident review aid",
@@ -30,6 +32,7 @@ REQUIRED_DOC_MARKERS = [
     "safeloop verify-anchor",
     "safeloop audit-control-plane-anchors",
     "python scripts/public_readiness.py --check",
+    "bash examples/full_demo.sh",
 ]
 
 BANNED_PUBLIC_OVERCLAIMS = [
@@ -94,6 +97,26 @@ def check() -> tuple[int, list[str]]:
         if "compens" in cli_text and "compens" not in demo_text:
             failures.append("compensation CLI appears present but demo lacks compensation/manual-review hook")
 
+    if not FULL_DEMO.exists():
+        failures.append(f"missing full demo script: {FULL_DEMO.relative_to(ROOT)}")
+    else:
+        full_demo_text = FULL_DEMO.read_text(encoding="utf-8")
+        for marker in [
+            "watch-run",
+            "timeline",
+            "verify-artifacts",
+            "review",
+            "rollback plan",
+            "operator-packet.md",
+            "rollback apply",
+            "public_readiness.py --check",
+            "external_review_required",
+            "exact_rollback=false",
+            "manual review/compensation",
+        ]:
+            if marker not in full_demo_text:
+                failures.append(f"full demo script missing marker: {marker}")
+
     version = project_version()
     if not re.fullmatch(r"\d+\.\d+\.\d+", version):
         failures.append(f"project version is not semver x.y.z: {version}")
@@ -102,6 +125,7 @@ def check() -> tuple[int, list[str]]:
     messages.append("demo-verifier=present" if not missing_verifiers else "demo-verifier=missing")
     messages.append("readiness-cli=present" if not missing_commands else "readiness-cli=missing")
     messages.append("demo-script=present" if DEMO.exists() else "demo-script=missing")
+    messages.append("full-demo=present" if FULL_DEMO.exists() else "full-demo=missing")
     messages.append("demo-verifier-help=ok" if not cli_help_failures else "demo-verifier-help=failed")
     messages.append("release-tag=not-created")
     messages.append("build-gate=pyproject-present")

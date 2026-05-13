@@ -133,6 +133,14 @@ bash examples/recoverability_external_effect_demo.sh
 
 That demo rolls back a covered local file while leaving fake external API evidence marked `external_review_required`. A static one-page visual is available at [`examples/recoverability_demo.html`](examples/recoverability_demo.html).
 
+For the full public-packet demo, run:
+
+```bash
+bash examples/full_demo.sh
+```
+
+That script ties the current release flow together in one local workspace: `watch-run` captures local change evidence, `timeline` and `verify-artifacts` build the audit trail, `review` and `rollback plan` produce the operator packet, `rollback apply` restores the covered repo file, and `scripts/public_readiness.py --check` verifies the packet language. The simulated external ticket remains manual-review/compensation territory with `exact_rollback=false`; SafeLoop does not claim rollback for anything outside the demo repo.
+
 For concrete compensation examples and adapter contract shapes for actions outside the local repo, see [`docs/compensation.md`](docs/compensation.md), [`docs/compensation-adapter-contracts.md`](docs/compensation-adapter-contracts.md), and run the local-only fixtures:
 
 ```bash

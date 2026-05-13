@@ -36,6 +36,29 @@ def test_recoverability_demo_html_shows_five_command_flow_and_boundary() -> None
     assert 'undo' in html
 
 
+def test_full_demo_script_documents_public_packet_flow() -> None:
+    script = Path('examples/full_demo.sh').read_text(encoding='utf-8')
+    readme = Path('README.md').read_text(encoding='utf-8')
+    doc = Path('docs/recoverability-first.md').read_text(encoding='utf-8')
+
+    for marker in [
+        'watch-run',
+        'timeline',
+        'verify-artifacts',
+        'review',
+        'rollback plan',
+        'operator-packet.md',
+        'rollback apply',
+        'public_readiness.py --check',
+        'external_review_required',
+        'exact_rollback=false',
+        'manual review/compensation',
+    ]:
+        assert marker in script
+    assert 'bash examples/full_demo.sh' in readme
+    assert 'examples/full_demo.sh' in doc
+
+
 def test_readme_links_lightweight_recoverability_gif() -> None:
     readme = Path('README.md').read_text(encoding='utf-8')
     gif_path = Path('docs/assets/safeloop-readme-demo.gif')

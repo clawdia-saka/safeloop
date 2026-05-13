@@ -39,6 +39,24 @@ The public MVP demo boundary is local and verifier-backed. The packet requires t
 
 These commands support review and demos. They do not assert remote transparency, immutable timestamping, or hosted governance.
 
+## Full demo flow
+
+The public packet includes a single local full-flow script:
+
+```bash
+bash examples/full_demo.sh
+```
+
+The script demonstrates the current SafeLoop flow without claiming authority over external systems:
+
+- Local change evidence: `watch-run` captures a repo file edit and checkpoint diff.
+- Recovery: `rollback plan` and `rollback apply` restore the covered local file after review.
+- Compensation/manual handoff: a fake outside-service log is kept as external evidence with `exact_rollback=false` and manual review required.
+- Operator packet: `operator-packet.md` links the run directory, diff, verification result, rollback plan, external evidence, and the exact rollback command.
+- Demo verification: `verify-artifacts` and `python scripts/public_readiness.py --check` are run as local gates.
+
+Exact rollback is only claimed for covered local file changes inside the demo repository. Anything outside that repository remains compensation/manual-review territory.
+
 ## Version and build gates
 
 - Version source: `pyproject.toml` (`project.version`).
@@ -71,6 +89,7 @@ Internal planning documents may discuss future governance or stronger transparen
 - [x] Version metadata source is documented.
 - [x] Release tagging and publication are explicitly out of scope.
 - [x] Public overclaim bans are documented and test-covered.
+- [x] Full demo flow covers local evidence, rollback/recovery, manual handoff, operator packet, and demo verification.
 
 ## Rollback public readiness skeleton
 

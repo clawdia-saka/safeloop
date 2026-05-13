@@ -1,0 +1,23 @@
+{
+  "checked_artifacts": [
+    "baseline/baseline.json",
+    "baseline/manifest.json",
+    "baseline/summary.md",
+    "checkpoints/cp-0001/changes.patch",
+    "checkpoints/cp-0001/checkpoint.json",
+    "checkpoints/cp-0001/diff.patch",
+    "checkpoints/cp-0001/hunk-manifest.json",
+    "checkpoints/cp-0001/manifest.json",
+    "checkpoints/cp-0001/restore-manifest.json",
+    "checkpoints/cp-0001/summary.md",
+    "process-result.json",
+    "rollback-plan.json"
+  ],
+  "copy": "tamper-evident local artifacts",
+  "issues": [],
+  "latest_event_hash": "sha256:$HASH",
+  "schema_version": "verify-artifacts-result.v1",
+  "status": "valid",
+  "verified_at": "$TIMESTAMP",
+  "warnings": []
+}

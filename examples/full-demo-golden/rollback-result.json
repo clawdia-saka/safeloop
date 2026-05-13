@@ -1,0 +1,70 @@
+{
+  "apply_command": "safeloop rollback apply $RUN_DIR $RUN_ID --from-checkpoint cp-0001 --files service.md",
+  "blockers": [],
+  "covered_local_file_changes": {
+    "created": [],
+    "deleted": [],
+    "modified": [
+      "service.md"
+    ]
+  },
+  "dependency_warnings": [
+    {
+      "code": "later_changes_after_target",
+      "file": "service.md"
+    }
+  ],
+  "external_side_effects": {
+    "classification": "manual_review",
+    "exact_rollback": false,
+    "note": "External side effects are not exact rollback; review side-effects.jsonl for compensation or handoff."
+  },
+  "file_counts": {
+    "created": 0,
+    "deleted": 0,
+    "modified": 1
+  },
+  "mode": "apply",
+  "operation": "rollback_selected_files",
+  "preflight": {
+    "status": "pass"
+  },
+  "restored_file_count": 1,
+  "review_required": true,
+  "rollback_source_hashes": {
+    "service.md": "sha256:$HASH"
+  },
+  "run_id": "$RUN_ID",
+  "schema_version": "rollback-result.v1",
+  "selected_files": [
+    "service.md"
+  ],
+  "status": "applied",
+  "target": {
+    "checkpoint_id": "cp-0001",
+    "type": "checkpoint"
+  },
+  "verification": {
+    "checked_artifacts": [
+      "baseline/baseline.json",
+      "baseline/manifest.json",
+      "baseline/summary.md",
+      "checkpoints/cp-0001/changes.patch",
+      "checkpoints/cp-0001/checkpoint.json",
+      "checkpoints/cp-0001/diff.patch",
+      "checkpoints/cp-0001/hunk-manifest.json",
+      "checkpoints/cp-0001/manifest.json",
+      "checkpoints/cp-0001/restore-manifest.json",
+      "checkpoints/cp-0001/summary.md",
+      "process-result.json",
+      "rollback-plan.json"
+    ],
+    "copy": "tamper-evident local artifacts",
+    "issues": [],
+    "latest_event_hash": "sha256:$HASH",
+    "schema_version": "verify-artifacts-result.v1",
+    "status": "valid",
+    "verified_at": "$TIMESTAMP",
+    "warnings": []
+  }
+}

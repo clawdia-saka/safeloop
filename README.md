@@ -145,6 +145,14 @@ python examples/browser_api_action_run.py --output-dir /tmp/safeloop-real-world/
 
 These examples cover a coding run with test evidence and a rollback plan, a research/intel brief with a stale/low-confidence marker, and a browser/API-like outside action that remains blocked for manual review with `exact_rollback: false`.
 
+For a local-only retrieved-context integration pattern, see [`docs/gbrain-integration-demo.md`](docs/gbrain-integration-demo.md) and run:
+
+```bash
+bash examples/gbrain_context_demo.sh
+```
+
+That demo uses a mock Gbrain fixture as evidence input only: Gbrain is not the scheduler or control plane, and SafeLoop owns action evidence, rollback planning, and manual review artifacts.
+
 ## What it does today
 
 SafeLoop 0.1.4 writes local watchdog and review-aid artifacts such as:

@@ -18,6 +18,7 @@ def test_public_readiness_doc_has_release_boundary_and_local_evidence_gate() -> 
         "## Release boundary",
         "## Local evidence gate",
         "## Demo verifier presence",
+        "## Full demo flow",
         "## Version and build gates",
         "## Claim boundary / banned public overclaims",
         "tamper-evident review aid",
@@ -33,6 +34,9 @@ def test_public_readiness_doc_has_release_boundary_and_local_evidence_gate() -> 
     assert "safeloop verify-anchor" in text
     assert "safeloop audit-control-plane-anchors" in text
     assert "python scripts/public_readiness.py --check" in text
+    assert "bash examples/full_demo.sh" in text
+    assert "operator-packet.md" in text
+    assert "exact_rollback=false" in text
 
 
 def test_public_readiness_doc_does_not_publish_overclaims() -> None:
@@ -62,6 +66,7 @@ def test_public_readiness_script_check_verifies_packet_and_build_metadata() -> N
     assert "version=0.1.4" in output
     assert "demo-verifier=present" in output
     assert "demo-verifier-help=ok" in output
+    assert "full-demo=present" in output
     assert "release-tag=not-created" in output
 
 

@@ -35,3 +35,5 @@ The script prints the retained temp workspace and writes:
 - `operator-packet.md` using the [operator packet v1](specs/operator-packet-v1.md) structure, with the role split, evidence paths, compensation/recovery options, manual-review decision, and explicit non-goals/boundary.
 
 The demo applies rollback at the end to prove exact local rollback is possible for the covered file change. That rollback claim is limited to the covered local repository file change; actions outside the local repo remain manual-review or separate-compensation territory.
+
+For the public packet version of the same boundary, run `bash examples/full_demo.sh`. That flow adds explicit demo verification (`verify-artifacts` plus `scripts/public_readiness.py --check`) and an operator packet that keeps Gbrain/retrieval-style evidence, local rollback, and external manual handoff as separate responsibilities.

@@ -35,6 +35,18 @@ Other commands remain useful, but should be framed carefully:
 - `undo` is a compatibility alias for the older dry-run/apply UX.
 - `review`, `explain`, `policy-check`, and HTML/reporting commands are advanced review aids, not the first thing new users need.
 
+## Full public demo packet
+
+The checked-in full demo is `examples/full_demo.sh`. It is intentionally a narrow local packet, not a UI redesign or hosted control-plane claim:
+
+1. Creates a temporary git repo and records the baseline file state.
+2. Runs `safeloop watch-run` around an agent command that changes a covered local file and writes a fake outside-service log.
+3. Runs `safeloop timeline`, `safeloop verify-artifacts`, `safeloop review`, and `safeloop rollback plan` to produce local change evidence and an operator-readable packet.
+4. Applies `safeloop rollback apply` only for the covered local file.
+5. Runs `python scripts/public_readiness.py --check` as the demo verification gate.
+
+The operator packet points to the checkpoint diff, verification result, rollback plan, and fake external evidence. It must keep the boundary explicit: local file rollback can be exact when preconditions hold; the outside-service log is compensation/manual-handoff evidence and is not rolled back by SafeLoop.
+
 ## Why this framing matters
 
 A broad claim such as “AI agent actions can be rolled back” is unsafe. It hides the difference between local, observed, covered state and external systems that may already have delivered messages, updated databases, or triggered downstream work.

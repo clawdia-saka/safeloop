@@ -101,8 +101,19 @@ Rollback command:
 python -m safeloop.cli rollback apply "$RUN_DIR" "$RUN_ID" "$CHECKPOINT_ID" --files service.md
 MD
 python -m safeloop.cli rollback apply "$RUN_DIR" "$RUN_ID" "$CHECKPOINT_ID" --files service.md
-# Copy the packet after rollback because it is an operator attachment, not a
-# hash-chain artifact bound by verify-artifacts.
+python - <<PY
+from pathlib import Path
+from safeloop.operator_packet import write_operator_packet_v2
+write_operator_packet_v2(
+    Path("$RUN_DIR"),
+    output_path=Path("$RUN_DIR") / "operator-packet-v2.md",
+    external_evidence=["$EXTERNAL_LOG"],
+    compensation_adapter="manual",
+)
+PY
+# Copy the v1 packet after rollback because it is an operator attachment, not a
+# hash-chain artifact bound by verify-artifacts. The v2 packet is generated from
+# local run artifacts and the simulated outside-action evidence.
 cp "$OPERATOR_PACKET" "$RUN_DIR/operator-packet.md"
 python scripts/public_readiness.py --check
 
@@ -111,4 +122,5 @@ cat "$DEMO_REPO/service.md"
 printf '\nExternal evidence requiring handoff:\n'
 cat "$EXTERNAL_LOG"
 printf '\nOperator packet: %s\n' "$RUN_DIR/operator-packet.md"
+printf 'Operator packet v2: %s\n' "$RUN_DIR/operator-packet-v2.md"
 printf 'Full demo complete: local rollback verified; external effect requires manual review/compensation.\n'

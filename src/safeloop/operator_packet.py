@@ -35,7 +35,12 @@ def _status(value: object, default: str = "unknown") -> str:
 
 
 def _file_items_from_plan(plan: dict) -> list[str]:
-    files = plan.get("files") if isinstance(plan.get("files"), dict) else {}
+    files = plan.get("files")
+    if not isinstance(files, dict):
+        files = plan.get("covered_local_file_changes")
+    if not isinstance(files, dict):
+        files = {}
+
     items: list[str] = []
     for key in ["modified", "created", "deleted"]:
         values = files.get(key) or []

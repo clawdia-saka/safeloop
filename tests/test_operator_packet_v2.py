@@ -121,6 +121,18 @@ def test_write_operator_packet_v2_is_stable(tmp_path: Path) -> None:
     assert second.read_text(encoding="utf-8") == first_text
 
 
+def test_packet_v2_reads_legacy_covered_local_file_changes_plan_shape(tmp_path: Path) -> None:
+    run_dir = make_run_dir(tmp_path)
+    plan = json.loads((run_dir / "rollback-plan.json").read_text(encoding="utf-8"))
+    plan["covered_local_file_changes"] = plan.pop("files")
+    (run_dir / "rollback-plan.json").write_text(json.dumps(plan, indent=2), encoding="utf-8")
+
+    packet = render_operator_packet_v2(run_dir)
+
+    assert "| service.md | local_file | service.md | rollback_available | true | rollback-plan.json |" in packet
+    assert "--files service.md" in packet
+
+
 def test_packet_v2_spec_and_example_document_required_boundaries() -> None:
     spec = SPEC.read_text(encoding="utf-8")
     example = EXAMPLE.read_text(encoding="utf-8")

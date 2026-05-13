@@ -113,6 +113,79 @@ def test_packet_v2_boundary_never_claims_external_exact_rollback(tmp_path: Path)
     assert "external_side_effect | external-evidence.log | manual_review_required | true" not in packet
 
 
+def test_operator_packet_for_recorded_unsafe_outbox_does_not_offer_resume_or_approve_as_normal_path(
+    tmp_path: Path,
+) -> None:
+    run_dir = make_run_dir(tmp_path)
+    run = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
+    run.update({"status": "applied", "approval_policy": "unsafe_allow_without_hooks"})
+    (run_dir / "run.json").write_text(json.dumps(run, indent=2), encoding="utf-8")
+    (run_dir / "external-outbox.json").write_text(
+        json.dumps(
+            {
+                "items": [
+                    {
+                        "id": "outbox-1",
+                        "checkpoint_id": "cp-0001",
+                        "payload": {"kind": "webhook", "url": "https://example.invalid/hook"},
+                        "status": "pending",
+                    }
+                ]
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    packet = render_operator_packet_v2(run_dir)
+
+    assert "demo-only unsafe exception" in packet
+    assert "Do not approve, resume, or dispatch external side effects from this outbox item" in packet
+    assert "pending shadow review only" in packet
+    assert "pending_unbound_external_outbox" in packet
+    assert "safeloop approve" not in packet
+    assert "safeloop resume" not in packet
+
+
+def test_external_outbox_items_require_approval_request_digest_and_decision_binding(tmp_path: Path) -> None:
+    run_dir = make_run_dir(tmp_path)
+    run = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
+    run.update({"approval_policy": "unsafe_allow_without_hooks"})
+    (run_dir / "run.json").write_text(json.dumps(run, indent=2), encoding="utf-8")
+    (run_dir / "external-outbox.json").write_text(
+        json.dumps(
+            {
+                "items": [
+                    {"id": "outbox-1", "checkpoint_id": "cp-0001", "payload": {}, "status": "pending"},
+                    {
+                        "id": "outbox-2",
+                        "checkpoint_id": "cp-0001",
+                        "payload": {},
+                        "status": "pending",
+                        "approval_request_digest": "sha256:approval",
+                        "approval_status": "approved",
+                        "decision_id": "decision-1",
+                        "dispatch_allowed": True,
+                    },
+                ]
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    packet = render_operator_packet_v2(run_dir)
+
+    assert "approval_request_digest" in packet
+    assert "approval_status" in packet
+    assert "decision_id or waiver_id" in packet
+    assert "dispatch_allowed: false unless lifecycle-bound" in packet
+    assert "outbox-1" in packet
+    assert "lifecycle_bound=false" in packet
+    assert "outbox-2" in packet
+    assert "lifecycle_bound=true" in packet
+
+
 def test_write_operator_packet_v2_is_stable(tmp_path: Path) -> None:
     run_dir = make_run_dir(tmp_path)
     first = write_operator_packet_v2(run_dir, output_path=run_dir / "operator-packet-v2.md")

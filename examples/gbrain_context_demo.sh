@@ -1,0 +1,157 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Local-only SafeLoop + Gbrain-context demo.
+# This is a mock retrieval fixture: it never invokes gbrain, never uses network,
+# and never reads/writes ~/.gbrain.
+
+TMP_ROOT="${TMPDIR:-/tmp}/safeloop-gbrain-context-demo-$$"
+DEMO_REPO="$TMP_ROOT/repo"
+RUN_ROOT="$TMP_ROOT/runs"
+GBRAIN_MOCK="$TMP_ROOT/gbrain-mock"
+mkdir -p "$DEMO_REPO" "$RUN_ROOT" "$GBRAIN_MOCK"
+
+cleanup() {
+  printf '\nDemo workspace retained at: %s\n' "$TMP_ROOT"
+}
+trap cleanup EXIT
+
+cat > "$GBRAIN_MOCK/README.md" <<'MD'
+# Gbrain mock fixture
+
+Local-only stand-in for retrieved context. It is evidence input, not a scheduler,
+control plane, approval service, or rollback system.
+MD
+
+cat > "$GBRAIN_MOCK/retrieved_context.json" <<'JSON'
+{
+  "schema_version": "gbrain-mock-retrieval.v1",
+  "source": "local mock fixture",
+  "query": "How should service.md be updated for the operator handoff?",
+  "retrieved_at": "offline-demo",
+  "evidence": [
+    {
+      "id": "ctx-001",
+      "title": "Operator handoff policy",
+      "quote": "Add a local handoff note, keep rollback exact, and require manual review for external effects.",
+      "confidence": 0.93
+    }
+  ],
+  "boundaries": {
+    "gbrain_control_plane": false,
+    "scheduler": false,
+    "mutates_real_gbrain_home": false,
+    "network_required": false
+  }
+}
+JSON
+
+cat > "$GBRAIN_MOCK/retrieved_context.brief.md" <<'MD'
+# Retrieved context brief
+
+Gbrain role: retrieved context evidence only.
+Agent role: decide and edit a local file using that evidence.
+SafeLoop role: action evidence, rollback plan, manual review.
+
+Evidence ctx-001 recommends adding a local operator handoff note while preserving exact rollback for covered local files.
+MD
+
+cp "$GBRAIN_MOCK/retrieved_context.json" "$TMP_ROOT/retrieved_context.json"
+cp "$GBRAIN_MOCK/retrieved_context.brief.md" "$TMP_ROOT/retrieved_context.brief.md"
+
+(
+  cd "$DEMO_REPO"
+  git init -q
+  git config user.email demo@example.test
+  git config user.name demo
+  printf 'base service contract\n' > service.md
+  git add service.md
+  git commit -q -m init
+)
+
+cat > "$DEMO_REPO/agent.py" <<'PY'
+import json
+import os
+from pathlib import Path
+
+context = json.loads(Path(os.environ["RETRIEVED_CONTEXT_JSON"]).read_text(encoding="utf-8"))
+evidence = context["evidence"][0]
+Path("service.md").write_text(
+    "base service contract\n"
+    "\n"
+    "operator handoff note: use local SafeLoop evidence and manual review.\n"
+    f"retrieval evidence: {evidence['id']} ({evidence['title']})\n",
+    encoding="utf-8",
+)
+print(f"agent used local retrieved context {evidence['id']} and updated service.md")
+PY
+
+WATCH_OUTPUT="$TMP_ROOT/watch-run.out"
+RETRIEVED_CONTEXT_JSON="$GBRAIN_MOCK/retrieved_context.json" \
+python -m safeloop.cli watch-run \
+  --task-id gbrain-context-demo \
+  --repo "$DEMO_REPO" \
+  --run-root "$RUN_ROOT" \
+  -- python "$DEMO_REPO/agent.py" | tee "$WATCH_OUTPUT"
+
+RUN_DIR="$(python - "$WATCH_OUTPUT" <<'PY'
+import sys
+from pathlib import Path
+for line in Path(sys.argv[1]).read_text(encoding="utf-8").splitlines():
+    if line.startswith("Run dir: "):
+        print(line.removeprefix("Run dir: "))
+        break
+else:
+    raise SystemExit("Run dir not found in watch-run output")
+PY
+)"
+printf '%s\n' "$RUN_DIR" > "$TMP_ROOT/run-dir.txt"
+
+RUN_ID="$(python - "$RUN_DIR/run.json" <<'PY'
+import json, sys
+from pathlib import Path
+print(json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))["run_id"])
+PY
+)"
+CHECKPOINT_ID="$(python - "$RUN_DIR/run.json" <<'PY'
+import json, sys
+from pathlib import Path
+count = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))["checkpoint_count"]
+print(f"cp-{count:04d}")
+PY
+)"
+
+python -m safeloop.cli timeline "$RUN_DIR"
+python -m safeloop.cli verify-artifacts "$RUN_DIR"
+python -m safeloop.cli review "$RUN_DIR"
+python -m safeloop.cli rollback plan "$RUN_DIR" "$RUN_ID" "$CHECKPOINT_ID" --files service.md
+
+cat > "$TMP_ROOT/operator-packet.md" <<MD
+# SafeLoop + Gbrain operator packet
+
+Gbrain role: retrieved context evidence only.
+Agent role: local file edit based on retrieved context.
+SafeLoop role: action evidence, rollback plan, manual review.
+Gbrain is not the scheduler or control plane.
+
+Run directory: $RUN_DIR
+Retrieved context JSON: $RUN_DIR/retrieved_context.json
+Retrieved context brief: $RUN_DIR/retrieved_context.brief.md
+Review summary: $RUN_DIR/review-summary.json
+Rollback plan: $RUN_DIR/rollback-plan.json
+
+Manual review: confirm the retrieved evidence supports the agent edit before approving rollback or follow-up actions.
+Rollback command: python -m safeloop.cli rollback apply "$RUN_DIR" "$RUN_ID" "$CHECKPOINT_ID" --files service.md
+MD
+
+python -m safeloop.cli rollback apply "$RUN_DIR" "$RUN_ID" "$CHECKPOINT_ID" --files service.md
+
+# Copy retrieval evidence after core artifact verification and rollback. These
+# files are operator packet attachments, not SafeLoop hash-chain artifacts.
+cp "$GBRAIN_MOCK/retrieved_context.json" "$RUN_DIR/retrieved_context.json"
+cp "$GBRAIN_MOCK/retrieved_context.brief.md" "$RUN_DIR/retrieved_context.brief.md"
+cp "$TMP_ROOT/operator-packet.md" "$RUN_DIR/operator-packet.md"
+
+echo "SafeLoop + Gbrain local mock demo complete"
+echo "Run dir: $RUN_DIR"
+echo "Operator packet: $TMP_ROOT/operator-packet.md"

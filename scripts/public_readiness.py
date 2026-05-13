@@ -69,7 +69,11 @@ def check() -> tuple[int, list[str]]:
     demo_verifiers = ["verify-artifacts", "verify-anchor", "audit-control-plane-anchors"]
     readiness_commands = ["review", "explain", "policy-check", "rollback"]
     missing_verifiers = [name for name in demo_verifiers if name not in cli_text]
-    missing_commands = [name for name in readiness_commands if f'add_parser("{name}")' not in cli_text]
+    missing_commands = [
+        name
+        for name in readiness_commands
+        if f'add_parser("{name}")' not in cli_text and f'add_parser(\n        "{name}"' not in cli_text
+    ]
     cli_help_failures: list[str] = []
     for name in [*demo_verifiers, *readiness_commands]:
         proc = subprocess.run(

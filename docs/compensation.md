@@ -1,16 +1,16 @@
 # Compensation is not rollback
 
-SafeLoop separates **covered local file rollback** from **external service compensation**.
+SafeLoop separates **covered local file rollback** from **compensation for actions outside the local repo**.
 
 - Covered local file changes can be planned, reviewed, and rolled back when SafeLoop can verify the covered state.
-- External service changes are never treated as exact rollback. They remain `exact_rollback: false` even when a cleanup or correction action is available.
+- Actions outside the local repo are never treated as exact rollback. They remain `exact_rollback: false` even when a cleanup or correction action is available.
 - Compensation is an operator-facing mitigation plan: SafeLoop records what happened, which compensation action is possible, and whether `manual_review_required` still applies.
 
-This boundary is the product point: SafeLoop does not pretend outside-world actions vanished.
+This boundary is the product point: SafeLoop does not pretend actions outside the local repo vanished.
 
 ## Required artifact semantics
 
-Every external compensation example should preserve these semantics:
+Every compensation example for actions outside the local repo should preserve these semantics:
 
 ```yaml
 exact_rollback: false
@@ -63,10 +63,10 @@ Run the local-only fixture demo:
 bash examples/compensation_message_demo.sh
 ```
 
-## Local rollback vs external compensation
+## Local rollback vs compensation for actions outside the local repo
 
 - Local rollback answers: can SafeLoop restore covered local files from verified artifacts?
-- External compensation answers: what should an operator do about an action that already left the repo?
-- A single run may have both: local rollback succeeds while external service compensation remains pending.
+- Compensation for actions outside the local repo answers: what should an operator do about an action that already left the repo?
+- A single run may have both: local rollback succeeds while compensation for a GitHub issue, message, email, or webhook remains pending.
 
 That is expected. SafeLoop should surface both states instead of collapsing them into one unsafe success label.

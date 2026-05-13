@@ -1,0 +1,107 @@
+{
+  "schema_version": "compensation-adapter-examples.v1",
+  "description": "Local-only examples for compensation adapter contracts for actions outside the local repo. These examples do not call GitHub, email, or webhook services and do not claim exact rollback.",
+  "required_contract_fields": [
+    "adapter.name",
+    "adapter.version",
+    "adapter.supports_idempotency",
+    "effect_class",
+    "phase",
+    "external_ref",
+    "idempotency_key",
+    "privacy.redaction",
+    "privacy.contains_secret",
+    "privacy.raw_payload_persisted",
+    "compensation.capability",
+    "compensation.action",
+    "compensation.operator_note",
+    "exact_rollback",
+    "manual_review_required"
+  ],
+  "examples": [
+    {
+      "name": "github_issue_comment",
+      "effect_class": "github_issue_comment",
+      "phase": "committed",
+      "adapter": {
+        "name": "github-issues",
+        "version": "example-contract.v1",
+        "supports_idempotency": true
+      },
+      "target": {
+        "repo": "example/repo",
+        "issue_number": 42
+      },
+      "external_ref": "https://github.com/example/repo/issues/42#issuecomment-redacted",
+      "idempotency_key": "example-run-id:github-issue-comment:42",
+      "privacy": {
+        "redaction": "strict",
+        "contains_secret": false,
+        "raw_payload_persisted": false
+      },
+      "compensation": {
+        "capability": "best_effort",
+        "action": "close_issue_or_post_correction_comment",
+        "operator_note": "Review the GitHub issue/comment, then close it or post a correction that links the superseding evidence. SafeLoop records the plan only."
+      },
+      "exact_rollback": false,
+      "manual_review_required": true
+    },
+    {
+      "name": "message_or_email",
+      "effect_class": "message_send",
+      "phase": "committed",
+      "adapter": {
+        "name": "message-email",
+        "version": "example-contract.v1",
+        "supports_idempotency": false
+      },
+      "target": {
+        "platform": "email-or-chat",
+        "recipient_ref": "redacted-recipient-or-channel"
+      },
+      "external_ref": "redacted-message-id",
+      "idempotency_key": null,
+      "privacy": {
+        "redaction": "strict",
+        "contains_secret": false,
+        "raw_payload_persisted": false
+      },
+      "compensation": {
+        "capability": "manual",
+        "action": "delete_if_supported_else_send_correction",
+        "operator_note": "Verify whether deletion is available and appropriate; otherwise send a correction message with the corrected context."
+      },
+      "exact_rollback": false,
+      "manual_review_required": true
+    },
+    {
+      "name": "webhook_delivery",
+      "effect_class": "webhook_delivery",
+      "phase": "committed",
+      "adapter": {
+        "name": "webhook",
+        "version": "example-contract.v1",
+        "supports_idempotency": true
+      },
+      "target": {
+        "endpoint_ref": "redacted-webhook-endpoint",
+        "event_type": "deployment_status"
+      },
+      "external_ref": "redacted-webhook-delivery-id",
+      "idempotency_key": "example-run-id:webhook:deployment_status",
+      "privacy": {
+        "redaction": "strict",
+        "contains_secret": false,
+        "raw_payload_persisted": false
+      },
+      "compensation": {
+        "capability": "best_effort",
+        "action": "send_superseding_webhook_event",
+        "operator_note": "Send a superseding webhook event only after reviewing the downstream contract. The original delivery may already have been observed."
+      },
+      "exact_rollback": false,
+      "manual_review_required": true
+    }
+  ]
+}

@@ -126,6 +126,15 @@ bash examples/recoverability_external_effect_demo.sh
 
 That demo rolls back a covered local file while leaving fake external API evidence marked `external_review_required`. A static one-page visual is available at [`examples/recoverability_demo.html`](examples/recoverability_demo.html).
 
+For concrete compensation examples, see [`docs/compensation.md`](docs/compensation.md) and run the local-only fixtures:
+
+```bash
+bash examples/compensation_github_issue_demo.sh
+bash examples/compensation_message_demo.sh
+```
+
+They show that covered local rollback and external service compensation are separate: the compensation plan records a concrete cleanup/correction action, keeps `exact_rollback: false`, and preserves manual review when the outside system must be verified.
+
 ## What it does today
 
 SafeLoop 0.1.4 writes local watchdog and review-aid artifacts such as:

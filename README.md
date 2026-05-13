@@ -60,7 +60,7 @@ safeloop rollback apply "$RUN_DIR" "$RUN_ID" --files note.txt
 cat note.txt  # base
 ```
 
-External side effects are manual-review/compensation only; SafeLoop never claims exact rollback for external systems.
+Actions outside the local repo are manual-review/compensation only; SafeLoop never claims exact rollback for GitHub, messaging, email, webhook, or other systems beyond the repo.
 
 ## Demo commands
 
@@ -126,14 +126,14 @@ bash examples/recoverability_external_effect_demo.sh
 
 That demo rolls back a covered local file while leaving fake external API evidence marked `external_review_required`. A static one-page visual is available at [`examples/recoverability_demo.html`](examples/recoverability_demo.html).
 
-For concrete compensation examples, see [`docs/compensation.md`](docs/compensation.md) and run the local-only fixtures:
+For concrete compensation examples and adapter contract shapes for actions outside the local repo, see [`docs/compensation.md`](docs/compensation.md), [`docs/compensation-adapter-contracts.md`](docs/compensation-adapter-contracts.md), and run the local-only fixtures:
 
 ```bash
 bash examples/compensation_github_issue_demo.sh
 bash examples/compensation_message_demo.sh
 ```
 
-They show that covered local rollback and external service compensation are separate: the compensation plan records a concrete cleanup/correction action, keeps `exact_rollback: false`, and preserves manual review when the outside system must be verified.
+They show that covered local rollback and compensation for actions outside the local repo are separate: the compensation plan records a concrete cleanup/correction action, keeps `exact_rollback: false`, and preserves manual review when GitHub, messaging, email, or webhook state must be verified.
 
 For realistic local-only agent run examples, see [`docs/real-world-agent-runs.md`](docs/real-world-agent-runs.md):
 

@@ -18,7 +18,7 @@ def test_compensation_doc_exists_and_pins_external_boundary() -> None:
         "GitHub issue/comment",
         "message correction",
         "covered local file",
-        "external service",
+        "actions outside the local repo",
     ]
     for marker in required:
         assert marker in text
@@ -28,10 +28,62 @@ def test_readme_links_compensation_examples_and_boundary() -> None:
     text = (ROOT / "README.md").read_text(encoding="utf-8")
 
     assert "docs/compensation.md" in text
+    assert "docs/compensation-adapter-contracts.md" in text
     assert "examples/compensation_github_issue_demo.sh" in text
     assert "examples/compensation_message_demo.sh" in text
-    assert "External side effects are manual-review/compensation only" in text
+    assert "Actions outside the local repo are manual-review/compensation only" in text
+    assert "actions outside the local repo" in text
     assert "covered local" in text
+
+
+def test_adapter_contract_examples_include_required_fields_and_no_rollback_claims() -> None:
+    fixture = json.loads((ROOT / "examples" / "compensation_adapter_contracts.json").read_text(encoding="utf-8"))
+    doc = (ROOT / "docs" / "compensation-adapter-contracts.md").read_text(encoding="utf-8")
+
+    assert fixture["schema_version"] == "compensation-adapter-examples.v1"
+    assert "actions outside the local repo" in fixture["description"]
+    assert "actions outside the local repo" in doc
+    assert "webhook_delivery" in doc
+
+    required = set(fixture["required_contract_fields"])
+    assert {
+        "adapter.name",
+        "adapter.version",
+        "adapter.supports_idempotency",
+        "effect_class",
+        "phase",
+        "external_ref",
+        "idempotency_key",
+        "privacy.redaction",
+        "privacy.contains_secret",
+        "privacy.raw_payload_persisted",
+        "compensation.capability",
+        "compensation.action",
+        "compensation.operator_note",
+        "exact_rollback",
+        "manual_review_required",
+    } <= required
+
+    examples = fixture["examples"]
+    assert {example["effect_class"] for example in examples} == {
+        "github_issue_comment",
+        "message_send",
+        "webhook_delivery",
+    }
+    for example in examples:
+        assert example["adapter"]["name"]
+        assert example["adapter"]["version"]
+        assert isinstance(example["adapter"]["supports_idempotency"], bool)
+        assert example["phase"] == "committed"
+        assert example["external_ref"]
+        assert example["privacy"]["redaction"] == "strict"
+        assert example["privacy"]["contains_secret"] is False
+        assert example["privacy"]["raw_payload_persisted"] is False
+        assert example["compensation"]["capability"] in {"manual", "best_effort"}
+        assert example["compensation"]["action"]
+        assert example["compensation"]["operator_note"]
+        assert example["exact_rollback"] is False
+        assert example["manual_review_required"] is True
 
 
 def test_github_issue_compensation_demo_records_non_exact_compensation() -> None:

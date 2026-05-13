@@ -24,7 +24,12 @@ from safeloop.agent_watchdog import (
     verify_run,
     watch_run,
 )
-from safeloop.compensation import build_compensation_plan, compensation_section_for_rollback
+from safeloop.compensation import (
+    CompensationResultValidationError,
+    build_compensation_plan,
+    compensation_section_for_rollback,
+    create_compensation_result,
+)
 from safeloop.control_plane.anchor_audit import audit_control_plane_anchors
 from safeloop.external_effects import ExternalEffectValidationError, record_external_effect
 from safeloop.html_artifacts import write_docs_packet_html, write_markdown_doc_html, write_readiness_html
@@ -623,11 +628,18 @@ def main(argv: list[str] | None = None) -> int:
     pc.add_argument("--json", action="store_true")
     pc.add_argument("--suggest-rollback", action="store_true")
     comp = sub.add_parser("compensate")
-    comp.add_argument("run_dir")
+    comp.add_argument("run_dir", nargs="?")
+    comp.add_argument("extra", nargs="*")
     comp.add_argument("--side-effect", dest="side_effect_id")
     comp.add_argument("--action", dest="action_id")
     comp.add_argument("--dry-run", action="store_true")
     comp.add_argument("--json", action="store_true")
+    comp.add_argument("--effect-id")
+    comp.add_argument("--status")
+    comp.add_argument("--operator", default="unknown")
+    comp.add_argument("--evidence")
+    comp.add_argument("--quote-or-field")
+    comp.add_argument("--notes")
     external = sub.add_parser("external", help="Record external side effects for compensation/manual review.")
     external_sub = external.add_subparsers(dest="external_cmd", required=True)
     external_record = external_sub.add_parser("record", help="Append RUN_DIR/external-effects.jsonl.")
@@ -786,6 +798,35 @@ def main(argv: list[str] | None = None) -> int:
             print(f"policy-check-result.json: {Path(args.run_dir) / 'policy-check-result.json'}")
         return 1 if result["violations"] else 0
     if args.cmd == "compensate":
+        if args.run_dir == "result":
+            if not args.extra:
+                print("compensate result requires RUN_DIR", file=sys.stderr)
+                return 2
+            try:
+                artifact = create_compensation_result(
+                    Path(args.extra[0]),
+                    effect_id=args.effect_id or "",
+                    status=args.status or "",
+                    operator=args.operator,
+                    evidence_path_or_url=args.evidence or "",
+                    quote_or_field=args.quote_or_field or "",
+                    notes=args.notes,
+                )
+            except CompensationResultValidationError as exc:
+                print(str(exc), file=sys.stderr)
+                return 2
+            if args.json:
+                print(json.dumps(artifact, indent=2, sort_keys=True))
+            else:
+                print("SafeLoop compensation result")
+                print(f"status: {artifact['status']}")
+                print(f"effect id: {artifact['effect_id']}")
+                print(f"exact rollback: {str(artifact['exact_rollback']).lower()}")
+                print(f"compensation-result.json: {Path(args.extra[0]) / 'compensation-result.json'}")
+            return 0
+        if not args.run_dir:
+            print("compensate requires RUN_DIR", file=sys.stderr)
+            return 2
         artifact = build_compensation_plan(Path(args.run_dir), side_effect_id=args.side_effect_id, action_id=args.action_id, dry_run=args.dry_run)
         if args.json:
             print(json.dumps(artifact, indent=2, sort_keys=True))

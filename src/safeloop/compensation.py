@@ -7,6 +7,7 @@ it does not call external services or execute compensation.
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -15,7 +16,13 @@ from safeloop.external_effects import read_external_effects
 from safeloop.side_effect_ledger import read_side_effect_events
 
 SCHEMA_VERSION = "compensation-plan.v1"
+RESULT_SCHEMA_VERSION = "compensation-result.v1"
 CAPABILITIES = {"none", "manual", "best_effort", "verified"}
+RESULT_STATUSES = {"compensation_completed", "compensation_failed", "ignored_by_operator", "manual_review_required"}
+
+
+class CompensationResultValidationError(ValueError):
+    """Raised when a manual compensation result receipt is invalid."""
 
 
 def _load_json(path: Path) -> dict[str, Any]:
@@ -177,6 +184,91 @@ def build_compensation_plan(run_dir: str | Path, *, side_effect_id: str | None =
     }
     atomic_json(run_path / "compensation-plan.json", plan)
     return plan
+
+
+def _evidence_key(path_or_url: str) -> str:
+    value = path_or_url.strip()
+    if value.startswith(("http://", "https://")):
+        return "url"
+    return "path"
+
+
+def _known_effect_ids(run_path: Path) -> set[str]:
+    ids = {str(effect.get("effect_id")) for effect in read_external_effects(run_path) if effect.get("effect_id")}
+    plan_path = run_path / "compensation-plan.json"
+    if plan_path.exists():
+        try:
+            plan = _load_json(plan_path)
+        except json.JSONDecodeError:
+            plan = {}
+        for item in plan.get("items", []) if isinstance(plan.get("items"), list) else []:
+            if not isinstance(item, dict):
+                continue
+            for key in ("effect_id", "side_effect_id"):
+                if item.get(key):
+                    ids.add(str(item[key]))
+    return ids
+
+
+def create_compensation_result(
+    run_dir: str | Path,
+    *,
+    effect_id: str,
+    status: str,
+    operator: str,
+    evidence_path_or_url: str,
+    quote_or_field: str,
+    notes: str | None = None,
+    created_at: str | None = None,
+) -> dict[str, Any]:
+    """Write RUN_DIR/compensation-result.json for a manual operator outcome.
+
+    This is a receipt for human/operator compensation work. It does not execute
+    adapters, alter local rollback artifacts, or claim exact rollback for
+    external side effects.
+    """
+
+    run_path = Path(run_dir)
+    run = _load_json(run_path / "run.json")
+    run_id = str(run.get("run_id") or "").strip()
+    if not run_id:
+        raise CompensationResultValidationError("run.json must include run_id")
+
+    effect_value = (effect_id or "").strip()
+    if not effect_value:
+        raise CompensationResultValidationError("effect_id is required")
+    if effect_value not in _known_effect_ids(run_path):
+        raise CompensationResultValidationError(f"effect_id not found in external-effects.jsonl or compensation-plan.json: {effect_value}")
+
+    final_status = (status or "").strip()
+    if final_status not in RESULT_STATUSES:
+        raise CompensationResultValidationError(f"status must be one of: {', '.join(sorted(RESULT_STATUSES))}")
+
+    evidence_value = (evidence_path_or_url or "").strip()
+    quote_value = (quote_or_field or "").strip()
+    if not evidence_value:
+        raise CompensationResultValidationError("evidence path or url is required")
+    if not quote_value:
+        raise CompensationResultValidationError("evidence quote_or_field is required")
+
+    result: dict[str, Any] = {
+        "schema_version": RESULT_SCHEMA_VERSION,
+        "run_id": run_id,
+        "effect_id": effect_value,
+        "status": final_status,
+        "operator": (operator or "").strip() or "unknown",
+        "created_at": created_at or datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+        "manual_operator_result": True,
+        "exact_rollback": False,
+        "local_rollback_applied": False,
+        "external_execution_by_safeloop": False,
+        "evidence": {_evidence_key(evidence_value): evidence_value, "quote_or_field": quote_value},
+        "warnings": ["manual compensation is operator-attested mitigation, not exact rollback"],
+    }
+    if notes:
+        result["notes"] = notes
+    atomic_json(run_path / "compensation-result.json", result)
+    return result
 
 
 def compensation_section_for_rollback(run_dir: str | Path, *, action_id: str | None = None, include_compensation: bool = False) -> dict[str, Any]:

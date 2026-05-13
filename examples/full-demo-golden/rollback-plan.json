@@ -1,0 +1,53 @@
+{
+  "apply_command": "safeloop rollback apply $RUN_DIR $RUN_ID --from-checkpoint cp-0001 --files service.md",
+  "blockers": [],
+  "compensation": {
+    "exact_rollback": false,
+    "included": false,
+    "warnings": [
+      "manual_review_required: side effects require --include-compensation for a compensation plan"
+    ]
+  },
+  "covered_local_file_changes": {
+    "created": [],
+    "deleted": [],
+    "modified": [
+      "service.md"
+    ]
+  },
+  "dependency_warnings": [
+    {
+      "code": "later_changes_after_target",
+      "file": "service.md"
+    }
+  ],
+  "external_side_effects": {
+    "classification": "manual_review",
+    "exact_rollback": false,
+    "note": "External side effects are not exact rollback; review side-effects.jsonl for compensation or handoff."
+  },
+  "file_counts": {
+    "created": 0,
+    "deleted": 0,
+    "modified": 1
+  },
+  "mode": "dry-run",
+  "operation": "rollback_selected_files",
+  "preflight": {
+    "status": "pass"
+  },
+  "review_required": true,
+  "rollback_source_hashes": {
+    "service.md": "sha256:$HASH"
+  },
+  "run_id": "$RUN_ID",
+  "schema_version": "rollback-plan.v1",
+  "selected_files": [
+    "service.md"
+  ],
+  "status": "ok",
+  "target": {
+    "checkpoint_id": "cp-0001",
+    "type": "checkpoint"
+  }
+}

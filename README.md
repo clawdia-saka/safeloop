@@ -60,7 +60,7 @@ safeloop rollback apply "$RUN_DIR" "$RUN_ID" --files note.txt
 cat note.txt  # base
 ```
 
-Actions outside the local repo are manual-review/compensation only; SafeLoop never claims exact rollback for GitHub, messaging, email, webhook, or other systems beyond the repo.
+Actions outside the local repo are manual-review/compensation only; SafeLoop never claims exact rollback for GitHub, messaging, email, webhook, or other systems beyond the repo. External side effects are manual-review/compensation only.
 
 `safeloop explain RUN_DIR` is the operator-language view:
 

@@ -363,8 +363,14 @@ def render_operator_packet_v2(
         lines.append(_row([display_item, display_type, display_ref, display_status, "false", evidence_ref]))
         if effect:
             lines.append(_row([item, "external_side_effect", item, display_status, "false", evidence_ref]))
-        lines.append(_row([item, "manual_review_item", item, "queued", "false", evidence_ref]))
-        lines.append(_row([item, "compensation_item", item, "compensation_review_required", "false", evidence_ref]))
+        if display_status in completed_result_statuses:
+            manual_review_status = display_status
+            compensation_status = display_status
+        else:
+            manual_review_status = "queued"
+            compensation_status = "compensation_review_required"
+        lines.append(_row([item, "manual_review_item", item, manual_review_status, "false", evidence_ref]))
+        lines.append(_row([item, "compensation_item", item, compensation_status, "false", evidence_ref]))
 
     first_file = files[0] if files else "service.md"
     no_blockers = "none" if verification_status in {"valid", "ok"} else "verify-artifacts not valid"

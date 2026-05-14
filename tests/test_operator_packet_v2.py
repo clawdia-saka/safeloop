@@ -373,6 +373,60 @@ def test_operator_packet_completed_compensation_does_not_recommend_review_requir
     assert "recommended next action: compensation_review_required" not in packet
 
 
+def test_operator_packet_external_effect_derived_rows_do_not_stay_queued_after_verified_compensation_result(tmp_path: Path) -> None:
+    run_dir = make_run_dir(tmp_path)
+    (run_dir / "external-effects.jsonl").write_text(
+        json.dumps(
+            {
+                "schema_version": "external-side-effect.v1",
+                "effect_id": "ext-0001",
+                "run_id": "run-demo",
+                "kind": "webhook",
+                "target": "https://example.test/hook/123",
+                "action": "sent",
+                "created_at": "2026-05-14T00:00:00+00:00",
+                "exact_rollback": False,
+                "compensation_capability": "manual",
+                "status": "manual_review_required",
+                "evidence": {"path": "logs/webhook-send.log", "quote_or_field": "delivery_id"},
+            },
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (run_dir / "compensation-result.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "compensation-result.v1",
+                "run_id": "run-demo",
+                "effect_id": "ext-0001",
+                "status": "compensation_completed",
+                "operator": "ops",
+                "exact_rollback": False,
+                "manual_operator_result": True,
+                "external_execution_by_safeloop": False,
+                "local_rollback_applied": False,
+                "evidence": {"path": "receipts/webhook-void.json", "quote_or_field": "receipt_id=void-123"},
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    packet = render_operator_packet_v2(run_dir)
+
+    evidence = "external-effects.jsonl; compensation-result.json; receipt: receipts/webhook-void.json"
+    assert f"| ext-0001 | webhook | https://example.test/hook/123 | compensation_completed | false | {evidence} |" in packet
+    assert f"| webhook:https://example.test/hook/123 | external_side_effect | webhook:https://example.test/hook/123 | compensation_completed | false | {evidence} |" in packet
+    assert f"| webhook:https://example.test/hook/123 | manual_review_item | webhook:https://example.test/hook/123 | compensation_completed | false | {evidence} |" in packet
+    assert f"| webhook:https://example.test/hook/123 | compensation_item | webhook:https://example.test/hook/123 | compensation_completed | false | {evidence} |" in packet
+    assert "| webhook:https://example.test/hook/123 | manual_review_item | webhook:https://example.test/hook/123 | queued | false |" not in packet
+    assert "| webhook:https://example.test/hook/123 | compensation_item | webhook:https://example.test/hook/123 | compensation_review_required | false |" not in packet
+    assert "recommended next action: compensation_complete_verify_receipt" in packet
+    assert "compensation_completed | true" not in packet
+
+
 def test_operator_packet_requires_receipt_for_compensation_completed(tmp_path: Path) -> None:
     run_dir = make_run_dir(tmp_path)
     (run_dir / "external-effects.jsonl").write_text(

@@ -35,14 +35,21 @@ def test_fake_external_webhook_compensation_demo_is_offline_and_separates_bounda
     effects = _jsonl(effects_path)
     assert len(effects) == 1
     effect = effects[0]
-    assert effect["effect_class"] == "fake_local_webhook_delivery"
-    assert effect["transport"] == "local_file_fixture"
-    assert effect["fake_local_only"] is True
+    assert effect["schema_version"] == "external-side-effect.v1"
+    assert effect["effect_id"] == "ext-0001"
+    assert effect["kind"] == "webhook"
+    assert effect["target"] == "fake-local-webhook"
+    assert effect["action"] == "record_fake_webhook_delivery_for_manual_review"
+    assert effect["created_at"] == "2026-01-14T12:00:00Z"
+    assert effect["compensation_capability"] == "manual"
+    assert effect["status"] == "manual_review_required"
     assert effect["exact_rollback"] is False
-    assert effect["manual_review_required"] is True
-    assert effect["evidence_required"] is True
-    assert "example.invalid" in effect["fake_webhook_url"]
-    assert effect["network_dispatched"] is False
+    assert effect["evidence"] == {"path": "fake-webhook-evidence.json", "quote_or_field": "invoice_id"}
+
+    evidence = json.loads((run_dir / "fake-webhook-evidence.json").read_text(encoding="utf-8"))
+    assert evidence["fake_local_only"] is True
+    assert evidence["network_dispatched"] is False
+    assert "example.invalid" in evidence["fake_webhook_url"]
 
     result = json.loads(compensation_path.read_text(encoding="utf-8"))
     assert result["compensation"]["capability"] == "manual"

@@ -140,7 +140,7 @@ def _external_plan_item(effect: dict[str, Any]) -> dict[str, Any]:
 
 def build_compensation_plan(run_dir: str | Path, *, side_effect_id: str | None = None, action_id: str | None = None, dry_run: bool = True) -> dict[str, Any]:
     run_path = Path(run_dir)
-    external_effects = read_external_effects(run_path)
+    external_effects = read_external_effects(run_path, strict=False)
     source = "external-effects.jsonl" if external_effects else "side-effects.jsonl"
     if external_effects:
         items = [_external_plan_item(effect) for effect in external_effects]

@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from typing import Iterable
 
-from safeloop.external_effects import read_external_effects
+from safeloop.external_effects import ExternalEffectValidationError, read_external_effects
 
 BOUNDARY_LINES = [
     "Exact rollback only applies to covered local file changes.",
@@ -156,7 +156,12 @@ def render_operator_packet_v2(
     outbox_items = _external_outbox_items(run_path)
     unsafe_outbox_boundary = _unsafe_outbox_boundary(run, outbox_items)
     external_items = list(external_evidence or [])
-    external_effect_records = read_external_effects(run_path)
+    external_registry_errors: list[str] = []
+    try:
+        external_effect_records = read_external_effects(run_path)
+    except ExternalEffectValidationError as exc:
+        external_effect_records = []
+        external_registry_errors.append(str(exc))
     external_effect_by_item: dict[str, dict] = {}
     for effect in external_effect_records:
         item_ref = f"{effect.get('kind', 'unknown')}:{effect.get('target', effect.get('effect_id', 'unknown'))}"
@@ -172,7 +177,7 @@ def render_operator_packet_v2(
         next_action = "compensation_review_required"
     elif files:
         next_action = "rollback_available"
-    if issues:
+    if issues or external_registry_errors:
         next_action = "blocked"
 
     lines: list[str] = [
@@ -193,11 +198,13 @@ def render_operator_packet_v2(
         f"- evidence packet status: {evidence_packet_status}",
         "- issues / warnings:",
     ]
-    if issues or warnings:
+    if issues or warnings or external_registry_errors:
         for issue in issues:
             lines.append(f"  - issue: {_cell(issue)}")
         for warning in warnings:
             lines.append(f"  - warning: {_cell(warning)}")
+        for error in external_registry_errors:
+            lines.append(f"  - issue: invalid_external_effect_registry: {_cell(error)}")
     else:
         lines.append("  - none")
 
@@ -236,7 +243,7 @@ def render_operator_packet_v2(
         _row(["selected action group rollback", checkpoint_id, "available", "true", no_blockers, _suggested_command(run_path, run_id, checkpoint_id)]),
         "",
         "## 5. External compensation / manual review status",
-        f"- external-effects.jsonl: {'present' if external_effect_records else 'not_present'}",
+        f"- external-effects.jsonl: {'invalid' if external_registry_errors else ('present' if external_effect_records else 'not_present')}",
         f"- {_artifact_status(run_path, 'compensation-plan.json', compensation_plan)}",
         f"- {_artifact_status(run_path, 'compensation-result.json', compensation_result)}",
         "- This table is separate from local rollback. It records compensation/manual review only and never exact external rollback.",
@@ -290,13 +297,16 @@ def render_operator_packet_v2(
             if unsafe_outbox_boundary:
                 action = "Do not approve, resume, or dispatch external side effects from this outbox item; pending shadow review only"
             lines.append(_row([item, "action outside the local repo", "local rollback cannot prove the external action was undone", action]))
+    elif external_registry_errors:
+        for error in external_registry_errors:
+            lines.append(_row(["external-effects.jsonl", "invalid_external_effect_registry", "corrupt registry evidence can mask external rollback overclaims", f"block packet use until registry is corrected: {error}"]))
     else:
         lines.append(_row(["none", "no external side effects recorded", "low", "verify packet and proceed with local rollback if needed"]))
 
     lines.extend([
         "",
         "## 7. Recommended next action",
-        next_action,
+        f"recommended next action: {next_action}",
         "",
     ])
     if unsafe_outbox_boundary:

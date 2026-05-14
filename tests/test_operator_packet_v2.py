@@ -270,9 +270,59 @@ def test_packet_v2_surfaces_external_registry_compensation_plan_and_result(tmp_p
     assert "external-effects.jsonl: present" in packet
     assert "compensation-plan.json: present (status: planned)" in packet
     assert "compensation-result.json: present (status: verified)" in packet
-    assert "| ext-0001 | github_issue | owner/repo#115 | compensation_planned | false | external-effects.jsonl |" in packet
+    assert "| ext-0001 | github_issue | owner/repo#115 | verified | false | external-effects.jsonl; compensation-result.json; receipt: external-receipts/github-delete-receipt.json |" in packet
     assert "| github_issue:owner/repo#115 | manual | best_effort | false | planned: delete github issue comment if authorized; result: verified | external-effects.jsonl; compensation-plan.json; compensation-result.json; receipt: external-receipts/github-delete-receipt.json |" in packet
     assert "local rollback cannot prove the external action was undone" in packet
+
+
+def test_operator_packet_change_summary_reflects_valid_compensation_result_status(tmp_path: Path) -> None:
+    run_dir = make_run_dir(tmp_path)
+    (run_dir / "external-effects.jsonl").write_text(
+        json.dumps(
+            {
+                "schema_version": "external-side-effect.v1",
+                "effect_id": "ext-0001",
+                "run_id": "run-demo",
+                "kind": "webhook",
+                "target": "https://example.test/hook/123",
+                "action": "sent",
+                "created_at": "2026-05-14T00:00:00+00:00",
+                "exact_rollback": False,
+                "compensation_capability": "manual",
+                "status": "manual_review_required",
+                "evidence": {"path": "logs/webhook-send.log", "quote_or_field": "delivery_id"},
+            },
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (run_dir / "compensation-result.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "compensation-result.v1",
+                "run_id": "run-demo",
+                "effect_id": "ext-0001",
+                "status": "compensation_completed",
+                "operator": "ops",
+                "exact_rollback": False,
+                "manual_operator_result": True,
+                "external_execution_by_safeloop": False,
+                "local_rollback_applied": False,
+                "evidence": {"path": "receipts/webhook-void.json", "quote_or_field": "receipt_id=void-123"},
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    packet = render_operator_packet_v2(run_dir)
+
+    assert "compensation-result.json: present (status: compensation_completed)" in packet
+    assert "| ext-0001 | webhook | https://example.test/hook/123 | compensation_completed | false | external-effects.jsonl; compensation-result.json; receipt: receipts/webhook-void.json |" in packet
+    assert "| ext-0001 | webhook | https://example.test/hook/123 | manual_review_required | false | external-effects.jsonl |" not in packet
+    assert "Exact rollback | Evidence" in packet
+    assert "compensation_completed | true" not in packet
 
 
 def test_operator_packet_requires_receipt_for_compensation_completed(tmp_path: Path) -> None:

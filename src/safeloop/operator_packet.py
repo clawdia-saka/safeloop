@@ -250,8 +250,17 @@ def render_operator_packet_v2(
         display_type = str(effect.get("kind") or "external_side_effect") if effect else "external_side_effect"
         display_ref = str(effect.get("target") or item) if effect else item
         display_status = str(effect.get("status") or "manual_review_required") if effect else "manual_review_required"
-        if effect and compensation_result_errors_by_effect_id.get(str(effect.get("effect_id") or "")):
-            display_status = "manual_review_required: missing compensation receipt"
+        if effect:
+            effect_id = str(effect.get("effect_id") or "")
+            result_item = result_items_by_effect_id.get(effect_id, {}) if effect_id else {}
+            receipt = compensation_result_receipt_ref(result_item) if result_item else None
+            if compensation_result_errors_by_effect_id.get(effect_id):
+                display_status = "manual_review_required: missing compensation receipt"
+            elif result_item and result_item.get("status"):
+                display_status = str(result_item["status"])
+                evidence_ref = "external-effects.jsonl; compensation-result.json"
+                if receipt:
+                    evidence_ref += f"; receipt: {receipt}"
         lines.append(_row([display_item, display_type, display_ref, display_status, "false", evidence_ref]))
         if effect:
             lines.append(_row([item, "external_side_effect", item, display_status, "false", evidence_ref]))

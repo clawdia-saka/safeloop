@@ -24,6 +24,8 @@
 
 Every result status requires evidence. Missing evidence path/url or missing `quote_or_field` is invalid and the receipt must not be written. Evidence should point to a stable operator ticket, log, external URL, or local artifact and quote a small stable field rather than embedding raw external payloads.
 
+When operator-facing packet code consumes an existing `compensation-result.json` (including hand-written or legacy artifacts), any completed-style result (`compensation_completed`, `completed`, or `verified`) without a durable receipt/evidence reference is treated as invalid evidence. The packet must render `manual_review_required: missing compensation receipt` and block the recommended next action instead of presenting the compensation as completed.
+
 ## CLI
 
 Create a receipt:

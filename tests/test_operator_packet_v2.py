@@ -275,6 +275,56 @@ def test_packet_v2_surfaces_external_registry_compensation_plan_and_result(tmp_p
     assert "local rollback cannot prove the external action was undone" in packet
 
 
+def test_operator_packet_requires_receipt_for_compensation_completed(tmp_path: Path) -> None:
+    run_dir = make_run_dir(tmp_path)
+    (run_dir / "external-effects.jsonl").write_text(
+        json.dumps(
+            {
+                "schema_version": "external-side-effect.v1",
+                "effect_id": "ext-0001",
+                "run_id": "run-demo",
+                "kind": "webhook",
+                "target": "https://example.test/hook/123",
+                "action": "sent",
+                "created_at": "2026-05-14T00:00:00+00:00",
+                "exact_rollback": False,
+                "compensation_capability": "manual",
+                "status": "compensation_completed",
+                "evidence": {"path": "logs/webhook-send.log", "quote_or_field": "delivery_id"},
+            },
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (run_dir / "compensation-result.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "compensation-result.v1",
+                "run_id": "run-demo",
+                "effect_id": "ext-0001",
+                "status": "compensation_completed",
+                "operator": "ops",
+                "exact_rollback": False,
+                "manual_operator_result": True,
+                "external_execution_by_safeloop": False,
+                "local_rollback_applied": False,
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    packet = render_operator_packet_v2(run_dir)
+
+    assert "manual_review_required: missing compensation receipt" in packet
+    assert "compensation-result.json: invalid (manual_review_required: missing compensation receipt)" in packet
+    assert "| ext-0001 | webhook | https://example.test/hook/123 | manual_review_required: missing compensation receipt | false | external-effects.jsonl |" in packet
+    assert "result: compensation_completed" not in packet
+    assert "completed | external-effects.jsonl; compensation-result.json" not in packet
+    assert "recommended next action: blocked" in packet
+
+
 def test_packet_v2_spec_and_example_document_required_boundaries() -> None:
     spec = SPEC.read_text(encoding="utf-8")
     example = EXAMPLE.read_text(encoding="utf-8")

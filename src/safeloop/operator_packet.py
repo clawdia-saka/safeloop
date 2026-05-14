@@ -36,6 +36,34 @@ def _status(value: object, default: str = "unknown") -> str:
     return str(value or default)
 
 
+def _artifact_status(run_path: Path, name: str, data: dict) -> str:
+    if not (run_path / name).exists():
+        return f"{name}: not_present"
+    status = _status(data.get("status"), "present")
+    return f"{name}: present (status: {status})"
+
+
+def _items_by_effect_id(data: dict) -> dict[str, dict]:
+    items = data.get("items")
+    if not isinstance(items, list):
+        items = data.get("effects")
+    if not isinstance(items, list):
+        return {}
+    by_id: dict[str, dict] = {}
+    for item in items:
+        if isinstance(item, dict) and item.get("effect_id"):
+            by_id[str(item["effect_id"])] = item
+    return by_id
+
+
+def _first_present(mapping: dict, names: Iterable[str]) -> str | None:
+    for name in names:
+        value = mapping.get(name)
+        if value:
+            return str(value)
+    return None
+
+
 def _file_items_from_plan(plan: dict) -> list[str]:
     files = plan.get("files")
     if not isinstance(files, dict):
@@ -101,6 +129,10 @@ def render_operator_packet_v2(
     run = _load_json(run_path / "run.json")
     verification = _load_json(run_path / "verification" / "verify-artifacts-result.json")
     rollback_plan = _load_json(run_path / "rollback-plan.json")
+    compensation_plan = _load_json(run_path / "compensation-plan.json")
+    compensation_result = _load_json(run_path / "compensation-result.json")
+    plan_items_by_effect_id = _items_by_effect_id(compensation_plan)
+    result_items_by_effect_id = _items_by_effect_id(compensation_result)
 
     run_id = str(run.get("run_id") or rollback_plan.get("run_id") or "unknown")
     task_id = str(run.get("task_id") or "unknown")
@@ -180,7 +212,14 @@ def render_operator_packet_v2(
     lines.append(_row([checkpoint_id, "action_group", checkpoint_id, "rollback_available", "true", "rollback-plan.json"]))
     for item in external_items:
         evidence_ref = "external-effects.jsonl" if item in external_effect_by_item else item
-        lines.append(_row([item, "external_side_effect", item, "manual_review_required", "false", evidence_ref]))
+        effect = external_effect_by_item.get(item)
+        display_item = str(effect.get("effect_id") or item) if effect else item
+        display_type = str(effect.get("kind") or "external_side_effect") if effect else "external_side_effect"
+        display_ref = str(effect.get("target") or item) if effect else item
+        display_status = str(effect.get("status") or "manual_review_required") if effect else "manual_review_required"
+        lines.append(_row([display_item, display_type, display_ref, display_status, "false", evidence_ref]))
+        if effect:
+            lines.append(_row([item, "external_side_effect", item, display_status, "false", evidence_ref]))
         lines.append(_row([item, "manual_review_item", item, "queued", "false", evidence_ref]))
         lines.append(_row([item, "compensation_item", item, "compensation_review_required", "false", evidence_ref]))
 
@@ -196,6 +235,12 @@ def render_operator_packet_v2(
         _row(["selected hunk rollback", "review hunk manifest before apply", "review_required", "true", "operator must select hunk", "review hunk-manifest.json, then run rollback apply with selected hunks"]),
         _row(["selected action group rollback", checkpoint_id, "available", "true", no_blockers, _suggested_command(run_path, run_id, checkpoint_id)]),
         "",
+        "## 5. External compensation / manual review status",
+        f"- external-effects.jsonl: {'present' if external_effect_records else 'not_present'}",
+        f"- {_artifact_status(run_path, 'compensation-plan.json', compensation_plan)}",
+        f"- {_artifact_status(run_path, 'compensation-result.json', compensation_result)}",
+        "- This table is separate from local rollback. It records compensation/manual review only and never exact external rollback.",
+        "",
         "## 5. Compensation decision table",
         "Compensation capability enum: none, manual, best_effort, verified",
         _row(["Side effect", "Adapter", "Compensation capability", "Exact rollback", "Required action", "Evidence"]),
@@ -203,12 +248,33 @@ def render_operator_packet_v2(
     ])
     if external_items:
         for item in external_items:
+            effect = external_effect_by_item.get(item, {})
+            effect_id = str(effect.get("effect_id") or "")
+            plan_item = plan_items_by_effect_id.get(effect_id, {}) if effect_id else {}
+            result_item = result_items_by_effect_id.get(effect_id, {}) if effect_id else {}
+            planned_action = _first_present(plan_item, ["planned_action", "action", "description"])
+            result_status = _first_present(result_item, ["status", "result_status"])
+            receipt = _first_present(result_item, ["receipt_path", "receipt", "artifact_path", "path"])
             required_action = "Review and compensate manually; do not treat local rollback as external rollback."
+            if planned_action or result_status:
+                parts = []
+                if planned_action:
+                    parts.append(f"planned: {planned_action}")
+                if result_status:
+                    parts.append(f"result: {result_status}")
+                required_action = "; ".join(parts)
             if unsafe_outbox_boundary:
                 required_action = "Do not dispatch externally; pending shadow review only until approval/waiver lifecycle binding exists."
-            capability = external_effect_by_item.get(item, {}).get("compensation_capability", "manual")
+            capability = effect.get("compensation_capability", "manual")
             evidence_ref = "external-effects.jsonl" if item in external_effect_by_item else item
-            lines.append(_row([item, compensation_adapter, capability, "false", required_action, evidence_ref]))
+            evidence_parts = [evidence_ref]
+            if effect and (run_path / "compensation-plan.json").exists():
+                evidence_parts.append("compensation-plan.json")
+            if effect and (run_path / "compensation-result.json").exists():
+                evidence_parts.append("compensation-result.json")
+            if receipt:
+                evidence_parts.append(f"receipt: {receipt}")
+            lines.append(_row([item, compensation_adapter, capability, "false", required_action, "; ".join(evidence_parts)]))
     else:
         lines.append(_row(["none recorded", "none", "none", "false", "No external side effect compensation item recorded.", "review-summary.json"]))
 

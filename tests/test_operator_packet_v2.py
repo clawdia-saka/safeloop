@@ -206,6 +206,74 @@ def test_packet_v2_reads_legacy_covered_local_file_changes_plan_shape(tmp_path: 
     assert "--files service.md" in packet
 
 
+def test_packet_v2_surfaces_external_registry_compensation_plan_and_result(tmp_path: Path) -> None:
+    run_dir = make_run_dir(tmp_path)
+    (run_dir / "external-effects.jsonl").write_text(
+        json.dumps(
+            {
+                "schema_version": "external-side-effect.v1",
+                "effect_id": "ext-0001",
+                "run_id": "run-demo",
+                "kind": "github_issue",
+                "target": "owner/repo#115",
+                "action": "comment_created",
+                "exact_rollback": False,
+                "compensation_capability": "best_effort",
+                "status": "compensation_planned",
+                "evidence": {"path": "external-receipts/github-comment.json", "quote_or_field": "comment_url"},
+            },
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (run_dir / "compensation-plan.json").write_text(
+        json.dumps(
+            {
+                "status": "planned",
+                "artifact_path": "compensation-plan.json",
+                "items": [
+                    {
+                        "effect_id": "ext-0001",
+                        "status": "planned",
+                        "planned_action": "delete github issue comment if authorized",
+                        "artifact_path": "external-receipts/github-comment.json",
+                    }
+                ],
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    (run_dir / "compensation-result.json").write_text(
+        json.dumps(
+            {
+                "status": "verified",
+                "receipt": "external-receipts/github-delete-receipt.json",
+                "items": [
+                    {
+                        "effect_id": "ext-0001",
+                        "status": "verified",
+                        "receipt_path": "external-receipts/github-delete-receipt.json",
+                    }
+                ],
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    packet = render_operator_packet_v2(run_dir)
+
+    assert "## 5. External compensation / manual review status" in packet
+    assert "external-effects.jsonl: present" in packet
+    assert "compensation-plan.json: present (status: planned)" in packet
+    assert "compensation-result.json: present (status: verified)" in packet
+    assert "| ext-0001 | github_issue | owner/repo#115 | compensation_planned | false | external-effects.jsonl |" in packet
+    assert "| github_issue:owner/repo#115 | manual | best_effort | false | planned: delete github issue comment if authorized; result: verified | external-effects.jsonl; compensation-plan.json; compensation-result.json; receipt: external-receipts/github-delete-receipt.json |" in packet
+    assert "local rollback cannot prove the external action was undone" in packet
+
+
 def test_packet_v2_spec_and_example_document_required_boundaries() -> None:
     spec = SPEC.read_text(encoding="utf-8")
     example = EXAMPLE.read_text(encoding="utf-8")

@@ -33,6 +33,12 @@
 | selected hunk rollback | review hunk manifest before apply | review_required | true | operator must select hunk | review hunk-manifest.json, then run rollback apply with selected hunks |
 | selected action group rollback | cp-0001 | available | true | none | python -m safeloop.cli rollback apply "$RUN_DIR" "$RUN_ID" "cp-0001" |
 
+## 5. External compensation / manual review status
+- external-effects.jsonl: not_present
+- compensation-plan.json: not_present
+- compensation-result.json: not_present
+- This table is separate from local rollback. It records compensation/manual review only and never exact external rollback.
+
 ## 5. Compensation decision table
 Compensation capability enum: none, manual, best_effort, verified
 | Side effect | Adapter | Compensation capability | Exact rollback | Required action | Evidence |

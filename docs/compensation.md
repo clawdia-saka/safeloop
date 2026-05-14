@@ -75,3 +75,15 @@ That is expected. SafeLoop should surface both states instead of collapsing them
 ## External side-effect registry
 
 SafeLoop v0.2 tracks actions outside the local repo in `RUN_DIR/external-effects.jsonl` using `external-side-effect.v1` records. These records are for compensation/manual review only: every external effect keeps `exact_rollback: false`, requires evidence with a path or URL plus `quote_or_field`, and must not store raw sensitive payloads. See `docs/specs/external-side-effect-v1.md`.
+
+## Compensation plan v1
+
+`safeloop compensate RUN_DIR` writes `RUN_DIR/compensation-plan.json` with `schema_version: compensation-plan.v1`. When `RUN_DIR/external-effects.jsonl` is present, the plan is generated from that registry instead of legacy `side-effects.jsonl` records.
+
+Plan boundaries:
+
+- Plan-level `exact_rollback` is always `false`.
+- Each item refers to an external effect by `external_effect_id` / `effect_id` and `evidence_ref: external-effects.jsonl#<effect_id>`.
+- SafeLoop does not execute adapters, make network calls, or remediate automatically (`external_execution: false`, `network_calls: false`).
+- Missing external evidence blocks planning with `missing_external_evidence` and keeps `manual_review_required`; it is never upgraded to exact rollback.
+- Capabilities (`none`, `manual`, `best_effort`, `verified`) describe operator mitigation confidence only, not an as-if-never-happened guarantee.

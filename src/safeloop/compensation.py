@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from safeloop.agent_watchdog import atomic_json
+from safeloop.external_effects import read_external_effects
 from safeloop.side_effect_ledger import read_side_effect_events
 
 SCHEMA_VERSION = "compensation-plan.v1"
@@ -86,20 +87,76 @@ def _plan_item(run_dir: Path, event: dict[str, Any]) -> dict[str, Any]:
     return item
 
 
+def _has_external_evidence(effect: dict[str, Any]) -> bool:
+    evidence = effect.get("evidence")
+    if not isinstance(evidence, dict):
+        return False
+    has_ref = bool(str(evidence.get("path") or evidence.get("url") or "").strip())
+    has_quote = bool(str(evidence.get("quote_or_field") or "").strip())
+    return has_ref and has_quote
+
+
+def _external_plan_item(effect: dict[str, Any]) -> dict[str, Any]:
+    effect_id = str(effect.get("effect_id") or "unknown")
+    capability = str(effect.get("compensation_capability") or "none")
+    if capability not in CAPABILITIES:
+        capability = "none"
+
+    blockers: list[dict[str, str]] = []
+    warnings: list[str] = ["external side effects are never exact rollback"]
+    if capability == "none":
+        blockers.append({"code": "no_compensation_capability", "message": "automatic compensation is blocked"})
+    if not _has_external_evidence(effect):
+        blockers.append({"code": "missing_external_evidence", "message": "external evidence is required before planning compensation"})
+        warnings.append("manual_review_required: missing external evidence blocks compensation planning")
+    if capability == "manual":
+        warnings.append("manual_review_required")
+    if capability in {"best_effort", "verified"}:
+        warnings.append("compensation is mitigation, not exact rollback")
+
+    return {
+        "external_effect_id": effect_id,
+        "effect_id": effect_id,
+        "kind": str(effect.get("kind") or "unknown"),
+        "target": str(effect.get("target") or "unknown"),
+        "action": str(effect.get("action") or "unknown"),
+        "status": str(effect.get("status") or "manual_review_required"),
+        "evidence": effect.get("evidence") if isinstance(effect.get("evidence"), dict) else {},
+        "evidence_ref": f"external-effects.jsonl#{effect_id}",
+        "compensation": {"capability": capability},
+        "exact_rollback": False,
+        "required_operator_action": _required_operator_action(capability, str(effect.get("kind") or "unknown")),
+        "blockers": blockers,
+        "warnings": warnings,
+    }
+
+
 def build_compensation_plan(run_dir: str | Path, *, side_effect_id: str | None = None, action_id: str | None = None, dry_run: bool = True) -> dict[str, Any]:
     run_path = Path(run_dir)
-    events = read_side_effect_events(run_path / "side-effects.jsonl")
-    items = [_plan_item(run_path, event) for event in events]
-    if side_effect_id:
-        items = [item for item in items if item.get("side_effect_id") == side_effect_id]
-    if action_id:
-        items = [item for item in items if item.get("action_id") == action_id or action_id in item.get("action_ids", [])]
+    external_effects = read_external_effects(run_path)
+    source = "external-effects.jsonl" if external_effects else "side-effects.jsonl"
+    if external_effects:
+        items = [_external_plan_item(effect) for effect in external_effects]
+        if side_effect_id:
+            items = [item for item in items if item.get("external_effect_id") == side_effect_id or item.get("effect_id") == side_effect_id]
+        # External registry v1 does not bind effects to SafeLoop action IDs.
+        if action_id:
+            items = []
+    else:
+        events = read_side_effect_events(run_path / "side-effects.jsonl")
+        items = [_plan_item(run_path, event) for event in events]
+        if side_effect_id:
+            items = [item for item in items if item.get("side_effect_id") == side_effect_id]
+        if action_id:
+            items = [item for item in items if item.get("action_id") == action_id or action_id in item.get("action_ids", [])]
     blockers = [b for item in items for b in item.get("blockers", [])]
     warnings: list[str] = []
     if not items:
         warnings.append("manual_review_required: no matching side effects found")
     if any(item.get("compensation", {}).get("capability") == "manual" for item in items):
         warnings.append("manual_review_required")
+    if any(any(blocker.get("code") == "missing_external_evidence" for blocker in item.get("blockers", [])) for item in items):
+        warnings.append("manual_review_required: missing external evidence blocks compensation planning")
     if any(item.get("compensation", {}).get("capability") in {"best_effort", "verified"} for item in items):
         warnings.append("operator_review_required: external compensation requires operator verification")
     status = "blocked" if blockers else "manual_review_required" if any("manual_review_required" in warning for warning in warnings) else "operator_review_required" if warnings else "ok"
@@ -107,6 +164,7 @@ def build_compensation_plan(run_dir: str | Path, *, side_effect_id: str | None =
         "schema_version": SCHEMA_VERSION,
         "run_id": _load_json(run_path / "run.json").get("run_id") if (run_path / "run.json").exists() else None,
         "mode": "dry-run" if dry_run else "plan",
+        "source": source,
         "side_effect_id": side_effect_id,
         "action_id": action_id,
         "status": status,

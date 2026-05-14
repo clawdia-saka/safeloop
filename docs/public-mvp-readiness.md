@@ -1,6 +1,6 @@
 # SafeLoop Public MVP Readiness Packet
 
-This packet is a public MVP readiness review aid for SafeLoop 0.1.4. It is a docs plus local evidence gate: it can be checked on a local checkout, but it does not publish, sign, or tag a release.
+This packet is a public MVP readiness review aid for SafeLoop 0.2.0. It is a docs plus local evidence gate: it can be checked on a local checkout, but it does not publish, sign, or tag a release.
 
 ## Release boundary
 
@@ -22,7 +22,7 @@ Expected gate output includes:
 
 ```text
 public-readiness: ok
-version=0.1.4
+version=0.2.0
 demo-verifier=present
 release-tag=not-created
 ```
@@ -60,7 +60,7 @@ Exact rollback is only claimed for covered local file changes inside the demo re
 ## Version and build gates
 
 - Version source: `pyproject.toml` (`project.version`).
-- Current reviewed version: `0.1.4`.
+- Current reviewed version: `0.2.0`.
 - Build readiness boundary: this packet checks local metadata and verifier presence. A separate maintainer release flow may build distributions, sign artifacts, upload packages, or create tags.
 - Local optional build command for maintainers:
 
@@ -93,7 +93,7 @@ Internal planning documents may discuss future governance or stronger transparen
 
 ## Rollback public readiness skeleton
 
-The public readiness skeleton for SafeLoop 0.1.4 demonstrates the local rollback workflow end to end:
+The public readiness skeleton for SafeLoop 0.2.0 demonstrates the local rollback workflow end to end:
 watch a long-running local task, review and explain rollback groups, plan/apply rollback to start,
 plan/apply selected files, plan/apply selected hunks, and run `policy-check`. The scripted demo is
 `examples/rollback_selective_demo.sh`.

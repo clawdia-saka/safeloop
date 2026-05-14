@@ -1,6 +1,6 @@
 # SafeLoop
 
-**SafeLoop 0.1.4 is the current public release.**
+**SafeLoop 0.2.0 is prepared as a release candidate in this branch; publish/tag is a separate manual release step.**
 
 SafeLoop is a non-blocking watchdog and reversible local timeline for long-running AI agents.
 
@@ -20,7 +20,7 @@ Agents can run for minutes or hours and leave operators asking:
 - can a checkpoint be locally undone?
 - did anything external happen that needs manual compensation?
 
-SafeLoop 0.1.4 hardens the local watchdog, delta-audit packet, and control-plane evidence workflow for those questions.
+SafeLoop 0.2.0 hardens the local watchdog, delta-audit packet, and control-plane evidence workflow for those questions.
 
 ## Install
 
@@ -43,13 +43,13 @@ safeloop --version
 If you need the exact 0.1.4 release tag before a PyPI artifact is available, install from Git:
 
 ```bash
-pipx install git+https://github.com/clawdia-saka/safeloop.git@v0.1.4
+pipx install git+https://github.com/clawdia-saka/safeloop.git@v0.2.0  # after the v0.2.0 tag exists
 ```
 
 Git tag install into a local virtual environment:
 
 ```bash
-python3 -m venv .venv && . .venv/bin/activate && python -m pip install 'safeloop @ git+https://github.com/clawdia-saka/safeloop.git@v0.1.4'
+python3 -m venv .venv && . .venv/bin/activate && python -m pip install 'safeloop @ git+https://github.com/clawdia-saka/safeloop.git@v0.2.0'  # after the v0.2.0 tag exists
 ```
 
 ## Quickstart
@@ -105,7 +105,7 @@ Install for local development from a checkout:
 python -m pip install -e .
 ```
 
-Run an agent command under the watchdog with the current 0.1.4 flow:
+Run an agent command under the watchdog with the current 0.2.0 flow:
 
 ```bash
 safeloop watch-run \
@@ -188,7 +188,7 @@ That demo uses a mock Gbrain fixture as evidence input only: Gbrain is not the s
 
 ## What it does today
 
-SafeLoop 0.1.4 writes local watchdog and review-aid artifacts such as:
+SafeLoop 0.2.0 writes local watchdog and review-aid artifacts such as:
 
 ```text
 RUN_DIR/
@@ -274,7 +274,7 @@ For the public MVP readiness boundary, see [`docs/public-mvp-readiness.md`](docs
 
 ## Rollback public readiness skeleton
 
-The public readiness skeleton for SafeLoop 0.1.4 demonstrates the local rollback workflow end to end:
+The public readiness skeleton for SafeLoop 0.2.0 demonstrates the local rollback workflow end to end:
 watch a long-running local task, review and explain rollback groups, plan/apply rollback to start,
 plan/apply selected files, plan/apply selected hunks, and run `policy-check`. The scripted demo is
 `examples/rollback_selective_demo.sh`.
@@ -286,7 +286,7 @@ transparency log unless one is explicitly implemented and configured.
 
 ## Historical references
 
-These documents describe earlier release boundaries and remain useful for context, but SafeLoop 0.1.4 is the current public release described above:
+These documents describe earlier release boundaries and remain useful for context, but SafeLoop 0.2.0 is the prepared release candidate described above:
 
 - [`docs/safeloop-0.0.3-agent-watchdog-rc.md`](docs/safeloop-0.0.3-agent-watchdog-rc.md)
 - [`docs/release-notes-0.0.3.md`](docs/release-notes-0.0.3.md)
@@ -294,4 +294,5 @@ These documents describe earlier release boundaries and remain useful for contex
 - [`docs/approval-lifecycle.md`](docs/approval-lifecycle.md)
 - [`docs/control-plane-threat-model.md`](docs/control-plane-threat-model.md)
 - [`docs/release-notes-0.1.0.md`](docs/release-notes-0.1.0.md)
+- [`docs/release-notes-0.2.0.md`](docs/release-notes-0.2.0.md)
 - [`examples/control-plane-local-demo/`](examples/control-plane-local-demo/)

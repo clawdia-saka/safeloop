@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "safeloop"
-version = "0.1.4"
+version = "0.2.0"
 description = "Local watchdog and tamper-evident timeline for long-running AI agents"
 readme = "README.md"
 requires-python = ">=3.11"

@@ -575,7 +575,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         package_version = version("safeloop")
     except PackageNotFoundError:
-        package_version = "0.1.4"
+        package_version = "0.2.0"
     parser.add_argument("--version", action="version", version=f"%(prog)s {package_version}")
     sub = parser.add_subparsers(dest="cmd", required=True)
     w = sub.add_parser("watch-run")

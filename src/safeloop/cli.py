@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 import sys
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
 from safeloop.agent_watchdog import (
@@ -567,7 +568,15 @@ def _print_review(summary: dict) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="safeloop")
+    parser = argparse.ArgumentParser(
+        prog="safeloop",
+        description="SafeLoop: local watchdog, tamper-evident run timeline, and covered local-file rollback.",
+    )
+    try:
+        package_version = version("safeloop")
+    except PackageNotFoundError:
+        package_version = "0.1.4"
+    parser.add_argument("--version", action="version", version=f"%(prog)s {package_version}")
     sub = parser.add_subparsers(dest="cmd", required=True)
     w = sub.add_parser("watch-run")
     w.add_argument("--task-id", required=True)

@@ -22,19 +22,37 @@ Agents can run for minutes or hours and leave operators asking:
 
 SafeLoop 0.1.4 hardens the local watchdog, delta-audit packet, and control-plane evidence workflow for those questions.
 
-## Quickstart
+## Install
 
-One-line install from the public release tag:
+SafeLoop requires Python 3.11 or newer. Install the published package with `pipx` when available:
+
+```bash
+pipx install safeloop
+safeloop --help
+```
+
+Or install into a virtual environment:
+
+```bash
+python3 -m venv .venv
+. .venv/bin/activate
+python -m pip install safeloop
+safeloop --version
+```
+
+If you need the exact 0.1.4 release tag before a PyPI artifact is available, install from Git:
 
 ```bash
 pipx install git+https://github.com/clawdia-saka/safeloop.git@v0.1.4
 ```
 
-If you do not use `pipx`, install into a local virtual environment instead:
+Git tag install into a local virtual environment:
 
 ```bash
 python3 -m venv .venv && . .venv/bin/activate && python -m pip install 'safeloop @ git+https://github.com/clawdia-saka/safeloop.git@v0.1.4'
 ```
+
+## Quickstart
 
 Minimal end-to-end local rollback smoke test:
 
@@ -242,10 +260,14 @@ Run tests:
 pytest -q
 ```
 
-Build a wheel:
+Build and locally smoke-test a distribution without publishing:
 
 ```bash
-python -m build --wheel
+python -m build
+python3 -m venv /tmp/safeloop-wheel-smoke
+/tmp/safeloop-wheel-smoke/bin/python -m pip install dist/safeloop-0.1.4-py3-none-any.whl
+/tmp/safeloop-wheel-smoke/bin/safeloop --help
+/tmp/safeloop-wheel-smoke/bin/safeloop --version
 ```
 
 For the public MVP readiness boundary, see [`docs/public-mvp-readiness.md`](docs/public-mvp-readiness.md).

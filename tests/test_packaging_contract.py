@@ -1,4 +1,7 @@
+import os
 from pathlib import Path
+import subprocess
+import sys
 import tomllib
 
 
@@ -11,8 +14,31 @@ def test_project_declares_runtime_dependencies_and_api_extra() -> None:
     project = pyproject["project"]
 
     assert project["version"] == "0.1.4"
+    assert project["requires-python"] == ">=3.11"
+    assert project["readme"] == "README.md"
+    assert "Local watchdog" in project["description"]
     assert "pydantic>=2,<3" in project["dependencies"]
     assert "fastapi>=0.110" in project["optional-dependencies"]["api"]
+    assert project["urls"]["Repository"] == "https://github.com/clawdia-saka/safeloop"
+    assert "Environment :: Console" in project["classifiers"]
+    assert "ai-agents" in project["keywords"]
+
+
+def test_cli_help_and_version_are_install_smoke_friendly() -> None:
+    root = project_root()
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(root / "src")
+    for args, expected in [(["--help"], "watch-run"), (["--version"], "safeloop 0.1.4")]:
+        result = subprocess.run(
+            [sys.executable, "-m", "safeloop.cli", *args],
+            cwd=root,
+            env=env,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr
+        assert expected in result.stdout
 
 
 def test_package_init_does_not_import_optional_fastapi_api_at_module_import_time() -> None:

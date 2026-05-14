@@ -230,3 +230,28 @@ def test_operator_packet_generation_still_works_with_external_effect_registry(tm
     packet = (run_dir / "operator-packet-v2.md").read_text(encoding="utf-8")
     assert "external-effects.jsonl" in packet
     assert "recommended next action: compensation_review_required" in result.stdout
+
+
+def test_operator_packet_flags_invalid_external_registry_exact_rollback_true(tmp_path: Path) -> None:
+    run_dir = make_run_dir(tmp_path)
+    invalid_effect = {
+        "schema_version": "external-side-effect.v1",
+        "effect_id": "ext-9999",
+        "run_id": "run-external",
+        "kind": "webhook",
+        "target": "https://example.test/hook/invalid",
+        "action": "sent",
+        "created_at": "2026-05-14T00:00:00+00:00",
+        "exact_rollback": True,
+        "compensation_capability": "manual",
+        "evidence": {"path": "logs/webhook.log", "quote_or_field": "delivery_id=bad"},
+        "status": "manual_review_required",
+    }
+    (run_dir / "external-effects.jsonl").write_text(json.dumps(invalid_effect) + "\n", encoding="utf-8")
+
+    packet = render_operator_packet_v2(run_dir)
+
+    assert "invalid_external_effect_registry" in packet
+    assert "exact_rollback must always be false" in packet
+    assert "ext-9999 | webhook | https://example.test/hook/invalid | manual_review_required | false" not in packet
+    assert "recommended next action: blocked" in packet

@@ -217,6 +217,7 @@ def test_packet_v2_surfaces_external_registry_compensation_plan_and_result(tmp_p
                 "kind": "github_issue",
                 "target": "owner/repo#115",
                 "action": "comment_created",
+                "created_at": "2026-05-14T00:00:00+00:00",
                 "exact_rollback": False,
                 "compensation_capability": "best_effort",
                 "status": "compensation_planned",

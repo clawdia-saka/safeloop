@@ -37,7 +37,51 @@ def _registry_path(run_dir: str | Path) -> Path:
     return Path(run_dir) / "external-effects.jsonl"
 
 
-def read_external_effects(run_dir: str | Path) -> list[dict[str, Any]]:
+def validate_external_effect_record(item: dict[str, Any], *, line_no: int | None = None) -> dict[str, Any]:
+    """Validate one external-side-effect.v1 record read from external-effects.jsonl.
+
+    The writer already validates records on append, but consumers also validate
+    read-side records so hand-written/corrupt registries fail closed instead of
+    being silently normalized in operator-facing artifacts.
+    """
+
+    prefix = f"external-effects.jsonl line {line_no}: " if line_no is not None else ""
+    if not isinstance(item, dict):
+        raise ExternalEffectValidationError(f"{prefix}record must be an object")
+    if item.get("schema_version") != SCHEMA_VERSION:
+        raise ExternalEffectValidationError(f"{prefix}schema_version must be {SCHEMA_VERSION}")
+    for field in ["effect_id", "run_id", "kind", "target", "action", "created_at", "compensation_capability", "status"]:
+        if not str(item.get(field) or "").strip():
+            raise ExternalEffectValidationError(f"{prefix}{field} is required")
+    if item.get("kind") not in ALLOWED_KINDS:
+        raise ExternalEffectValidationError(f"{prefix}kind must be one of: {', '.join(sorted(ALLOWED_KINDS))}")
+    if item.get("compensation_capability") not in ALLOWED_COMPENSATION_CAPABILITIES:
+        raise ExternalEffectValidationError(
+            f"{prefix}compensation_capability must be one of: {', '.join(sorted(ALLOWED_COMPENSATION_CAPABILITIES))}"
+        )
+    if item.get("status") not in ALLOWED_STATUSES:
+        raise ExternalEffectValidationError(f"{prefix}status must be one of: {', '.join(sorted(ALLOWED_STATUSES))}")
+    if item.get("exact_rollback") is not False:
+        raise ExternalEffectValidationError(f"{prefix}exact_rollback must always be false for external side effects")
+    evidence = item.get("evidence")
+    if not isinstance(evidence, dict):
+        raise ExternalEffectValidationError(f"{prefix}evidence object is required")
+    evidence_value = str(evidence.get("path") or evidence.get("url") or "").strip()
+    quote_value = str(evidence.get("quote_or_field") or "").strip()
+    if not evidence_value:
+        raise ExternalEffectValidationError(f"{prefix}evidence path or url is required")
+    if not quote_value:
+        raise ExternalEffectValidationError(f"{prefix}evidence quote_or_field is required")
+    _validate_no_sensitive_payload(
+        str(item.get("target") or ""),
+        str(item.get("action") or ""),
+        evidence_value,
+        quote_value,
+    )
+    return item
+
+
+def read_external_effects(run_dir: str | Path, *, strict: bool = True) -> list[dict[str, Any]]:
     path = _registry_path(run_dir)
     if not path.exists():
         return []
@@ -49,8 +93,9 @@ def read_external_effects(run_dir: str | Path) -> list[dict[str, Any]]:
             item = json.loads(line)
         except json.JSONDecodeError as exc:
             raise ExternalEffectValidationError(f"invalid external-effects.jsonl line {line_no}") from exc
-        if isinstance(item, dict):
-            effects.append(item)
+        if not isinstance(item, dict):
+            raise ExternalEffectValidationError(f"external-effects.jsonl line {line_no}: record must be an object")
+        effects.append(validate_external_effect_record(item, line_no=line_no) if strict else item)
     return effects
 
 

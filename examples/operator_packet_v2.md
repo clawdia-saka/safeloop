@@ -52,7 +52,7 @@ Compensation capability enum: none, manual, best_effort, verified
 | fake-ticket | action outside the local repo | local rollback cannot prove the external action was undone | review evidence and execute compensation/manual handoff if needed |
 
 ## 7. Recommended next action
-compensation_review_required
+recommended next action: compensation_review_required
 
 ## 8. Boundary statement
 - Exact rollback only applies to covered local file changes.

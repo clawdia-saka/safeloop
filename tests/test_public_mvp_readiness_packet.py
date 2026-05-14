@@ -63,7 +63,7 @@ def test_public_readiness_script_check_verifies_packet_and_build_metadata() -> N
     assert proc.returncode == 0, proc.stdout + proc.stderr
     output = proc.stdout
     assert "public-readiness: ok" in output
-    assert "version=0.1.4" in output
+    assert "version=0.2.0" in output
     assert "demo-verifier=present" in output
     assert "demo-verifier-help=ok" in output
     assert "full-demo=present" in output
@@ -74,7 +74,7 @@ def test_readme_release_boundary_matches_current_public_readiness_version() -> N
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     packet = DOC.read_text(encoding="utf-8")
 
-    assert "SafeLoop 0.1.4" in readme
-    assert "SafeLoop 0.1.4" in packet
+    assert "SafeLoop 0.2.0" in readme
+    assert "SafeLoop 0.2.0" in packet
     assert "0.0.4 reliability sprint" not in readme
     assert "no HTTP dashboard v2 in 0.0.3" not in readme

@@ -452,7 +452,7 @@ The SQLite lifecycle store persists current approval state in the control-plane 
 
 ## Rollback public readiness skeleton
 
-The public readiness skeleton for SafeLoop 0.1.4 demonstrates the local rollback workflow end to end:
+The public readiness skeleton for SafeLoop 0.2.0 demonstrates the local rollback workflow end to end:
 watch a long-running local task, review and explain rollback groups, plan/apply rollback to start,
 plan/apply selected files, plan/apply selected hunks, and run `policy-check`. The scripted demo is
 `examples/rollback_selective_demo.sh`.

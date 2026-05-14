@@ -13,7 +13,7 @@ def test_project_declares_runtime_dependencies_and_api_extra() -> None:
     pyproject = tomllib.loads((project_root() / "pyproject.toml").read_text(encoding="utf-8"))
     project = pyproject["project"]
 
-    assert project["version"] == "0.1.4"
+    assert project["version"] == "0.2.0"
     assert project["requires-python"] == ">=3.11"
     assert project["readme"] == "README.md"
     assert "Local watchdog" in project["description"]
@@ -28,7 +28,7 @@ def test_cli_help_and_version_are_install_smoke_friendly() -> None:
     root = project_root()
     env = os.environ.copy()
     env["PYTHONPATH"] = str(root / "src")
-    for args, expected in [(["--help"], "watch-run"), (["--version"], "safeloop 0.1.4")]:
+    for args, expected in [(["--help"], "watch-run"), (["--version"], "safeloop 0.2.0")]:
         result = subprocess.run(
             [sys.executable, "-m", "safeloop.cli", *args],
             cwd=root,

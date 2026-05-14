@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Full public-packet demo for SafeLoop 0.1.4.
+# Full public-packet demo for SafeLoop 0.2.0.
 # Scope is intentionally local: SafeLoop rolls back covered repo files only.
 # The simulated outside action is recorded for compensation/manual handoff, not exact rollback.
 

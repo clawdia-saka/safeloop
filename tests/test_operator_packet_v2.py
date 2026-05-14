@@ -462,6 +462,143 @@ def test_operator_packet_flags_side_effect_ledger_without_external_effects_regis
     assert "| sevt-0001 | http | evt_123 | manual_review_required | false | side-effects.jsonl |" in packet
 
 
+def test_operator_packet_v2_accepts_legacy_side_effect_compensation_result_receipt(tmp_path: Path) -> None:
+    run_dir = make_run_dir(tmp_path)
+    legacy_effect_id = "sevt-d252edc5a23c48789ae34be2a0017638"
+    (run_dir / "side-effects.jsonl").write_text(
+        json.dumps(
+            {
+                "schema_version": "side-effect-ledger.v1",
+                "event_id": legacy_effect_id,
+                "run_id": "run-demo",
+                "created_at": "2026-05-14T00:00:00+00:00",
+                "phase": "observed",
+                "effect_class": "http",
+                "external_ref": "evt_legacy_receipt",
+                "compensation": {"capability": "manual"},
+            },
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (run_dir / "compensation-plan.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "compensation-plan.v1",
+                "status": "planned",
+                "items": [
+                    {
+                        "side_effect_id": legacy_effect_id,
+                        "planned_action": "verify the remote HTTP event was compensated by operator",
+                        "capability": "manual",
+                    }
+                ],
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    (run_dir / "compensation-result.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "compensation-result.v1",
+                "effect_id": legacy_effect_id,
+                "status": "completed",
+                "operator": "tt",
+                "evidence": {
+                    "path": "receipts/legacy-http-compensation.md",
+                    "quote_or_field": "operator confirmed external event compensation",
+                },
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    packet = render_operator_packet_v2(run_dir)
+
+    assert "side-effects.jsonl: present" in packet
+    assert legacy_effect_id in packet
+    assert "evt_legacy_receipt" in packet
+    assert "result: completed" in packet
+    assert "receipt: receipts/legacy-http-compensation.md" in packet
+    assert "recommended next action: compensation_complete_verify_receipt" in packet
+    assert "recommended next action: compensation_review_required" not in packet
+    assert "missing compensation receipt" not in packet
+    assert (
+        f"| {legacy_effect_id} | http | evt_legacy_receipt | completed | false | "
+        "side-effects.jsonl; compensation-result.json; receipt: receipts/legacy-http-compensation.md |"
+    ) in packet
+
+
+
+def test_operator_packet_v2_correlates_legacy_side_effect_id_alias_receipt(tmp_path: Path) -> None:
+    run_dir = make_run_dir(tmp_path)
+    event_id = "legacy-event-outer-id"
+    side_effect_id = "sevt-alias-side-effect-id"
+    (run_dir / "side-effects.jsonl").write_text(
+        json.dumps(
+            {
+                "schema_version": "side-effect-ledger.v1",
+                "event_id": event_id,
+                "side_effect_id": side_effect_id,
+                "run_id": "run-demo",
+                "phase": "observed",
+                "effect_class": "chat",
+                "external_ref": "chat-msg-123",
+                "compensation": {"capability": "manual"},
+            },
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (run_dir / "compensation-plan.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "compensation-plan.v1",
+                "status": "planned",
+                "items": [
+                    {
+                        "side_effect_id": side_effect_id,
+                        "planned_action": "verify chat deletion receipt",
+                        "capability": "manual",
+                    }
+                ],
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    (run_dir / "compensation-result.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "compensation-result.v1",
+                "effect_id": side_effect_id,
+                "status": "verified",
+                "evidence": {
+                    "path": "receipts/chat-delete.md",
+                    "quote_or_field": "message deletion receipt id",
+                },
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    packet = render_operator_packet_v2(run_dir)
+
+    assert event_id in packet
+    assert side_effect_id in packet
+    assert "chat-msg-123" in packet
+    assert "result: verified" in packet
+    assert "receipt: receipts/chat-delete.md" in packet
+    assert "recommended next action: compensation_complete_verify_receipt" in packet
+    assert "recommended next action: compensation_review_required" not in packet
+    assert "Exact rollback only applies to covered local file changes." in packet
+
+
 def test_operator_packet_does_not_fallback_to_legacy_ledger_when_external_registry_file_exists(tmp_path: Path) -> None:
     run_dir = make_run_dir(tmp_path)
     (run_dir / "external-effects.jsonl").write_text("", encoding="utf-8")

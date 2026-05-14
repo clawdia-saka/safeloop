@@ -6,7 +6,11 @@ from pathlib import Path
 
 import pytest
 
-from safeloop.compensation import CompensationResultValidationError, create_compensation_result
+from safeloop.compensation import (
+    CompensationResultValidationError,
+    create_compensation_result,
+    validate_compensation_result_record,
+)
 from safeloop.external_effects import record_external_effect
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -142,6 +146,33 @@ def test_compensation_result_rejects_unknown_effect_id(tmp_path: Path) -> None:
             evidence_path_or_url="ticket://1",
             quote_or_field="decision=ignore",
         )
+
+
+def test_validate_compensation_result_record_requires_receipt_for_completed() -> None:
+    errors = validate_compensation_result_record(
+        {
+            "schema_version": "compensation-result.v1",
+            "effect_id": "ext-0001",
+            "status": "compensation_completed",
+            "exact_rollback": False,
+            "local_rollback_applied": False,
+        },
+        known_effect_ids={"ext-0001"},
+    )
+
+    assert "compensation-result.json: manual_review_required: missing compensation receipt" in errors
+
+    assert validate_compensation_result_record(
+        {
+            "schema_version": "compensation-result.v1",
+            "effect_id": "ext-0001",
+            "status": "compensation_completed",
+            "exact_rollback": False,
+            "local_rollback_applied": False,
+            "evidence": {"path": "receipts/manual.json", "quote_or_field": "receipt_id"},
+        },
+        known_effect_ids={"ext-0001"},
+    ) == []
 
 
 def test_compensation_result_cli_writes_receipt_without_local_rollback_claim(tmp_path: Path) -> None:

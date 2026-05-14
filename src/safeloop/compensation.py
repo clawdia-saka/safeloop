@@ -210,6 +210,48 @@ def _known_effect_ids(run_path: Path) -> set[str]:
     return ids
 
 
+def compensation_result_receipt_ref(record: dict[str, Any]) -> str | None:
+    """Return the durable receipt/evidence reference for a compensation result."""
+
+    for key in ("receipt_path", "receipt", "artifact_path", "path"):
+        value = record.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    evidence = record.get("evidence")
+    if isinstance(evidence, dict):
+        ref = evidence.get("path") or evidence.get("url")
+        quote = evidence.get("quote_or_field")
+        if isinstance(ref, str) and ref.strip() and isinstance(quote, str) and quote.strip():
+            return ref.strip()
+    return None
+
+
+def validate_compensation_result_record(
+    record: dict[str, Any],
+    *,
+    known_effect_ids: set[str] | None = None,
+    location: str = "compensation-result.json",
+) -> list[str]:
+    """Validate consumed compensation result evidence without executing compensation."""
+
+    errors: list[str] = []
+    effect_id = str(record.get("effect_id") or "").strip()
+    status = str(record.get("status") or record.get("result_status") or "").strip()
+    if not effect_id:
+        errors.append(f"{location}: effect_id is required")
+    elif known_effect_ids is not None and effect_id not in known_effect_ids:
+        errors.append(f"{location}: effect_id not found in external-effects.jsonl or compensation-plan.json: {effect_id}")
+    if status and status not in RESULT_STATUSES and status not in {"completed", "failed", "verified"}:
+        errors.append(f"{location}: status must be one of: {', '.join(sorted(RESULT_STATUSES))}")
+    if record.get("exact_rollback") is True:
+        errors.append(f"{location}: compensation result must not claim exact_rollback=true")
+    if record.get("local_rollback_applied") is True:
+        errors.append(f"{location}: compensation result must not claim local_rollback_applied=true")
+    if status in {"compensation_completed", "completed", "verified"} and not compensation_result_receipt_ref(record):
+        errors.append(f"{location}: manual_review_required: missing compensation receipt")
+    return errors
+
+
 def create_compensation_result(
     run_dir: str | Path,
     *,

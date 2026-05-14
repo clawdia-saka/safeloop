@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from typing import Iterable
 
+from safeloop.compensation import compensation_result_receipt_ref, validate_compensation_result_record
 from safeloop.external_effects import ExternalEffectValidationError, read_external_effects
 
 BOUNDARY_LINES = [
@@ -47,9 +48,11 @@ def _items_by_effect_id(data: dict) -> dict[str, dict]:
     items = data.get("items")
     if not isinstance(items, list):
         items = data.get("effects")
-    if not isinstance(items, list):
-        return {}
     by_id: dict[str, dict] = {}
+    if isinstance(data.get("effect_id"), str) and data.get("effect_id"):
+        by_id[str(data["effect_id"])] = data
+    if not isinstance(items, list):
+        return by_id
     for item in items:
         if isinstance(item, dict) and item.get("effect_id"):
             by_id[str(item["effect_id"])] = item
@@ -167,6 +170,27 @@ def render_operator_packet_v2(
         item_ref = f"{effect.get('kind', 'unknown')}:{effect.get('target', effect.get('effect_id', 'unknown'))}"
         external_items.append(item_ref)
         external_effect_by_item[item_ref] = effect
+    known_effect_ids = {str(effect.get("effect_id")) for effect in external_effect_records if effect.get("effect_id")}
+    known_effect_ids.update(str(effect_id) for effect_id in plan_items_by_effect_id if effect_id)
+    compensation_result_errors: list[str] = []
+    compensation_result_errors_by_effect_id: dict[str, list[str]] = {}
+    if compensation_result:
+        records: list[tuple[str, dict]] = []
+        if isinstance(compensation_result.get("effect_id"), str) and compensation_result.get("effect_id"):
+            records.append(("compensation-result.json", compensation_result))
+        raw_items = compensation_result.get("items")
+        if not isinstance(raw_items, list):
+            raw_items = compensation_result.get("effects")
+        if isinstance(raw_items, list):
+            for index, item in enumerate(raw_items):
+                if isinstance(item, dict):
+                    records.append((f"compensation-result.json#items[{index}]", item))
+        for location, record in records:
+            record_errors = validate_compensation_result_record(record, known_effect_ids=known_effect_ids or None, location=location)
+            compensation_result_errors.extend(record_errors)
+            effect_id = str(record.get("effect_id") or "").strip()
+            if effect_id and record_errors:
+                compensation_result_errors_by_effect_id.setdefault(effect_id, []).extend(record_errors)
     for index, item in enumerate(outbox_items):
         external_items.append(_outbox_item_id(item, index))
 
@@ -177,7 +201,7 @@ def render_operator_packet_v2(
         next_action = "compensation_review_required"
     elif files:
         next_action = "rollback_available"
-    if issues or external_registry_errors:
+    if issues or external_registry_errors or compensation_result_errors:
         next_action = "blocked"
 
     lines: list[str] = [
@@ -198,13 +222,15 @@ def render_operator_packet_v2(
         f"- evidence packet status: {evidence_packet_status}",
         "- issues / warnings:",
     ]
-    if issues or warnings or external_registry_errors:
+    if issues or warnings or external_registry_errors or compensation_result_errors:
         for issue in issues:
             lines.append(f"  - issue: {_cell(issue)}")
         for warning in warnings:
             lines.append(f"  - warning: {_cell(warning)}")
         for error in external_registry_errors:
             lines.append(f"  - issue: invalid_external_effect_registry: {_cell(error)}")
+        for error in compensation_result_errors:
+            lines.append(f"  - issue: invalid_compensation_result: {_cell(error)}")
     else:
         lines.append("  - none")
 
@@ -224,6 +250,8 @@ def render_operator_packet_v2(
         display_type = str(effect.get("kind") or "external_side_effect") if effect else "external_side_effect"
         display_ref = str(effect.get("target") or item) if effect else item
         display_status = str(effect.get("status") or "manual_review_required") if effect else "manual_review_required"
+        if effect and compensation_result_errors_by_effect_id.get(str(effect.get("effect_id") or "")):
+            display_status = "manual_review_required: missing compensation receipt"
         lines.append(_row([display_item, display_type, display_ref, display_status, "false", evidence_ref]))
         if effect:
             lines.append(_row([item, "external_side_effect", item, display_status, "false", evidence_ref]))
@@ -245,7 +273,7 @@ def render_operator_packet_v2(
         "## 5. External compensation / manual review status",
         f"- external-effects.jsonl: {'invalid' if external_registry_errors else ('present' if external_effect_records else 'not_present')}",
         f"- {_artifact_status(run_path, 'compensation-plan.json', compensation_plan)}",
-        f"- {_artifact_status(run_path, 'compensation-result.json', compensation_result)}",
+        f"- compensation-result.json: invalid (manual_review_required: missing compensation receipt)" if compensation_result_errors else f"- {_artifact_status(run_path, 'compensation-result.json', compensation_result)}",
         "- This table is separate from local rollback. It records compensation/manual review only and never exact external rollback.",
         "",
         "## 5. Compensation decision table",
@@ -261,9 +289,17 @@ def render_operator_packet_v2(
             result_item = result_items_by_effect_id.get(effect_id, {}) if effect_id else {}
             planned_action = _first_present(plan_item, ["planned_action", "action", "description"])
             result_status = _first_present(result_item, ["status", "result_status"])
-            receipt = _first_present(result_item, ["receipt_path", "receipt", "artifact_path", "path"])
+            receipt = compensation_result_receipt_ref(result_item) if result_item else None
+            result_errors = validate_compensation_result_record(
+                result_item,
+                known_effect_ids=known_effect_ids or None,
+                location=f"compensation-result.json#{effect_id}",
+            ) if result_item else []
             required_action = "Review and compensate manually; do not treat local rollback as external rollback."
-            if planned_action or result_status:
+            if result_errors:
+                result_status = None
+                required_action = "; ".join(result_errors)
+            elif planned_action or result_status:
                 parts = []
                 if planned_action:
                     parts.append(f"planned: {planned_action}")

@@ -72,6 +72,22 @@ bash examples/compensation_message_demo.sh
 
 That is expected. SafeLoop should surface both states instead of collapsing them into one unsafe success label.
 
+## Fake external webhook compensation demo
+
+`examples/fake_external_webhook_compensation_demo.py` is a deterministic fake external webhook compensation demo. It is fully fake/local/offline and does not contact third-party systems, dispatch webhooks, use a hosted control plane, perform automatic remediation, or change local rollback behavior.
+
+Run it locally:
+
+```bash
+python examples/fake_external_webhook_compensation_demo.py
+```
+
+The demo writes only local artifacts:
+
+- `external-effects.jsonl`: a fake/local webhook effect with `exact_rollback: false`, `manual_review_required: true`, and `evidence_required: true`.
+- `manual-compensation-result.json`: a fake/manual compensation result for operator review.
+- `operator-packet.md`: a packet that separates local rollback from external manual review and states the external action is not exact rollback.
+
 ## External side-effect registry
 
 SafeLoop v0.2 tracks actions outside the local repo in `RUN_DIR/external-effects.jsonl` using `external-side-effect.v1` records. These records are for compensation/manual review only: every external effect keeps `exact_rollback: false`, requires evidence with a path or URL plus `quote_or_field`, and must not store raw sensitive payloads. See `docs/specs/external-side-effect-v1.md`.

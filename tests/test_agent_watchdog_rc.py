@@ -465,6 +465,76 @@ def test_rollback_to_start_plan_and_apply_restores_whole_run(tmp_path: Path) -> 
     assert any(e["type"] == "rollback_applied" for e in aw.timeline_events(run_dir))
 
 
+def test_readme_quickstart_post_rollback_verify_artifacts_is_not_confusing_invalid(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "note.txt").write_text("base\n", encoding="utf-8")
+    (repo / "agent.py").write_text("from pathlib import Path\nPath('note.txt').write_text('changed\\n')\n")
+    result = run_cli("watch-run", "--task-id", "quickstart-smoke", "--repo", str(repo), "--run-root", str(tmp_path / "runs"), "--", sys.executable, "agent.py")
+    assert result.returncode == 0, result.stderr
+    run_dir = Path([line.split(":", 1)[1].strip() for line in result.stdout.splitlines() if line.startswith("Run dir:")][0])
+    run_id = read_json(run_dir / "run.json")["run_id"]
+
+    plan = run_cli("rollback", "plan", str(run_dir), run_id, "--to-start")
+    assert plan.returncode == 0, plan.stderr
+    apply = run_cli("rollback", "apply", str(run_dir), run_id, "--to-start")
+    assert apply.returncode == 0, apply.stderr
+    assert (repo / "note.txt").read_text(encoding="utf-8") == "base\n"
+
+    verify = run_cli("verify-artifacts", str(run_dir))
+
+    assert verify.returncode == 0, verify.stdout + verify.stderr
+    payload = read_json(run_dir / "verification" / "verify-artifacts-result.json")
+    assert payload["status"] == "valid"
+    assert "source-evidence-rewritten-after-packet note.txt" not in payload["issues"]
+
+
+def test_verify_artifacts_does_not_trust_unbound_root_rollback_result_to_skip_source_digest(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    source = repo / "tracked.txt"
+    source.write_text("before\n", encoding="utf-8")
+    (repo / "agent.py").write_text("from pathlib import Path\nPath('tracked.txt').write_text('after\\n')\n")
+    result = run_cli("watch-run", "--task-id", "forged-root-rollback", "--repo", str(repo), "--run-root", str(tmp_path / "runs"), "--", sys.executable, "agent.py")
+    assert result.returncode == 0, result.stderr
+    run_dir = Path([line.split(":", 1)[1].strip() for line in result.stdout.splitlines() if line.startswith("Run dir:")][0])
+    run_id = read_json(run_dir / "run.json")["run_id"]
+    source.write_text("tampered after packet\n", encoding="utf-8")
+    (run_dir / "rollback-result.json").write_text(
+        json.dumps({"schema_version": "rollback-result.v1", "operation": "rollback_to_start", "run_id": run_id, "mode": "apply", "status": "applied"}, indent=2),
+        encoding="utf-8",
+    )
+
+    payload = verify_run(run_dir)
+
+    assert payload["status"] == "invalid"
+    assert "source-evidence-rewritten-after-packet tracked.txt" in payload["issues"]
+
+
+def test_verify_artifacts_fails_closed_on_malformed_root_rollback_result(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    source = repo / "tracked.txt"
+    source.write_text("before\n", encoding="utf-8")
+    (repo / "agent.py").write_text("from pathlib import Path\nPath('tracked.txt').write_text('after\\n')\n")
+    result = run_cli("watch-run", "--task-id", "malformed-root-rollback", "--repo", str(repo), "--run-root", str(tmp_path / "runs"), "--", sys.executable, "agent.py")
+    assert result.returncode == 0, result.stderr
+    run_dir = Path([line.split(":", 1)[1].strip() for line in result.stdout.splitlines() if line.startswith("Run dir:")][0])
+    source.write_text("tampered after packet\n", encoding="utf-8")
+
+    (run_dir / "rollback-result.json").write_text("{not-json}", encoding="utf-8")
+    invalid_json_payload = verify_run(run_dir)
+    assert invalid_json_payload["status"] == "invalid"
+    assert "malformed rollback-result.json" in invalid_json_payload["issues"]
+    assert "source-evidence-rewritten-after-packet tracked.txt" in invalid_json_payload["issues"]
+
+    (run_dir / "rollback-result.json").write_text("[]", encoding="utf-8")
+    non_object_payload = verify_run(run_dir)
+    assert non_object_payload["status"] == "invalid"
+    assert "malformed rollback-result.json" in non_object_payload["issues"]
+    assert "source-evidence-rewritten-after-packet tracked.txt" in non_object_payload["issues"]
+
+
 def test_rollback_to_start_blocks_symlink_target(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()

@@ -683,6 +683,7 @@ def verify_run(run_dir: Path, *, check_source_evidence: bool = True) -> dict[str
     checked: list[str] = []
     try:
         events = timeline_events(run_dir)
+        bound_root_rollback_operations: set[str] = set()
         expected_seq = 1
         for e in events:
             h = e.get("event_hash")
@@ -718,6 +719,14 @@ def verify_run(run_dir: Path, *, check_source_evidence: bool = True) -> dict[str
                     checked.append(str(path.relative_to(run_dir)))
                     if sha_file(path) != dig:
                         issues.append(f"digest mismatch {path.relative_to(run_dir)}")
+                    elif (
+                        e.get("type") == "rollback_applied"
+                        and name == "rollback-result.json"
+                        and path == run_dir / "rollback-result.json"
+                        and payload.get("rollback_status") == "applied"
+                        and payload.get("operation") in {"rollback_to_start", "rollback_selected_files", "rollback_selected_hunks", "rollback_action"}
+                    ):
+                        bound_root_rollback_operations.add(str(payload["operation"]))
         r = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
         repo = Path(r.get("repo", ""))
         baseline_dir = run_dir / "baseline"
@@ -751,7 +760,27 @@ def verify_run(run_dir: Path, *, check_source_evidence: bool = True) -> dict[str
             issues.append("run final hash mismatch")
         parent = None
         checkpoints = sorted((run_dir / "checkpoints").glob("cp-*")) if (run_dir / "checkpoints").exists() else []
-        check_current_source_digest = check_source_evidence and not any((cp / "undo-result.json").exists() for cp in checkpoints)
+        rollback_result: dict[str, Any] | None = None
+        rollback_result_path = run_dir / "rollback-result.json"
+        if rollback_result_path.exists():
+            try:
+                parsed_rollback_result = json.loads(rollback_result_path.read_text(encoding="utf-8"))
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+                issues.append("malformed rollback-result.json")
+            else:
+                if not isinstance(parsed_rollback_result, dict):
+                    issues.append("malformed rollback-result.json")
+                else:
+                    rollback_result = parsed_rollback_result
+        applied_root_rollback = bool(
+            rollback_result is not None
+            and rollback_result.get("schema_version") == "rollback-result.v1"
+            and rollback_result.get("status") == "applied"
+            and rollback_result.get("mode") == "apply"
+            and rollback_result.get("run_id") == r.get("run_id")
+            and rollback_result.get("operation") in bound_root_rollback_operations
+        )
+        check_current_source_digest = check_source_evidence and not applied_root_rollback and not any((cp / "undo-result.json").exists() for cp in checkpoints)
         for cp in checkpoints:
             cj = json.loads((cp / "checkpoint.json").read_text(encoding="utf-8"))
             if cj.get("parent_checkpoint_id") != parent:

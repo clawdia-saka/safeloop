@@ -45,18 +45,28 @@ def _artifact_status(run_path: Path, name: str, data: dict) -> str:
     return f"{name}: present (status: {status})"
 
 
+def _effect_id_aliases(record: dict) -> list[str]:
+    aliases: list[str] = []
+    for key in ("effect_id", "side_effect_id", "event_id"):
+        value = record.get(key)
+        if isinstance(value, str) and value.strip():
+            aliases.append(value.strip())
+    return list(dict.fromkeys(aliases))
+
+
 def _items_by_effect_id(data: dict) -> dict[str, dict]:
     items = data.get("items")
     if not isinstance(items, list):
         items = data.get("effects")
     by_id: dict[str, dict] = {}
-    if isinstance(data.get("effect_id"), str) and data.get("effect_id"):
-        by_id[str(data["effect_id"])] = data
+    for alias in _effect_id_aliases(data):
+        by_id[alias] = data
     if not isinstance(items, list):
         return by_id
     for item in items:
-        if isinstance(item, dict) and item.get("effect_id"):
-            by_id[str(item["effect_id"])] = item
+        if isinstance(item, dict):
+            for alias in _effect_id_aliases(item):
+                by_id[alias] = item
     return by_id
 
 
@@ -239,14 +249,36 @@ def render_operator_packet_v2(
         external_items.append(_outbox_item_id(item, index))
 
     completed_result_statuses = {"compensation_completed", "completed", "verified"}
-    external_registry_compensation_complete = bool(external_effect_records) and not outbox_items and all(
-        (
-            result_items_by_effect_id.get(str(effect.get("effect_id") or ""), {}).get("status")
-            in completed_result_statuses
-            and compensation_result_receipt_ref(result_items_by_effect_id.get(str(effect.get("effect_id") or ""), {}))
-            and not compensation_result_errors_by_effect_id.get(str(effect.get("effect_id") or ""))
-        )
-        for effect in external_effect_records
+    completed_effect_ids = {
+        effect_id
+        for effect_id, result in result_items_by_effect_id.items()
+        if result.get("status") in completed_result_statuses
+        and compensation_result_receipt_ref(result)
+        and not compensation_result_errors_by_effect_id.get(effect_id)
+    }
+
+    def _effect_id_for_external_item(item: str) -> str:
+        effect = external_effect_by_item.get(item)
+        if effect:
+            return str(effect.get("effect_id") or "")
+        ledger_event = side_effect_ledger_by_item.get(item)
+        if ledger_event:
+            aliases = _effect_id_aliases(ledger_event)
+            for alias in aliases:
+                if alias in result_items_by_effect_id:
+                    return alias
+            for alias in aliases:
+                if alias in plan_items_by_effect_id:
+                    return alias
+            if aliases:
+                return aliases[0]
+        return ""
+
+    outbox_item_ids = {_outbox_item_id(outbox, index) for index, outbox in enumerate(outbox_items)}
+    receipt_correlatable_items = [item for item in external_items if item not in outbox_item_ids]
+    external_registry_compensation_complete = bool(receipt_correlatable_items) and not outbox_items and all(
+        (effect_id := _effect_id_for_external_item(item)) and effect_id in completed_effect_ids
+        for item in receipt_correlatable_items
     )
 
     next_action = "verify_only"
@@ -306,21 +338,28 @@ def render_operator_packet_v2(
         evidence_ref = "external-effects.jsonl" if item in external_effect_by_item else ("side-effects.jsonl" if item in side_effect_ledger_by_item else item)
         effect = external_effect_by_item.get(item)
         ledger_display = _side_effect_ledger_display(side_effect_ledger_by_item[item], 0) if item in side_effect_ledger_by_item else None
-        display_item = str(effect.get("effect_id") or item) if effect else (ledger_display["event_id"] if ledger_display else item)
+        effect_id = ""
+        if effect:
+            effect_id = str(effect.get("effect_id") or "")
+        elif ledger_display:
+            effect_id = _effect_id_for_external_item(item)
+        display_item = str(effect.get("effect_id") or item) if effect else (effect_id or ledger_display["event_id"] if ledger_display else item)
         display_type = str(effect.get("kind") or "external_side_effect") if effect else (ledger_display["effect_class"] if ledger_display else "external_side_effect")
         display_ref = str(effect.get("target") or item) if effect else (ledger_display["external_ref"] if ledger_display else item)
         display_status = str(effect.get("status") or "manual_review_required") if effect else "manual_review_required"
-        if effect:
-            effect_id = str(effect.get("effect_id") or "")
-            result_item = result_items_by_effect_id.get(effect_id, {}) if effect_id else {}
-            receipt = compensation_result_receipt_ref(result_item) if result_item else None
-            if compensation_result_errors_by_effect_id.get(effect_id):
-                display_status = "manual_review_required: missing compensation receipt"
-            elif result_item and result_item.get("status"):
-                display_status = str(result_item["status"])
-                evidence_ref = "external-effects.jsonl; compensation-result.json"
-                if receipt:
-                    evidence_ref += f"; receipt: {receipt}"
+        result_item = result_items_by_effect_id.get(effect_id, {}) if effect_id else {}
+        receipt = compensation_result_receipt_ref(result_item) if result_item else None
+        if effect_id and compensation_result_errors_by_effect_id.get(effect_id):
+            display_status = "manual_review_required: missing compensation receipt"
+        elif result_item and result_item.get("status"):
+            display_status = str(result_item["status"])
+            evidence_ref = (
+                "external-effects.jsonl; compensation-result.json"
+                if effect
+                else "side-effects.jsonl; compensation-result.json"
+            )
+            if receipt:
+                evidence_ref += f"; receipt: {receipt}"
         lines.append(_row([display_item, display_type, display_ref, display_status, "false", evidence_ref]))
         if effect:
             lines.append(_row([item, "external_side_effect", item, display_status, "false", evidence_ref]))
@@ -355,7 +394,8 @@ def render_operator_packet_v2(
     if external_items:
         for item in external_items:
             effect = external_effect_by_item.get(item, {})
-            effect_id = str(effect.get("effect_id") or "")
+            ledger_display = _side_effect_ledger_display(side_effect_ledger_by_item[item], 0) if item in side_effect_ledger_by_item else None
+            effect_id = str(effect.get("effect_id") or "") if effect else (_effect_id_for_external_item(item) if ledger_display else "")
             plan_item = plan_items_by_effect_id.get(effect_id, {}) if effect_id else {}
             result_item = result_items_by_effect_id.get(effect_id, {}) if effect_id else {}
             planned_action = _first_present(plan_item, ["planned_action", "action", "description"])
@@ -384,9 +424,9 @@ def render_operator_packet_v2(
                 capability = _side_effect_ledger_display(side_effect_ledger_by_item[item], 0)["capability"]
             evidence_ref = "external-effects.jsonl" if item in external_effect_by_item else ("side-effects.jsonl" if item in side_effect_ledger_by_item else item)
             evidence_parts = [evidence_ref]
-            if effect and (run_path / "compensation-plan.json").exists():
+            if effect_id and (run_path / "compensation-plan.json").exists() and plan_item:
                 evidence_parts.append("compensation-plan.json")
-            if effect and (run_path / "compensation-result.json").exists():
+            if effect_id and (run_path / "compensation-result.json").exists() and result_item:
                 evidence_parts.append("compensation-result.json")
             if receipt:
                 evidence_parts.append(f"receipt: {receipt}")

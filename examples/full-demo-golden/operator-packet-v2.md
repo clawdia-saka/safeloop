@@ -35,6 +35,8 @@
 
 ## 5. External compensation / manual review status
 - external-effects.jsonl: not_present
+- side-effects.jsonl: not_present
+- legacy side-effect ledger compatibility: not_applicable
 - compensation-plan.json: not_present
 - compensation-result.json: not_present
 - This table is separate from local rollback. It records compensation/manual review only and never exact external rollback.

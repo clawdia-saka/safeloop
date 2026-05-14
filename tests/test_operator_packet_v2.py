@@ -423,6 +423,87 @@ def test_operator_packet_requires_receipt_for_compensation_completed(tmp_path: P
     assert "recommended next action: blocked" in packet
 
 
+def test_operator_packet_flags_side_effect_ledger_without_external_effects_registry(tmp_path: Path) -> None:
+    run_dir = make_run_dir(tmp_path)
+    (run_dir / "side-effects.jsonl").write_text(
+        json.dumps(
+            {
+                "schema_version": "side-effect-ledger.v1",
+                "event_id": "sevt-0001",
+                "run_id": "run-demo",
+                "created_at": "2026-05-14T00:00:00+00:00",
+                "phase": "observed",
+                "effect_class": "http",
+                "adapter": {"name": "fake-http", "version": "test", "supports_idempotency": False},
+                "target": {"url": "https://example.test/webhook"},
+                "idempotency_key": None,
+                "external_ref": "evt_123",
+                "privacy": {"redaction": "strict", "contains_secret": False, "raw_payload_persisted": False},
+                "compensation": {"capability": "manual"},
+                "reason": "integration emitted legacy ledger event",
+            },
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    packet = render_operator_packet_v2(run_dir)
+
+    assert "external-effects.jsonl: not_present" in packet
+    assert "side-effects.jsonl: present" in packet
+    assert "side-effect-ledger.v1" in packet
+    assert "sevt-0001" in packet
+    assert "evt_123" in packet
+    assert "manual_review_required" in packet
+    assert "recommended next action: compensation_review_required" in packet
+    assert "recommended next action: verify_only" not in packet
+    assert "no external side effects recorded" not in packet
+    assert "| sevt-0001 | http | evt_123 | manual_review_required | false | side-effects.jsonl |" in packet
+
+
+def test_operator_packet_does_not_fallback_to_legacy_ledger_when_external_registry_file_exists(tmp_path: Path) -> None:
+    run_dir = make_run_dir(tmp_path)
+    (run_dir / "external-effects.jsonl").write_text("", encoding="utf-8")
+    (run_dir / "side-effects.jsonl").write_text(
+        json.dumps(
+            {
+                "schema_version": "side-effect-ledger.v1",
+                "event_id": "sevt-0001",
+                "run_id": "run-demo",
+                "phase": "observed",
+                "effect_class": "http",
+                "external_ref": "evt_123",
+                "compensation": {"capability": "manual"},
+            },
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    packet = render_operator_packet_v2(run_dir)
+
+    assert "external-effects.jsonl: present" in packet
+    assert "legacy side-effect ledger compatibility: not_applicable" in packet
+    assert "sevt-0001" not in packet
+    assert "recommended next action: verify_only" not in packet  # local files still make rollback available
+    assert "recommended next action: rollback_available" in packet
+
+
+def test_operator_packet_blocks_invalid_side_effect_ledger_without_saying_none_recorded(tmp_path: Path) -> None:
+    run_dir = make_run_dir(tmp_path)
+    (run_dir / "side-effects.jsonl").write_text("{not-json}\n", encoding="utf-8")
+
+    packet = render_operator_packet_v2(run_dir)
+
+    assert "side-effects.jsonl: invalid" in packet
+    assert "invalid_side_effect_ledger" in packet
+    assert "recommended next action: blocked" in packet
+    assert "no external side effects recorded" not in packet
+    assert "block packet use until legacy side-effect ledger is corrected" in packet
+
+
 def test_packet_v2_spec_and_example_document_required_boundaries() -> None:
     spec = SPEC.read_text(encoding="utf-8")
     example = EXAMPLE.read_text(encoding="utf-8")

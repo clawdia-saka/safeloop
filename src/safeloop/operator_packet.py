@@ -6,6 +6,7 @@ from typing import Iterable
 
 from safeloop.compensation import compensation_result_receipt_ref, validate_compensation_result_record
 from safeloop.external_effects import ExternalEffectValidationError, read_external_effects
+from safeloop.side_effect_ledger import read_side_effect_events
 
 BOUNDARY_LINES = [
     "Exact rollback only applies to covered local file changes.",
@@ -96,6 +97,29 @@ def _outbox_item_id(item: dict, index: int) -> str:
     return str(item.get("id") or item.get("outbox_id") or f"external-outbox[{index}]")
 
 
+def _side_effect_ledger_item_ref(event: dict, index: int) -> str:
+    return f"side-effects:{event.get('event_id') or event.get('side_effect_id') or index}"
+
+
+def _side_effect_ledger_display(event: dict, index: int) -> dict[str, str]:
+    event_id = str(event.get("event_id") or event.get("side_effect_id") or f"side-effects[{index}]")
+    effect_class = str(event.get("effect_class") or event.get("class") or event.get("type") or "external_side_effect")
+    external_ref = str(event.get("external_ref") or event.get("target") or event_id)
+    phase = str(event.get("phase") or "observed")
+    capability = "manual"
+    compensation = event.get("compensation")
+    if isinstance(compensation, dict) and compensation.get("capability"):
+        capability = str(compensation["capability"])
+    return {
+        "event_id": event_id,
+        "effect_class": effect_class,
+        "external_ref": external_ref,
+        "phase": phase,
+        "capability": capability,
+        "schema_version": str(event.get("schema_version") or "side-effect-ledger.v1"),
+    }
+
+
 def _outbox_item_lifecycle_bound(item: dict) -> bool:
     has_digest = bool(item.get("approval_request_digest"))
     has_status = bool(item.get("approval_status"))
@@ -165,11 +189,31 @@ def render_operator_packet_v2(
     except ExternalEffectValidationError as exc:
         external_effect_records = []
         external_registry_errors.append(str(exc))
+    external_registry_exists = (run_path / "external-effects.jsonl").exists()
     external_effect_by_item: dict[str, dict] = {}
+    side_effect_ledger_by_item: dict[str, dict] = {}
+    side_effect_ledger_errors: list[str] = []
     for effect in external_effect_records:
         item_ref = f"{effect.get('kind', 'unknown')}:{effect.get('target', effect.get('effect_id', 'unknown'))}"
         external_items.append(item_ref)
         external_effect_by_item[item_ref] = effect
+    if not external_registry_exists and not external_registry_errors:
+        try:
+            side_effect_events = read_side_effect_events(run_path / "side-effects.jsonl")
+        except (OSError, json.JSONDecodeError, ValueError) as exc:
+            side_effect_events = []
+            if (run_path / "side-effects.jsonl").exists():
+                side_effect_ledger_errors.append(str(exc))
+        for index, event in enumerate(side_effect_events):
+            if not isinstance(event, dict):
+                continue
+            schema_version = event.get("schema_version")
+            effect_class = event.get("effect_class") or event.get("class") or event.get("type")
+            if schema_version != "side-effect-ledger.v1" or effect_class in {None, "file", "git"}:
+                continue
+            item_ref = _side_effect_ledger_item_ref(event, index)
+            external_items.append(item_ref)
+            side_effect_ledger_by_item[item_ref] = event
     known_effect_ids = {str(effect.get("effect_id")) for effect in external_effect_records if effect.get("effect_id")}
     known_effect_ids.update(str(effect_id) for effect_id in plan_items_by_effect_id if effect_id)
     compensation_result_errors: list[str] = []
@@ -214,7 +258,7 @@ def render_operator_packet_v2(
         next_action = "compensation_review_required"
     elif files:
         next_action = "rollback_available"
-    if issues or external_registry_errors or compensation_result_errors:
+    if issues or external_registry_errors or compensation_result_errors or side_effect_ledger_errors:
         next_action = "blocked"
 
     lines: list[str] = [
@@ -235,13 +279,15 @@ def render_operator_packet_v2(
         f"- evidence packet status: {evidence_packet_status}",
         "- issues / warnings:",
     ]
-    if issues or warnings or external_registry_errors or compensation_result_errors:
+    if issues or warnings or external_registry_errors or compensation_result_errors or side_effect_ledger_errors:
         for issue in issues:
             lines.append(f"  - issue: {_cell(issue)}")
         for warning in warnings:
             lines.append(f"  - warning: {_cell(warning)}")
         for error in external_registry_errors:
             lines.append(f"  - issue: invalid_external_effect_registry: {_cell(error)}")
+        for error in side_effect_ledger_errors:
+            lines.append(f"  - issue: invalid_side_effect_ledger: {_cell(error)}")
         for error in compensation_result_errors:
             lines.append(f"  - issue: invalid_compensation_result: {_cell(error)}")
     else:
@@ -257,11 +303,12 @@ def render_operator_packet_v2(
         lines.append(_row([file_path, "local_file", file_path, "rollback_available", "true", "rollback-plan.json"]))
     lines.append(_row([checkpoint_id, "action_group", checkpoint_id, "rollback_available", "true", "rollback-plan.json"]))
     for item in external_items:
-        evidence_ref = "external-effects.jsonl" if item in external_effect_by_item else item
+        evidence_ref = "external-effects.jsonl" if item in external_effect_by_item else ("side-effects.jsonl" if item in side_effect_ledger_by_item else item)
         effect = external_effect_by_item.get(item)
-        display_item = str(effect.get("effect_id") or item) if effect else item
-        display_type = str(effect.get("kind") or "external_side_effect") if effect else "external_side_effect"
-        display_ref = str(effect.get("target") or item) if effect else item
+        ledger_display = _side_effect_ledger_display(side_effect_ledger_by_item[item], 0) if item in side_effect_ledger_by_item else None
+        display_item = str(effect.get("effect_id") or item) if effect else (ledger_display["event_id"] if ledger_display else item)
+        display_type = str(effect.get("kind") or "external_side_effect") if effect else (ledger_display["effect_class"] if ledger_display else "external_side_effect")
+        display_ref = str(effect.get("target") or item) if effect else (ledger_display["external_ref"] if ledger_display else item)
         display_status = str(effect.get("status") or "manual_review_required") if effect else "manual_review_required"
         if effect:
             effect_id = str(effect.get("effect_id") or "")
@@ -293,7 +340,9 @@ def render_operator_packet_v2(
         _row(["selected action group rollback", checkpoint_id, "available", "true", no_blockers, _suggested_command(run_path, run_id, checkpoint_id)]),
         "",
         "## 5. External compensation / manual review status",
-        f"- external-effects.jsonl: {'invalid' if external_registry_errors else ('present' if external_effect_records else 'not_present')}",
+        f"- external-effects.jsonl: {'invalid' if external_registry_errors else ('present' if external_registry_exists else 'not_present')}",
+        f"- side-effects.jsonl: {'invalid' if side_effect_ledger_errors else ('present' if side_effect_ledger_by_item else 'not_present')}",
+        f"- legacy side-effect ledger compatibility: {'manual_review_required for side-effect-ledger.v1 external entries' if side_effect_ledger_by_item else 'not_applicable'}",
         f"- {_artifact_status(run_path, 'compensation-plan.json', compensation_plan)}",
         f"- compensation-result.json: invalid (manual_review_required: missing compensation receipt)" if compensation_result_errors else f"- {_artifact_status(run_path, 'compensation-result.json', compensation_result)}",
         "- This table is separate from local rollback. It records compensation/manual review only and never exact external rollback.",
@@ -331,7 +380,9 @@ def render_operator_packet_v2(
             if unsafe_outbox_boundary:
                 required_action = "Do not dispatch externally; pending shadow review only until approval/waiver lifecycle binding exists."
             capability = effect.get("compensation_capability", "manual")
-            evidence_ref = "external-effects.jsonl" if item in external_effect_by_item else item
+            if item in side_effect_ledger_by_item:
+                capability = _side_effect_ledger_display(side_effect_ledger_by_item[item], 0)["capability"]
+            evidence_ref = "external-effects.jsonl" if item in external_effect_by_item else ("side-effects.jsonl" if item in side_effect_ledger_by_item else item)
             evidence_parts = [evidence_ref]
             if effect and (run_path / "compensation-plan.json").exists():
                 evidence_parts.append("compensation-plan.json")
@@ -358,6 +409,9 @@ def render_operator_packet_v2(
     elif external_registry_errors:
         for error in external_registry_errors:
             lines.append(_row(["external-effects.jsonl", "invalid_external_effect_registry", "corrupt registry evidence can mask external rollback overclaims", f"block packet use until registry is corrected: {error}"]))
+    elif side_effect_ledger_errors:
+        for error in side_effect_ledger_errors:
+            lines.append(_row(["side-effects.jsonl", "invalid_side_effect_ledger", "corrupt legacy ledger evidence can mask external side effects", f"block packet use until legacy side-effect ledger is corrected: {error}"]))
     else:
         lines.append(_row(["none", "no external side effects recorded", "low", "verify packet and proceed with local rollback if needed"]))
 

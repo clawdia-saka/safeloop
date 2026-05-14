@@ -194,9 +194,22 @@ def render_operator_packet_v2(
     for index, item in enumerate(outbox_items):
         external_items.append(_outbox_item_id(item, index))
 
+    completed_result_statuses = {"compensation_completed", "completed", "verified"}
+    external_registry_compensation_complete = bool(external_effect_records) and not outbox_items and all(
+        (
+            result_items_by_effect_id.get(str(effect.get("effect_id") or ""), {}).get("status")
+            in completed_result_statuses
+            and compensation_result_receipt_ref(result_items_by_effect_id.get(str(effect.get("effect_id") or ""), {}))
+            and not compensation_result_errors_by_effect_id.get(str(effect.get("effect_id") or ""))
+        )
+        for effect in external_effect_records
+    )
+
     next_action = "verify_only"
     if unsafe_outbox_boundary:
         next_action = "pending_unbound_external_outbox"
+    elif external_registry_compensation_complete:
+        next_action = "compensation_complete_verify_receipt"
     elif external_items:
         next_action = "compensation_review_required"
     elif files:

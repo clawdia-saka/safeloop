@@ -56,6 +56,16 @@ Types:
 | selected hunk rollback | review hunk manifest before apply | review_required | true | operator must select hunk | review `hunk-manifest.json`, then run rollback apply with selected hunks |
 | selected action group rollback | cp-0001 | available | true | none | `python -m safeloop.cli rollback apply RUN_DIR RUN_ID CHECKPOINT_ID` |
 
+## 5. External compensation / manual review status
+
+When present, the packet surfaces these file-backed external artifacts without importing compensation APIs:
+
+- `external-effects.jsonl`: external registry; status is present/not_present.
+- `compensation-plan.json`: planned compensation artifact; status is read from its top-level `status` when present.
+- `compensation-result.json`: compensation result/receipt artifact; status is read from its top-level `status` when present.
+
+This section is separate from the local rollback decision table. It records compensation/manual review only and never exact external rollback.
+
 ## 5. Compensation decision table
 
 Compensation capability enum: none, manual, best_effort, verified

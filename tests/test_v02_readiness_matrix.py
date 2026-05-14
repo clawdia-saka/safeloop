@@ -3,6 +3,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 MATRIX = ROOT / "docs" / "v0.2-readiness-matrix.md"
 AUDIT = ROOT / "docs" / "completion-gap-audit.md"
+DOD = ROOT / "docs" / "v0.2.0-rc-definition-of-done.md"
 
 REQUIRED_CAPABILITIES = [
     "long-running task watchdog",
@@ -18,7 +19,28 @@ REQUIRED_CAPABILITIES = [
     "local tamper-evident guarantees",
     "remote transparency/signing status",
     "hosted control plane status",
+    "external side-effect registry",
+    "compensation plan/result",
+    "fake external demo",
+    "v0.2.0 RC definition of done",
     "external side-effect exact rollback boundary",
+]
+
+REQUIRED_RC_GATES = [
+    "local exact rollback",
+    "external side-effect registry",
+    "compensation plan/result",
+    "compensation adapter contract",
+    "fake external demo",
+    "operator packet integration",
+    "readiness-matrix/audit coverage",
+]
+
+REQUIRED_RC_EXCLUSIONS = [
+    "No real external adapters",
+    "No external exact rollback",
+    "No hosted control plane",
+    "No automatic external remediation",
 ]
 
 REQUIRED_STATUSES = ["complete", "partial", "planned", "out_of_scope"]
@@ -32,9 +54,14 @@ def read_audit() -> str:
     return AUDIT.read_text(encoding="utf-8")
 
 
+def read_dod() -> str:
+    return DOD.read_text(encoding="utf-8")
+
+
 def test_v02_readiness_matrix_file_exists():
     assert MATRIX.exists()
     assert AUDIT.exists()
+    assert DOD.exists()
 
 
 def test_required_capability_names_are_present():
@@ -50,7 +77,7 @@ def test_required_statuses_are_present():
 
 
 def test_external_side_effect_exact_rollback_boundary_is_explicit():
-    combined = f"{read_matrix()}\n{read_audit()}"
+    combined = f"{read_matrix()}\n{read_audit()}\n{read_dod()}"
     required_phrases = [
         "exact rollback only for covered local file changes",
         "Actions outside the local repo",
@@ -58,6 +85,28 @@ def test_external_side_effect_exact_rollback_boundary_is_explicit():
         "compensation and manual review",
     ]
     for phrase in required_phrases:
+        assert phrase in combined
+
+
+def test_v020_rc_definition_of_done_names_required_gates_and_exclusions():
+    combined = f"{read_matrix()}\n{read_dod()}"
+    for gate in REQUIRED_RC_GATES:
+        assert gate in combined
+    for exclusion in REQUIRED_RC_EXCLUSIONS:
+        assert exclusion in combined
+
+
+def test_v020_rc_exclusions_are_repeated_across_review_docs():
+    combined = f"{read_matrix()}\n{read_audit()}\n{read_dod()}".lower()
+    required_exclusion_phrases = [
+        "no real external adapters",
+        "no external exact rollback",
+        "no hosted control plane",
+        "no automatic external remediation",
+        "fake/local",
+        "operator evidence",
+    ]
+    for phrase in required_exclusion_phrases:
         assert phrase in combined
 
 

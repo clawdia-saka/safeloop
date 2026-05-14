@@ -1,6 +1,6 @@
 # SafeLoop completion gap audit
 
-This audit accompanies the v0.2 readiness matrix. It lists what is complete, what is partial, what is planned, and what is intentionally out of scope so SafeLoop does not overstate readiness.
+This audit accompanies the v0.2 readiness matrix and `docs/v0.2.0-rc-definition-of-done.md`. It lists what is complete, what is partial, what is planned, and what is intentionally out of scope so SafeLoop does not overstate readiness.
 
 ## Audit principle
 
@@ -20,9 +20,17 @@ SafeLoop should be described as a local recoverability and evidence packet syste
   - Evidence: `safeloop rollback plan`, `safeloop rollback apply`, `examples/rollback_selective_demo.sh`, `examples/full_demo.sh`, `tests/test_action_rollback.py`, `tests/test_selective_file_rollback.py`, `tests/test_hunk_rollback.py`.
   - Gap: exact rollback applies only to covered local file changes.
 
-- **Compensation adapter contract examples**
-  - Evidence: `docs/compensation-adapter-contracts.md`, `examples/compensation_adapter_contracts.json`, `tests/test_compensation_examples_docs.py`.
-  - Gap: examples define the contract; they do not execute third-party compensating actions.
+- **Compensation adapter contract examples and fake demo**
+  - Evidence: `docs/compensation-adapter-contracts.md`, `examples/compensation_adapter_contracts.json`, `examples/recoverability_external_effect_demo.sh`, `tests/test_compensation_examples_docs.py`, `tests/test_examples_boundary_demos.py`.
+  - Gap: examples define the contract and fake/local demo shape; they do not execute real third-party compensating actions.
+
+- **Compensation plan/result evidence**
+  - Evidence: `src/safeloop/compensation.py`, `docs/compensation.md`, `tests/test_compensation_planner.py`, `tests/test_compensation_examples_docs.py`.
+  - Gap: plans and results are operator evidence for manual review, not automatic external remediation.
+
+- **External side-effect registry evidence**
+  - Evidence: `src/safeloop/side_effect_ledger.py`, `src/safeloop/external_effects.py`, `docs/specs/external-side-effect-v1.md`, `tests/test_external_effects.py`, `tests/test_side_effect_ledger_runtime_005.py`.
+  - Gap: registry/ledger entries document external effects; they do not make external effects exactly rollbackable.
 
 - **Manual review boundary**
   - Evidence: `docs/compensation.md`, `docs/rollback.md`, `docs/recoverability-first.md`, `examples/full_demo.sh`, `tests/test_recoverability_story_docs.py`.
@@ -64,6 +72,14 @@ SafeLoop should be described as a local recoverability and evidence packet syste
   - Status: `out_of_scope` for v0.2 and intentionally not promised.
   - Evidence: `docs/compensation.md`, `docs/compensation-adapter-contracts.md`, `examples/compensation_adapter_contracts.json`, `examples/full_demo.sh`.
   - Boundary: actions outside the local repo—GitHub, messaging, email, webhook delivery, hosted systems, and similar remote services—must be handled through compensation and manual review. SafeLoop never claims exact rollback for those actions.
+
+- **Real external adapters**
+  - Status: `out_of_scope` for v0.2.
+  - Boundary: v0.2 ships contracts and fake/demo artifacts only; it does not ship production adapters for real third-party services.
+
+- **Automatic external remediation**
+  - Status: `out_of_scope` for v0.2.
+  - Boundary: compensation plans/results are operator evidence for manual remediation; SafeLoop does not automatically remediate external systems.
 
 ## Completion risk notes
 

@@ -9,9 +9,26 @@ description = "Local watchdog and tamper-evident timeline for long-running AI ag
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [{ name = "Nous Research" }]
+keywords = ["ai-agents", "watchdog", "rollback", "audit", "cli"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Software Development :: Version Control :: Git",
+  "Topic :: System :: Logging",
+]
 dependencies = [
   "pydantic>=2,<3",
 ]
+
+[project.urls]
+Homepage = "https://github.com/clawdia-saka/safeloop"
+Repository = "https://github.com/clawdia-saka/safeloop"
+Issues = "https://github.com/clawdia-saka/safeloop/issues"
+Documentation = "https://github.com/clawdia-saka/safeloop#readme"
 
 [project.optional-dependencies]
 api = ["fastapi>=0.110"]

@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from safeloop.agent_watchdog import atomic_json
-from safeloop.external_effects import read_external_effects
+from safeloop.external_effects import ExternalEffectValidationError, read_external_effects
 from safeloop.side_effect_ledger import read_side_effect_events
 
 SCHEMA_VERSION = "compensation-plan.v1"
@@ -140,15 +140,23 @@ def _external_plan_item(effect: dict[str, Any]) -> dict[str, Any]:
 
 def build_compensation_plan(run_dir: str | Path, *, side_effect_id: str | None = None, action_id: str | None = None, dry_run: bool = True) -> dict[str, Any]:
     run_path = Path(run_dir)
-    external_effects = read_external_effects(run_path, strict=False)
-    source = "external-effects.jsonl" if external_effects else "side-effects.jsonl"
-    if external_effects:
-        items = [_external_plan_item(effect) for effect in external_effects]
-        if side_effect_id:
-            items = [item for item in items if item.get("external_effect_id") == side_effect_id or item.get("effect_id") == side_effect_id]
-        # External registry v1 does not bind effects to SafeLoop action IDs.
-        if action_id:
-            items = []
+    source = "external-effects.jsonl" if (run_path / "external-effects.jsonl").exists() else "side-effects.jsonl"
+    items: list[dict[str, Any]] = []
+    blockers: list[dict[str, str]] = []
+    warnings: list[str] = []
+    if source == "external-effects.jsonl":
+        try:
+            external_effects = read_external_effects(run_path, strict=True)
+        except ExternalEffectValidationError as exc:
+            blockers.append({"code": "invalid_external_effect_registry", "message": str(exc)})
+            warnings.append("manual_review_required: invalid external-effect registry blocks compensation planning")
+        else:
+            items = [_external_plan_item(effect) for effect in external_effects]
+            if side_effect_id:
+                items = [item for item in items if item.get("external_effect_id") == side_effect_id or item.get("effect_id") == side_effect_id]
+            # External registry v1 does not bind effects to SafeLoop action IDs.
+            if action_id:
+                items = []
     else:
         events = read_side_effect_events(run_path / "side-effects.jsonl")
         items = [_plan_item(run_path, event) for event in events]
@@ -156,9 +164,8 @@ def build_compensation_plan(run_dir: str | Path, *, side_effect_id: str | None =
             items = [item for item in items if item.get("side_effect_id") == side_effect_id]
         if action_id:
             items = [item for item in items if item.get("action_id") == action_id or action_id in item.get("action_ids", [])]
-    blockers = [b for item in items for b in item.get("blockers", [])]
-    warnings: list[str] = []
-    if not items:
+    blockers.extend(b for item in items for b in item.get("blockers", []))
+    if not items and not blockers:
         warnings.append("manual_review_required: no matching side effects found")
     if any(item.get("compensation", {}).get("capability") == "manual" for item in items):
         warnings.append("manual_review_required")

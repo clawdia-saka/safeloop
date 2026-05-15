@@ -61,8 +61,10 @@ def test_missing_external_evidence_blocks_plan_and_requires_manual_review(tmp_pa
                 "kind": "message",
                 "target": "telegram:ops",
                 "action": "sent",
-                "exact_rollback": True,
+                "created_at": "2026-05-14T00:00:00+00:00",
+                "exact_rollback": False,
                 "compensation_capability": "verified",
+                "evidence": {"path": "", "quote_or_field": ""},
                 "status": "recorded",
             }
         )
@@ -74,13 +76,48 @@ def test_missing_external_evidence_blocks_plan_and_requires_manual_review(tmp_pa
 
     assert plan["status"] == "blocked"
     assert plan["exact_rollback"] is False
-    item = plan["items"][0]
-    assert item["external_effect_id"] == "ext-no-evidence"
-    assert item["exact_rollback"] is False
-    assert item["compensation"]["capability"] == "verified"
-    assert item["evidence"] == {}
-    assert {blocker["code"] for blocker in item["blockers"]} == {"missing_external_evidence"}
-    assert "manual_review_required" in " ".join(item["warnings"] + plan["warnings"])
+    assert plan["items"] == []
+    assert {blocker["code"] for blocker in plan["blockers"]} == {"invalid_external_effect_registry"}
+    assert "manual_review_required" in " ".join(plan["warnings"])
+
+
+def test_invalid_external_registry_exact_rollback_true_blocks_compensation_plan(tmp_path):
+    run_dir = _run_dir(tmp_path)
+    (run_dir / "external-effects.jsonl").write_text(
+        json.dumps(
+            {
+                "schema_version": "external-side-effect.v1",
+                "effect_id": "ext-overclaim",
+                "run_id": "run-ext",
+                "kind": "webhook",
+                "target": "https://example.test/hook/invalid",
+                "action": "sent",
+                "created_at": "2026-05-14T00:00:00+00:00",
+                "exact_rollback": True,
+                "compensation_capability": "manual",
+                "evidence": {"path": "logs/webhook.log", "quote_or_field": "delivery_id=bad"},
+                "status": "manual_review_required",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    plan = build_compensation_plan(run_dir)
+
+    assert plan["status"] == "blocked"
+    assert plan["source"] == "external-effects.jsonl"
+    assert plan["exact_rollback"] is False
+    assert plan["items"] == []
+    assert plan["warnings"] == ["manual_review_required: invalid external-effect registry blocks compensation planning"]
+    assert plan["blockers"] == [
+        {
+            "code": "invalid_external_effect_registry",
+            "message": "external-effects.jsonl line 1: exact_rollback must always be false for external side effects",
+        }
+    ]
+    written = json.loads((run_dir / "compensation-plan.json").read_text(encoding="utf-8"))
+    assert written == plan
 
 
 def test_compensate_cli_prefers_external_effect_registry_when_present(tmp_path):

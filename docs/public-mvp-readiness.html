@@ -45,7 +45,7 @@ release-tag=not-created</code></pre>
 <h2>Demo verifier presence</h2>
 <p>The public MVP demo boundary is local and verifier-backed. The packet requires these CLI verifier surfaces to exist:</p>
 <ul>
-<li><code>safeloop verify-artifacts &lt;run_dir&gt;</code> for local run artifact/hash-chain verification.</li>
+<li><code>safeloop verify-artifacts &lt;run_dir&gt;</code> for local run artifact/hash-chain verification. After an intentional local rollback apply, restored source files can differ from the original checkpoint packet; verification remains valid and records the note <code>rollback-restore-source-drift</code> so operators can distinguish expected rollback-restore drift from packet tamper.</li>
 <li><code>safeloop verify-anchor &lt;run_dir&gt;</code> for local anchor verification.</li>
 <li><code>safeloop audit-control-plane-anchors --db &lt;db&gt; --anchors &lt;anchors.jsonl&gt; --output-dir &lt;dir&gt;</code> for local control-plane anchor audit evidence.</li>
 </ul>

@@ -30,6 +30,8 @@ def test_public_readiness_doc_has_release_boundary_and_local_evidence_gate() -> 
         assert marker in text
 
     assert "safeloop verify-artifacts" in text
+    assert "rollback-restore-source-drift" in text
+    assert "expected rollback-restore drift from packet tamper" in text
     assert "safeloop verify-anchor" in text
     assert "safeloop audit-control-plane-anchors" in text
     assert "python scripts/public_readiness.py --check" in text

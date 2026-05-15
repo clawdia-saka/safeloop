@@ -178,6 +178,14 @@ def test_rollback_command_alias_writes_operator_plan_and_result_artifacts(tmp_pa
     assert rollback_result["schema_version"] == "rollback-result.v1"
     assert rollback_result["status"] == "applied"
     assert rollback_result["verification"]["status"] == "valid"
+
+    verify = run_cli("verify-artifacts", str(run_dir))
+    verify_payload = read_json(run_dir / "verification" / "verify-artifacts-result.json")
+    assert verify.returncode == 0, verify.stdout + verify.stderr
+    assert verify_payload["status"] == "valid"
+    assert not any("source-evidence-rewritten-after-packet" in issue for issue in verify_payload["issues"])
+    assert "rollback-restore-source-drift" in verify_payload["notes"]
+
     anchor = run_cli("verify-anchor", str(run_dir))
     assert anchor.returncode == 0, anchor.stdout
 

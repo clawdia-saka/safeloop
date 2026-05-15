@@ -679,6 +679,7 @@ def _verify_source_evidence(repo: Path, source_evidence: Any, issues: list[str],
 def verify_run(run_dir: Path, *, check_source_evidence: bool = True) -> dict[str, Any]:
     issues: list[str] = []
     warnings: list[str] = []
+    notes: list[str] = []
     prev = None
     checked: list[str] = []
     try:
@@ -751,7 +752,13 @@ def verify_run(run_dir: Path, *, check_source_evidence: bool = True) -> dict[str
             issues.append("run final hash mismatch")
         parent = None
         checkpoints = sorted((run_dir / "checkpoints").glob("cp-*")) if (run_dir / "checkpoints").exists() else []
-        check_current_source_digest = check_source_evidence and not any((cp / "undo-result.json").exists() for cp in checkpoints)
+        rollback_restore_applied = any(
+            (cp / "undo-result.json").exists() or (cp / "rollback-result.json").exists()
+            for cp in checkpoints
+        ) or (run_dir / "rollback-result.json").exists()
+        if rollback_restore_applied:
+            notes.append("rollback-restore-source-drift")
+        check_current_source_digest = check_source_evidence and not rollback_restore_applied
         for cp in checkpoints:
             cj = json.loads((cp / "checkpoint.json").read_text(encoding="utf-8"))
             if cj.get("parent_checkpoint_id") != parent:
@@ -808,7 +815,7 @@ def verify_run(run_dir: Path, *, check_source_evidence: bool = True) -> dict[str
     except Exception as exc:
         issues.append(f"verification error: {exc}")
     status = "invalid" if issues else ("warning" if warnings else "valid")
-    result = {"schema_version": "verify-artifacts-result.v1", "status": status, "issues": issues, "warnings": warnings, "checked_artifacts": checked, "latest_event_hash": prev, "verified_at": now(), "copy": "tamper-evident local artifacts"}
+    result = {"schema_version": "verify-artifacts-result.v1", "status": status, "issues": issues, "warnings": warnings, "notes": notes, "checked_artifacts": checked, "latest_event_hash": prev, "verified_at": now(), "copy": "tamper-evident local artifacts"}
     atomic_json(run_dir / "verification" / "verify-artifacts-result.json", result)
     return result
 

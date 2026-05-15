@@ -51,6 +51,7 @@ safeloop review "$RUN_DIR"
 safeloop explain "$RUN_DIR"
 safeloop rollback plan "$RUN_DIR" "$RUN_ID" --files note.txt
 safeloop rollback apply "$RUN_DIR" "$RUN_ID" --files note.txt
+safeloop verify-artifacts "$RUN_DIR"  # valid; notes intentional rollback-restore-source-drift, not packet tamper
 cat note.txt  # base
 ```
 

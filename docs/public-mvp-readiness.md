@@ -33,7 +33,7 @@ The gate checks this packet for required release-boundary language, verifies the
 
 The public MVP demo boundary is local and verifier-backed. The packet requires these CLI verifier surfaces to exist:
 
-- `safeloop verify-artifacts <run_dir>` for local run artifact/hash-chain verification.
+- `safeloop verify-artifacts <run_dir>` for local run artifact/hash-chain verification. After an intentional local rollback apply, restored source files can differ from the original checkpoint packet; verification remains valid and records the note `rollback-restore-source-drift` so operators can distinguish expected rollback-restore drift from packet tamper.
 - `safeloop verify-anchor <run_dir>` for local anchor verification.
 - `safeloop audit-control-plane-anchors --db <db> --anchors <anchors.jsonl> --output-dir <dir>` for local control-plane anchor audit evidence.
 

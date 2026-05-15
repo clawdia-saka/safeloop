@@ -27,7 +27,7 @@ demo-verifier=present
 release-tag=not-created
 ```
 
-The gate checks this packet for required release-boundary language, verifies the project version shape from `pyproject.toml`, confirms the local demo verifier commands are present, and rejects unqualified public overclaims.
+The gate checks this packet for required release-boundary language, verifies the project version shape from `pyproject.toml`, confirms the local demo verifier commands are present, confirms committed human-review HTML artifacts are synchronized from canonical Markdown, and rejects unqualified public overclaims.
 
 ## Demo verifier presence
 
@@ -63,6 +63,23 @@ Public material derived from this packet must keep these boundaries explicit:
 - Do not imply local JSON/JSONL artifacts are a remote transparency log, legal audit guarantee, or irreversible timestamping service.
 
 Internal planning documents may discuss future governance or stronger transparency designs, but public MVP readiness claims must remain limited to local evidence generation and verification.
+
+## HTML review artifacts
+
+Markdown remains canonical for public readiness, the state-machine schema, the rollback demo notes, and the rollback case-study artifact notes. SafeLoop also commits narrow, self-contained HTML renderings so reviewers can inspect those docs without a Markdown renderer:
+
+- `docs/public-mvp-readiness.html`
+- `docs/specs/state-machine-and-journal-schema.html`
+- `docs/rollback-demo.html`
+- `docs/case-studies/rollback-html-artifacts.html`
+
+Regenerate them with:
+
+```bash
+python -m safeloop.cli public-html-artifacts --root .
+```
+
+The HTML artifacts repeat the public claim boundaries: exact rollback is only for covered local file changes; external side effects are compensation/manual review; local artifacts are tamper-evident, not tamper-proof; and SafeLoop does not claim a remote transparency log unless one is implemented and configured.
 
 ## Public readiness checklist
 

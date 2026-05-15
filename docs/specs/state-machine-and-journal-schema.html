@@ -1,0 +1,449 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SafeLoop State Machine and Journal Schema</title>
+<style>
+body { font-family: system-ui, -apple-system, Segoe UI, sans-serif; margin: 2rem; color: #172033; background: #f7f8fb; }
+main { max-width: 1040px; margin: 0 auto; }
+.card, article { background: white; border: 1px solid #d8deea; border-radius: 12px; padding: 1rem 1.25rem; margin: 1rem 0; box-shadow: 0 1px 2px rgba(20,30,50,.04); }
+.badge { display: inline-block; background: #eaf2ff; color: #123e73; border-radius: 999px; padding: .2rem .55rem; font-size: .85rem; }
+pre { overflow-x: auto; background: #0f172a; color: #e2e8f0; padding: 1rem; border-radius: 8px; }
+code { background: #eef2f7; padding: .05rem .25rem; border-radius: 4px; }
+pre code { background: transparent; padding: 0; }
+.boundary { border-left: 5px solid #b7791f; }
+</style>
+</head>
+<body><main>
+<p class="badge">generated from canonical Markdown: /home/tt/.openclaw/workspace/safeloop-readiness-pr/docs/specs/state-machine-and-journal-schema.md</p>
+<section class="card boundary"><h2>Claim boundaries</h2><ul><li>Exact rollback is only claimed for covered local file changes.</li>
+<li>External side effects require compensation/manual review and are not exact rollback.</li>
+<li>External side-effect statuses such as best_effort or verified are review labels, not exact rollback guarantees.</li>
+<li>Local artifacts are tamper-evident review aids, not tamper-proof guarantees.</li>
+<li>SafeLoop does not claim a remote transparency log unless one is explicitly implemented and configured.</li></ul></section>
+<article>
+<h1>SafeLoop Canonical State Machine and Journal Schema</h1>
+<p>This document is the canonical reference for the SafeLoop state machine and persisted journal schema as they exist in the current codebase.</p>
+<p>Truth sources:</p>
+<ul>
+<li><code>src/safeloop/journal.py</code></li>
+<li><code>src/safeloop/runtime.py</code></li>
+<li><code>src/safeloop/api.py</code></li>
+<li><code>src/safeloop/storage.py</code></li>
+<li><code>tests/test_journal.py</code></li>
+<li><code>tests/test_runtime.py</code></li>
+<li><code>tests/test_api.py</code></li>
+</ul>
+<p>This spec is intentionally descriptive, not aspirational. If the code changes, this document should change with it.</p>
+<h2>1. Journal entry schema</h2>
+<p>SafeLoop persists one JSON object per line in a JSONL file.</p>
+<p>Current schema:</p>
+<pre><code>{
+  &quot;run_id&quot;: &quot;string&quot;,
+  &quot;action_id&quot;: &quot;string&quot;,
+  &quot;state&quot;: &quot;proposed|approved|executing|applied|compensating|compensated|compensation_failed|failed|resumable|handed_off&quot;,
+  &quot;reason&quot;: &quot;approval_error|approval_block|approval_completion_error|resume_approval_block|handoff_requested|execution_error|compensation_error|null&quot;,
+  &quot;error&quot;: &quot;string|null&quot;
+}</code></pre>
+<p>Viewer/API payloads add derived interpretation fields on top of those journal facts:</p>
+<ul>
+<li><code>scope</code>: <code>inside_mvp_scope|boundary_case</code></li>
+<li><code>boundaries</code>: list of short tags derived from <code>(state, reason)</code></li>
+<li><code>terminal_semantics</code>: a structured <code>TerminalSemantics</code> payload with <code>terminal_state</code>, <code>expected_terminal_state</code>, <code>boundary</code>, <code>scope_guess</code>, and <code>note</code></li>
+</ul>
+<p>These additive fields are <strong>not persisted</strong> in journal storage. They are computed in the API/viewer layer so the canonical journal schema stays small and runtime-owned.</p>
+<p>Field meanings:</p>
+<ul>
+<li><code>run_id</code>: stable run identity used to group entries in storage and API output.</li>
+<li><code>action_id</code>: the <code>ActionEnvelope.idempotency_key</code> bound to that run.</li>
+<li><code>state</code>: the lifecycle state appended for this step.</li>
+<li><code>reason</code>: optional machine-readable cause for states that need more context. Known current values are the <code>JournalReason</code> enum values, but storage/viewer reads now tolerate unknown legacy strings so older journals can still be inspected.</li>
+<li><code>error</code>: optional local diagnostic text, usually <code>str(exception)</code>.</li>
+</ul>
+<p>Notes:</p>
+<ul>
+<li><code>run_id</code>, <code>action_id</code>, and <code>state</code> are required by the <code>JournalEntry</code> model.</li>
+<li><code>reason</code> and <code>error</code> are optional and omitted from API output when <code>None</code>.</li>
+<li>storage validates every JSONL line by loading JSON and then validating it against <code>JournalEntry</code>.</li>
+<li>malformed or schema-invalid lines raise <code>JournalStorageError</code> during reads.</li>
+</ul>
+<h2>2. Canonical states</h2>
+<p><code>JournalState</code> currently defines exactly these values:</p>
+<ul>
+<li><code>proposed</code></li>
+<li><code>approved</code></li>
+<li><code>executing</code></li>
+<li><code>applied</code></li>
+<li><code>compensating</code></li>
+<li><code>compensated</code></li>
+<li><code>compensation_failed</code></li>
+<li><code>failed</code></li>
+<li><code>resumable</code></li>
+<li><code>handed_off</code></li>
+</ul>
+<h3>Non-terminal states</h3>
+<p>These states may transition to another state:</p>
+<ul>
+<li><code>proposed</code></li>
+<li><code>approved</code></li>
+<li><code>executing</code></li>
+<li><code>compensating</code></li>
+<li><code>resumable</code></li>
+</ul>
+<h3>Terminal states</h3>
+<p>These states are terminal in the current runtime and transition map:</p>
+<ul>
+<li><code>applied</code></li>
+<li><code>compensated</code></li>
+<li><code>compensation_failed</code></li>
+<li><code>failed</code></li>
+<li><code>handed_off</code></li>
+</ul>
+<p>Runtime behavior for terminal states:</p>
+<ul>
+<li>repeated <code>Runtime.run()</code> calls with the same <code>run_id</code> and same <code>action_id</code> return the latest journal entry unchanged</li>
+<li>the executor is not called again</li>
+<li>no new journal entries are appended</li>
+</ul>
+<h2>3. Allowed transitions</h2>
+<p>The transition graph enforced by <code>validate_transition()</code> is:</p>
+<ul>
+<li><code>proposed -&gt; approved</code></li>
+<li><code>proposed -&gt; failed</code></li>
+<li><code>approved -&gt; executing</code></li>
+<li><code>approved -&gt; handed_off</code></li>
+<li><code>executing -&gt; applied</code></li>
+<li><code>executing -&gt; compensating</code></li>
+<li><code>executing -&gt; failed</code></li>
+<li><code>executing -&gt; resumable</code></li>
+<li><code>compensating -&gt; compensated</code></li>
+<li><code>compensating -&gt; compensation_failed</code></li>
+<li><code>resumable -&gt; executing</code></li>
+<li><code>resumable -&gt; failed</code></li>
+</ul>
+<p>Everything else is invalid, including:</p>
+<ul>
+<li><code>executing -&gt; handed_off</code></li>
+<li>any transition out of <code>applied</code></li>
+<li>any transition out of <code>compensated</code></li>
+<li>any transition out of <code>compensation_failed</code></li>
+<li>any transition out of <code>failed</code></li>
+<li>any transition out of <code>handed_off</code></li>
+</ul>
+<h2>4. Runtime meaning of each state</h2>
+<h3><code>proposed</code></h3>
+<p>The runtime has accepted a new <code>run_id</code> and appended the first journal entry before approval or execution.</p>
+<h3><code>approved</code></h3>
+<p>The action has passed the runtime&#x27;s current approval path.</p>
+<p>Important caveat: read-only actions also pass through <code>approved</code>. The runtime bypasses approval hooks for <code>EffectClass.READ_ONLY</code>, but it still appends <code>approved</code> before execution.</p>
+<h3><code>executing</code></h3>
+<p>The runtime is about to call, or has just re-entered, the executor.</p>
+<p>This state is used for both first execution and resumed execution.</p>
+<h3><code>applied</code></h3>
+<p>The executor returned successfully. This is terminal.</p>
+<h3><code>compensating</code></h3>
+<p>The executor raised an exception for a <code>COMPENSATABLE_WRITE</code>, so the runtime recorded the execution failure and is attempting compensation.</p>
+<p>Current metadata expectation:</p>
+<ul>
+<li><code>reason=execution_error</code></li>
+<li><code>error</code> contains the original executor exception text</li>
+</ul>
+<h3><code>compensated</code></h3>
+<p>Compensation completed successfully after an execution failure. This is terminal.</p>
+<p>Compensation is not rollback: successful compensation does not prove perfect rollback. It means the configured compensation hook completed and the operator should still treat the result as mitigation rather than proof of perfect rollback.</p>
+<h3><code>compensation_failed</code></h3>
+<p>Compensation was attempted but the compensation hook raised its own error. This is terminal.</p>
+<p><code>compensation_failed</code> is not rollback. It means cleanup remains incomplete or uncertain after a compensation attempt, and viewers/API payloads must avoid wording that implies exact reversal.</p>
+<p>Current metadata expectation:</p>
+<ul>
+<li><code>reason=compensation_error</code></li>
+<li><code>error</code> contains the compensation hook exception text</li>
+</ul>
+<h4>Compensation failure operator semantics</h4>
+<p>A compensation failure preserves both failure causes in the ordered journal: the <code>compensating</code> entry preserves the original executor error, and the terminal <code>compensation_failed</code> entry preserves the compensation hook error. The runtime must not collapse these into a generic <code>failed</code> terminal state because operators need both facts to decide the next recovery step.</p>
+<p><code>compensation_failed</code> is terminal and idempotent. Repeated <code>Runtime.run()</code> calls with the same <code>run_id</code> and action return the existing terminal entry. Runtime rule: do not retry automatically from <code>compensation_failed</code>. Any subsequent cleanup is operator-owned recovery outside the automatic runtime path.</p>
+<h3><code>failed</code></h3>
+<p>The automatic runtime path terminated unsuccessfully without ending in successful compensation.</p>
+<p>Current code uses <code>failed</code> for four cases:</p>
+<ul>
+<li>approval hook raised: <code>reason=approval_error</code></li>
+<li>approval hook blocked execution before executor entry: <code>reason=approval_block</code></li>
+<li>approval completion failed after executor success: <code>reason=approval_completion_error</code></li>
+<li>resume approval failed after a live checkpoint: <code>reason=resume_approval_block</code></li>
+<li>executor raised for a non-compensatable path: <code>reason=execution_error</code></li>
+</ul>
+<p>This state is terminal.</p>
+<h3><code>resumable</code></h3>
+<p>Execution paused by raising <code>ResumableExecution(checkpoint)</code>. The runtime stores the checkpoint in the current runtime instance and records <code>resumable</code> in the journal.</p>
+<p>This state is non-terminal. A later <code>run()</code> with the same <code>run_id</code> and <code>action_id</code> may append <code>executing</code> and continue from the stored checkpoint.</p>
+<h3><code>handed_off</code></h3>
+<p>Approval completed with <code>ApprovalDecision.ESCALATE</code>, so the runtime stopped automatic execution before calling the executor. This is terminal.</p>
+<p><code>handed_off</code> marks an operator boundary: SafeLoop records that automation stopped pre-execution and an operator owns any next step outside this runtime invocation. It is not a resumable checkpoint, not a recoverable runtime pause, and not evidence that an external operator action occurred.</p>
+<p>Current metadata expectation:</p>
+<ul>
+<li><code>reason=handoff_requested</code></li>
+<li><code>error</code> omitted</li>
+</ul>
+<h2>5. Runtime path mapping</h2>
+<h3>Success path</h3>
+<p>Typical path:</p>
+<ul>
+<li><code>proposed -&gt; approved -&gt; executing -&gt; applied</code></li>
+</ul>
+<h3>Approval block</h3>
+<p>Path:</p>
+<ul>
+<li><code>proposed -&gt; failed</code></li>
+</ul>
+<p>Metadata:</p>
+<ul>
+<li><code>reason=approval_block</code></li>
+</ul>
+<p>The executor is not called.</p>
+<h3>Approval hook error</h3>
+<p>Path:</p>
+<ul>
+<li><code>proposed -&gt; failed</code></li>
+</ul>
+<p>Metadata:</p>
+<ul>
+<li><code>reason=approval_error</code></li>
+<li><code>error=str(exception)</code></li>
+</ul>
+<p>The executor is not called.</p>
+<h3>Handoff / escalation</h3>
+<p>Path:</p>
+<ul>
+<li><code>proposed -&gt; approved -&gt; handed_off</code></li>
+</ul>
+<p>Metadata:</p>
+<ul>
+<li><code>reason=handoff_requested</code></li>
+</ul>
+<p>The executor is not called and no checkpoint is created. Unlike an approval block (<code>proposed -&gt; failed</code>, <code>reason=approval_block</code>), escalation records approval as complete before the operator boundary. The runtime does not auto-run compensation for <code>handed_off</code> because no executor side effects have happened inside SafeLoop.</p>
+<h3>Non-compensatable execution failure</h3>
+<p>Path:</p>
+<ul>
+<li><code>proposed -&gt; approved -&gt; executing -&gt; failed</code></li>
+</ul>
+<p>Metadata:</p>
+<ul>
+<li><code>reason=execution_error</code></li>
+<li><code>error=str(exception)</code></li>
+</ul>
+<h3>Approval completion failure after executor success</h3>
+<p>Path:</p>
+<ul>
+<li><code>proposed -&gt; approved -&gt; executing -&gt; failed</code></li>
+</ul>
+<p>Metadata:</p>
+<ul>
+<li><code>reason=approval_completion_error</code></li>
+<li><code>error=str(exception)</code> from the lifecycle completion store</li>
+</ul>
+<p>The executor has already returned successfully, so viewer/API mappings treat this as a side-effects-possible boundary rather than a pre-execution block.</p>
+<h3>Resume approval block</h3>
+<p>Path:</p>
+<ul>
+<li><code>proposed -&gt; approved -&gt; executing -&gt; resumable -&gt; failed</code></li>
+</ul>
+<p>Metadata:</p>
+<ul>
+<li><code>reason=resume_approval_block</code></li>
+<li><code>error</code> contains the resume approval validation error, such as expiry</li>
+</ul>
+<p>The executor is not re-entered for the blocked resume attempt, the live checkpoint is cleared when the run becomes terminal, and API/viewer mappings keep this as side-effects-possible because execution had already reached a checkpoint before the failed resume.</p>
+<h3>Compensatable execution failure with successful compensation</h3>
+<p>Path:</p>
+<ul>
+<li><code>proposed -&gt; approved -&gt; executing -&gt; compensating -&gt; compensated</code></li>
+</ul>
+<h3>Compensatable execution failure with failed compensation</h3>
+<p>Path:</p>
+<ul>
+<li><code>proposed -&gt; approved -&gt; executing -&gt; compensating -&gt; compensation_failed</code></li>
+</ul>
+<h3>Resumable execution</h3>
+<p>First pause:</p>
+<ul>
+<li><code>proposed -&gt; approved -&gt; executing -&gt; resumable</code></li>
+</ul>
+<p>Resume attempt with live checkpoint:</p>
+<ul>
+<li><code>resumable -&gt; executing -&gt; ...</code></li>
+</ul>
+<p>A resumed run may become <code>resumable</code> again, so repeated shapes like this are valid and expected:</p>
+<ul>
+<li><code>proposed -&gt; approved -&gt; executing -&gt; resumable -&gt; executing -&gt; resumable -&gt; executing -&gt; applied</code></li>
+</ul>
+<h2>6. Run identity and idempotency semantics</h2>
+<p>The runtime binds a <code>run_id</code> to exactly one <code>action_id</code>.</p>
+<p>If a later <code>run()</code> call uses the same <code>run_id</code> but a different <code>ActionEnvelope.idempotency_key</code>, the runtime raises <code>ValueError</code> and does not append anything.</p>
+<p>If a later <code>run()</code> call uses the same <code>run_id</code> and same <code>action_id</code>:</p>
+<ul>
+<li>terminal runs are returned idempotently without re-execution</li>
+<li>resumable runs continue only when the current runtime instance still has the live checkpoint payload</li>
+</ul>
+<h2>7. API and viewer mapping</h2>
+<p><code>RunViewer</code> and the FastAPI app expose two shapes:</p>
+<h3>Run summary</h3>
+<p>Returned by <code>RunViewer.list_runs()</code> and <code>GET /runs</code>:</p>
+<pre><code>{
+  &quot;run_id&quot;: &quot;string&quot;,
+  &quot;action_id&quot;: &quot;string&quot;,
+  &quot;state&quot;: &quot;applied&quot;,
+  &quot;scope&quot;: &quot;inside_mvp_scope&quot;,
+  &quot;boundaries&quot;: [&quot;side_effects_possible&quot;, &quot;terminal&quot;],
+  &quot;terminal_semantics&quot;: {
+    &quot;terminal_state&quot;: &quot;applied&quot;,
+    &quot;expected_terminal_state&quot;: &quot;applied&quot;,
+    &quot;boundary&quot;: &quot;applied&quot;,
+    &quot;scope_guess&quot;: &quot;inside_mvp_scope&quot;,
+    &quot;note&quot;: &quot;Terminal success; side effects may already exist.&quot;
+  }
+}</code></pre>
+<p>This is the latest journal state per run plus the derived API/viewer interpretation fields for that latest state.</p>
+<h3>Run detail</h3>
+<p>Returned by <code>RunViewer.get_run()</code> and <code>GET /runs/{run_id}</code>:</p>
+<pre><code>{
+  &quot;run_id&quot;: &quot;string&quot;,
+  &quot;action_id&quot;: &quot;string&quot;,
+  &quot;state&quot;: &quot;applied&quot;,
+  &quot;scope&quot;: &quot;inside_mvp_scope&quot;,
+  &quot;boundaries&quot;: [&quot;side_effects_possible&quot;, &quot;terminal&quot;],
+  &quot;terminal_semantics&quot;: {
+    &quot;terminal_state&quot;: &quot;applied&quot;,
+    &quot;expected_terminal_state&quot;: &quot;applied&quot;,
+    &quot;boundary&quot;: &quot;applied&quot;,
+    &quot;scope_guess&quot;: &quot;inside_mvp_scope&quot;,
+    &quot;note&quot;: &quot;Terminal success; side effects may already exist.&quot;
+  },
+  &quot;has_checkpoint&quot;: true,
+  &quot;journal&quot;: [
+    {
+      &quot;run_id&quot;: &quot;string&quot;,
+      &quot;action_id&quot;: &quot;string&quot;,
+      &quot;state&quot;: &quot;applied&quot;,
+      &quot;scope&quot;: &quot;inside_mvp_scope&quot;,
+      &quot;boundaries&quot;: [&quot;side_effects_possible&quot;, &quot;terminal&quot;],
+      &quot;terminal_semantics&quot;: {
+        &quot;terminal_state&quot;: &quot;applied&quot;,
+        &quot;expected_terminal_state&quot;: &quot;applied&quot;,
+        &quot;boundary&quot;: &quot;applied&quot;,
+        &quot;scope_guess&quot;: &quot;inside_mvp_scope&quot;,
+        &quot;note&quot;: &quot;Terminal success; side effects may already exist.&quot;
+      }
+    }
+  ]
+}</code></pre>
+<p>Actual mapping rules:</p>
+<ul>
+<li><code>state</code> is always the latest journal state for the run.</li>
+<li><code>journal</code> is the full append-ordered history for that run.</li>
+<li><code>reason</code> and <code>error</code> appear on journal entries only when present.</li>
+<li><code>has_checkpoint</code> is <code>true</code> only when:</li>
+<p>- the latest state is <code>resumable</code>, and - the current <code>Runtime</code> instance still has an in-memory checkpoint for that run.</p>
+</ul>
+<h3><code>has_checkpoint</code> caveat</h3>
+<p><code>has_checkpoint</code> is not durable checkpoint persistence.</p>
+<p>If <code>RunViewer</code> is created from a storage path instead of the original live <code>Runtime</code>, it can read persisted journal history but cannot recover another process&#x27;s in-memory checkpoint payloads. In that mode:</p>
+<ul>
+<li>a run can still have latest state <code>resumable</code></li>
+<li><code>has_checkpoint</code> will be <code>false</code></li>
+</ul>
+<p>The runtime matches this caveat during execution: if the journal says <code>resumable</code> but the current runtime instance has no live checkpoint payload, <code>run()</code> returns the existing <code>resumable</code> entry unchanged and does not blindly call the executor with <code>checkpoint=None</code>.</p>
+<h2>8. Viewer/API-derived interpretation layer</h2>
+<p>In addition to canonical journal facts, <code>src/safeloop/api.py</code> derives three additive fields for viewer/API payloads:</p>
+<ul>
+<li><code>scope</code></li>
+<li><code>boundaries</code></li>
+<li><code>terminal_semantics</code></li>
+</ul>
+<p>Allowed <code>scope</code> values:</p>
+<ul>
+<li><code>inside_mvp_scope</code></li>
+<li><code>boundary_case</code></li>
+</ul>
+<p>Current derived mapping:</p>
+<ul>
+<li><code>proposed</code> -&gt; <code>inside_mvp_scope</code>, <code>[]</code></li>
+<li><code>approved</code> -&gt; <code>inside_mvp_scope</code>, <code>[]</code></li>
+<li><code>executing</code> -&gt; <code>boundary_case</code>, <code>[&quot;side_effects_possible&quot;]</code></li>
+<li><code>applied</code> -&gt; <code>inside_mvp_scope</code>, <code>[&quot;side_effects_possible&quot;, &quot;terminal&quot;]</code></li>
+<li><code>compensating</code> -&gt; <code>boundary_case</code>, <code>[&quot;cleanup_attempted&quot;, &quot;side_effects_possible&quot;]</code></li>
+<li><code>compensated</code> -&gt; <code>inside_mvp_scope</code>, <code>[&quot;cleanup_attempted&quot;, &quot;side_effects_possible&quot;, &quot;terminal&quot;]</code></li>
+<li><code>compensation_failed</code> -&gt; <code>boundary_case</code>, <code>[&quot;cleanup_attempted&quot;, &quot;cleanup_incomplete_or_uncertain&quot;, &quot;side_effects_possible&quot;, &quot;terminal&quot;]</code></li>
+<li><code>resumable</code> -&gt; <code>boundary_case</code>, <code>[&quot;checkpoint_recorded&quot;, &quot;side_effects_possible&quot;]</code></li>
+<li><code>handed_off</code> -&gt; <code>boundary_case</code>, <code>[&quot;pre_execution&quot;, &quot;operator_owned&quot;, &quot;terminal&quot;]</code></li>
+<li><code>failed(reason=approval_block)</code> -&gt; <code>inside_mvp_scope</code>, <code>[&quot;pre_execution&quot;, &quot;terminal&quot;]</code></li>
+<li><code>failed(reason=approval_error)</code> -&gt; <code>inside_mvp_scope</code>, <code>[&quot;pre_execution&quot;, &quot;terminal&quot;]</code></li>
+<li><code>failed(reason=resume_approval_block)</code> -&gt; <code>boundary_case</code>, <code>[&quot;checkpoint_recorded&quot;, &quot;side_effects_possible&quot;, &quot;terminal&quot;]</code></li>
+<li><code>failed(reason=approval_completion_error)</code> -&gt; <code>boundary_case</code>, <code>[&quot;side_effects_possible&quot;, &quot;terminal&quot;]</code></li>
+<li><code>failed(reason=execution_error)</code> -&gt; <code>boundary_case</code>, <code>[&quot;side_effects_possible&quot;, &quot;terminal&quot;]</code></li>
+<li><code>failed(reason=None|legacy unknown)</code> -&gt; <code>boundary_case</code>, <code>[&quot;terminal&quot;]</code></li>
+</ul>
+<p>Interpretation rules:</p>
+<ul>
+<li><code>state</code> and <code>reason</code> remain canonical runtime truth.</li>
+<li><code>scope</code>, <code>boundaries</code>, and <code>terminal_semantics</code> reduce first-pass reader over-interpretation; they do not replace the journal meaning.</li>
+<li><code>has_checkpoint</code> remains separate because it is a live-runtime hint, not part of persisted journal semantics.</li>
+<li><code>outside_strict_rollback_scope</code> remains docs-only in the current MVP; it is not emitted as an API enum.</li>
+</ul>
+<h3><code>terminal_semantics</code> payload</h3>
+<p><code>terminal_semantics</code> is emitted on every <code>Journal entry payload</code> returned by <code>RunViewer.get_run()</code> and <code>GET /runs/{run_id}/journal</code>. It uses the <code>TerminalSemantics</code> model:</p>
+<pre><code>{
+  &quot;terminal_state&quot;: &quot;applied&quot;,
+  &quot;expected_terminal_state&quot;: &quot;applied&quot;,
+  &quot;boundary&quot;: &quot;applied&quot;,
+  &quot;scope_guess&quot;: &quot;inside_mvp_scope&quot;,
+  &quot;note&quot;: &quot;Terminal success; side effects may already exist.&quot;
+}</code></pre>
+<p>Fields:</p>
+<ul>
+<li><code>terminal_state</code>: the actual <code>JournalState</code> on the entry.</li>
+<li><code>expected_terminal_state</code>: currently the same value as <code>terminal_state</code>; product-adapter scenarios may use separate oracle metadata outside the persisted journal to explain expected-vs-observed terminal differences.</li>
+<li><code>boundary</code>: a <code>TerminalBoundary</code> string that gives reader-safe context without rewriting the runtime state.</li>
+<li><code>scope_guess</code>: the same high-level <code>ScopeAnnotation</code> produced from the journal state and reason.</li>
+<li><code>note</code>: conservative operator wording for the boundary.</li>
+</ul>
+<p>Current <code>TerminalBoundary</code> values:</p>
+<ul>
+<li><code>proposed</code></li>
+<li><code>approved</code></li>
+<li><code>executor_boundary</code></li>
+<li><code>applied</code></li>
+<li><code>compensation_in_progress</code></li>
+<li><code>compensated</code></li>
+<li><code>compensation_failure</code></li>
+<li><code>checkpoint_resume</code></li>
+<li><code>operator_handoff</code></li>
+<li><code>approval_boundary</code></li>
+<li><code>execution_failure</code></li>
+<li><code>failed_unknown_boundary</code></li>
+</ul>
+<p>Important caveats:</p>
+<ul>
+<li><code>checkpoint_resume</code> means the journal recorded a resumable point, but storage-only viewers cannot resume from it unless a live runtime still owns the checkpoint payload.</li>
+<li><code>compensated</code> means mitigation completed; successful compensation does not prove perfect rollback.</li>
+<li><code>compensation_failure</code> means compensation was attempted but cleanup is incomplete or uncertain; <code>compensation_failed</code> is not rollback.</li>
+</ul>
+<h2>9. Storage behavior</h2>
+<p><code>LocalJournalStorage</code> appends one <code>JournalEntry.model_dump_json()</code> record per line.</p>
+<p>Read behavior:</p>
+<ul>
+<li>missing journal file returns an empty list</li>
+<li>blank lines are ignored</li>
+<li>entries are returned in file order</li>
+<li><code>list_run_ids()</code> preserves first-seen run order</li>
+<li><code>read(run_id)</code> filters the full file to entries matching that <code>run_id</code></li>
+</ul>
+<p>This means the journal file is an append-only local event log for all runs, while runtime and API views are per-run projections over that log.</p>
+<h2>Approval lifecycle store boundary</h2>
+<p>Runtime journal state remains separate from control-plane approval lifecycle state. For mutating actions, <code>Runtime.run(...)</code> accepts a lifecycle-capable store such as <code>SQLiteApprovalLifecycleStore</code>; lookup-only <code>ControlPlaneRegistry</code> instances are rejected for enforcement.</p>
+<p>The SQLite lifecycle store persists current approval state in the control-plane <code>approvals</code> table and appends transition facts to <code>approval_events</code>. Its approval statuses are <code>REQUESTED</code>, <code>APPROVED</code>, <code>IN_FLIGHT</code>, <code>REJECTED</code>, <code>EXECUTED</code>, <code>EXPIRED</code>, and <code>REVOKED</code>. Runtime first execution reserves an <code>APPROVED</code> approval as <code>IN_FLIGHT</code>; successful completion marks it <code>EXECUTED</code>; resume validation requires the persisted approval to still be <code>IN_FLIGHT</code>.</p>
+<h2>Rollback public readiness skeleton</h2>
+<p>The public readiness skeleton for SafeLoop 0.1.4 demonstrates the local rollback workflow end to end: watch a long-running local task, review and explain rollback groups, plan/apply rollback to start, plan/apply selected files, plan/apply selected hunks, and run <code>policy-check</code>. The scripted demo is <code>examples/rollback_selective_demo.sh</code>.</p>
+<p>Boundary language for public docs: exact rollback is only claimed for covered local file changes. External side effects require compensation or manual review and are not exact rollback. Local artifacts are tamper-evident review aids, not tamper-proof guarantees. SafeLoop does not claim a remote transparency log unless one is explicitly implemented and configured.</p>
+</article>
+</main></body></html>

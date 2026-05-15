@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SafeLoop Public MVP Readiness Packet</title>
+<style>
+body { font-family: system-ui, -apple-system, Segoe UI, sans-serif; margin: 2rem; color: #172033; background: #f7f8fb; }
+main { max-width: 1040px; margin: 0 auto; }
+.card, article { background: white; border: 1px solid #d8deea; border-radius: 12px; padding: 1rem 1.25rem; margin: 1rem 0; box-shadow: 0 1px 2px rgba(20,30,50,.04); }
+.badge { display: inline-block; background: #eaf2ff; color: #123e73; border-radius: 999px; padding: .2rem .55rem; font-size: .85rem; }
+pre { overflow-x: auto; background: #0f172a; color: #e2e8f0; padding: 1rem; border-radius: 8px; }
+code { background: #eef2f7; padding: .05rem .25rem; border-radius: 4px; }
+pre code { background: transparent; padding: 0; }
+.boundary { border-left: 5px solid #b7791f; }
+</style>
+</head>
+<body><main>
+<p class="badge">generated from canonical Markdown: /home/tt/.openclaw/workspace/safeloop-readiness-pr/docs/public-mvp-readiness.md</p>
+<section class="card boundary"><h2>Claim boundaries</h2><ul><li>Exact rollback is only claimed for covered local file changes.</li>
+<li>External side effects require compensation/manual review and are not exact rollback.</li>
+<li>External side-effect statuses such as best_effort or verified are review labels, not exact rollback guarantees.</li>
+<li>Local artifacts are tamper-evident review aids, not tamper-proof guarantees.</li>
+<li>SafeLoop does not claim a remote transparency log unless one is explicitly implemented and configured.</li></ul></section>
+<article>
+<h1>SafeLoop Public MVP Readiness Packet</h1>
+<p>This packet is a public MVP readiness review aid for SafeLoop 0.1.4. It is a docs plus local evidence gate: it can be checked on a local checkout, but it does not publish, sign, or tag a release.</p>
+<h2>Release boundary</h2>
+<ul>
+<li>Scope: SafeLoop public MVP readiness for the current source tree and <code>pyproject.toml</code> version.</li>
+<li>Status: review packet only; this is not a release tag and does not create a Git tag, package upload, hosted service, or deployment approval.</li>
+<li>Public claim: SafeLoop provides a local tamper-evident review aid for agent run artifacts and control-plane audit evidence.</li>
+<li>Boundary: local artifacts can help reviewers detect changes; they are not tamper-proof, not production governance, and not a time-machine.</li>
+</ul>
+<h2>Local evidence gate</h2>
+<p>Run the local gate before treating this packet as ready for public MVP review:</p>
+<pre><code>python scripts/public_readiness.py --check
+pytest -q tests/test_public_mvp_readiness_packet.py</code></pre>
+<p>Expected gate output includes:</p>
+<pre><code>public-readiness: ok
+version=0.1.4
+demo-verifier=present
+release-tag=not-created</code></pre>
+<p>The gate checks this packet for required release-boundary language, verifies the project version shape from <code>pyproject.toml</code>, confirms the local demo verifier commands are present, confirms committed human-review HTML artifacts are synchronized from canonical Markdown, and rejects unqualified public overclaims.</p>
+<h2>Demo verifier presence</h2>
+<p>The public MVP demo boundary is local and verifier-backed. The packet requires these CLI verifier surfaces to exist:</p>
+<ul>
+<li><code>safeloop verify-artifacts &lt;run_dir&gt;</code> for local run artifact/hash-chain verification.</li>
+<li><code>safeloop verify-anchor &lt;run_dir&gt;</code> for local anchor verification.</li>
+<li><code>safeloop audit-control-plane-anchors --db &lt;db&gt; --anchors &lt;anchors.jsonl&gt; --output-dir &lt;dir&gt;</code> for local control-plane anchor audit evidence.</li>
+</ul>
+<p>These commands support review and demos. They do not assert remote transparency, immutable timestamping, or hosted governance.</p>
+<h2>Version and build gates</h2>
+<ul>
+<li>Version source: <code>pyproject.toml</code> (<code>project.version</code>).</li>
+<li>Current reviewed version: <code>0.1.4</code>.</li>
+<li>Build readiness boundary: this packet checks local metadata and verifier presence. A separate maintainer release flow may build distributions, sign artifacts, upload packages, or create tags.</li>
+<li>Local optional build command for maintainers:</li>
+</ul>
+<pre><code>python -m build</code></pre>
+<p>Do not treat a passing packet check as a package publication or release certification.</p>
+<h2>Claim boundary / banned public overclaims</h2>
+<p>Public material derived from this packet must keep these boundaries explicit:</p>
+<ul>
+<li>Say: &quot;tamper-evident local artifacts&quot; or &quot;tamper-evident review aid&quot;.</li>
+<li>SafeLoop is not tamper-proof.</li>
+<li>SafeLoop is not production governance.</li>
+<li>SafeLoop is not a time-machine.</li>
+<li>Do not imply local JSON/JSONL artifacts are a remote transparency log, legal audit guarantee, or irreversible timestamping service.</li>
+</ul>
+<p>Internal planning documents may discuss future governance or stronger transparency designs, but public MVP readiness claims must remain limited to local evidence generation and verification.</p>
+<h2>HTML review artifacts</h2>
+<p>Markdown remains canonical for public readiness, the state-machine schema, the rollback demo notes, and the rollback case-study artifact notes. SafeLoop also commits narrow, self-contained HTML renderings so reviewers can inspect those docs without a Markdown renderer:</p>
+<ul>
+<li><code>docs/public-mvp-readiness.html</code></li>
+<li><code>docs/specs/state-machine-and-journal-schema.html</code></li>
+<li><code>docs/rollback-demo.html</code></li>
+<li><code>docs/case-studies/rollback-html-artifacts.html</code></li>
+</ul>
+<p>Regenerate them with:</p>
+<pre><code>python -m safeloop.cli public-html-artifacts --root .</code></pre>
+<p>The HTML artifacts repeat the public claim boundaries: exact rollback is only for covered local file changes; external side effects are compensation/manual review; local artifacts are tamper-evident, not tamper-proof; and SafeLoop does not claim a remote transparency log unless one is implemented and configured.</p>
+<h2>Public readiness checklist</h2>
+<ul>
+<li>[x] Readiness packet exists and is locally checkable.</li>
+<li>[x] Local verifier surfaces are documented.</li>
+<li>[x] Version metadata source is documented.</li>
+<li>[x] Release tagging and publication are explicitly out of scope.</li>
+<li>[x] Public overclaim bans are documented and test-covered.</li>
+</ul>
+<h2>Rollback public readiness skeleton</h2>
+<p>The public readiness skeleton for SafeLoop 0.1.4 demonstrates the local rollback workflow end to end: watch a long-running local task, review and explain rollback groups, plan/apply rollback to start, plan/apply selected files, plan/apply selected hunks, and run <code>policy-check</code>. The scripted demo is <code>examples/rollback_selective_demo.sh</code>.</p>
+<p>Boundary language for public docs: exact rollback is only claimed for covered local file changes. External side effects require compensation or manual review and are not exact rollback. Local artifacts are tamper-evident review aids, not tamper-proof guarantees. SafeLoop does not claim a remote transparency log unless one is explicitly implemented and configured.</p>
+</article>
+</main></body></html>

@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PR Review Explainer — Human Review View</title>
+  <style>
+    :root { color-scheme: light dark; --accent:#2563eb; --muted:#64748b; --border:#cbd5e1; }
+    body { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif; line-height:1.55; margin:0; background:#f8fafc; color:#0f172a; }
+    main { max-width: 980px; margin: 0 auto; padding: 2rem; background:white; min-height:100vh; }
+    header { border-bottom: 2px solid var(--border); margin-bottom: 1.5rem; padding-bottom: 1rem; }
+    h1, h2 { line-height:1.2; } h2 { margin-top:2rem; border-left:4px solid var(--accent); padding-left:.75rem; }
+    .note, .canonical { background:#eff6ff; border:1px solid #bfdbfe; padding:1rem; border-radius:.75rem; }
+    .grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap:1rem; }
+    .card { border:1px solid var(--border); border-radius:.75rem; padding:1rem; background:#fff; }
+    table { width:100%; border-collapse: collapse; margin:1rem 0; } th, td { border:1px solid var(--border); padding:.65rem; vertical-align:top; } th { background:#f1f5f9; text-align:left; }
+    code { background:#e2e8f0; padding:.1rem .25rem; border-radius:.25rem; }
+    @media (prefers-color-scheme: dark) { body { background:#020617; color:#e2e8f0; } main,.card { background:#0f172a; } th { background:#1e293b; } code { background:#334155; } .note,.canonical { background:#172554; border-color:#1d4ed8; } }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <p class="canonical"><strong>Canonical source:</strong> keep Markdown/JSON review records authoritative. This HTML is a human-review explainer view for reviewers and non-technical stakeholders.</p>
+    <h1>PR Review Explainer</h1>
+    <p>Use this artifact to explain what changed, how it was reviewed, and where reviewers should focus before merge.</p>
+  </header>
+
+  <section class="grid" aria-label="PR summary fields">
+    <div class="card"><strong>PR / Branch</strong><br><span data-field="pr">TBD</span></div>
+    <div class="card"><strong>Risk Level</strong><br><span data-field="risk">low / medium / high</span></div>
+    <div class="card"><strong>Decision</strong><br><span data-field="decision">approve / request changes / hold</span></div>
+  </section>
+
+  <h2>1. Plain-language change summary</h2>
+  <p>Describe the user-visible intent, the smallest meaningful diff boundary, and why this PR exists now.</p>
+
+  <h2>2. Review map</h2>
+  <table>
+    <thead><tr><th>Area</th><th>Reviewer question</th><th>Evidence to inspect</th></tr></thead>
+    <tbody>
+      <tr><td>Correctness</td><td>Does behavior match the requested outcome?</td><td>Targeted tests, examples, acceptance notes</td></tr>
+      <tr><td>Boundaries</td><td>Are canonical Markdown/JSON files still the source of truth?</td><td>Docs, generation path, no hidden state in HTML</td></tr>
+      <tr><td>Safety</td><td>Could this trigger unintended side effects?</td><td>CLI/API surface, file writes, network calls</td></tr>
+      <tr><td>Maintainability</td><td>Is the addition narrow and easy to update?</td><td>Template structure, labels, comments</td></tr>
+    </tbody>
+  </table>
+
+  <h2>3. Independent review checklist</h2>
+  <ul>
+    <li>Re-read the diff without relying on the author summary.</li>
+    <li>Verify all external-facing claims against tests, docs, or generated artifacts.</li>
+    <li>Confirm HTML is static and does not become a second canonical data store.</li>
+    <li>Check accessibility basics: title, language, headings, table headers, readable contrast.</li>
+    <li>Record verdict and any residual risks in the PR body.</li>
+  </ul>
+
+  <h2>4. Merge notes</h2>
+  <p>Merge only after tests pass, the PR body includes scope/risk notes, and out-of-scope items are explicitly deferred.</p>
+</main>
+</body>
+</html>

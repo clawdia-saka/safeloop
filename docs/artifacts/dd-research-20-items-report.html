@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DD / Research 20項目 Report — Human Review View</title>
+  <style>
+    :root { color-scheme: light dark; --accent:#7c3aed; --border:#d8b4fe; --muted:#6b7280; }
+    body { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif; line-height:1.55; margin:0; background:#faf5ff; color:#111827; }
+    main { max-width:1100px; margin:auto; padding:2rem; background:white; min-height:100vh; }
+    header { border-bottom:2px solid var(--border); padding-bottom:1rem; margin-bottom:1.5rem; }
+    h1,h2 { line-height:1.2; } h2 { margin-top:2rem; border-left:4px solid var(--accent); padding-left:.75rem; }
+    .canonical { background:#f5f3ff; border:1px solid var(--border); padding:1rem; border-radius:.75rem; }
+    .meta { display:grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap:1rem; }
+    .box { border:1px solid var(--border); border-radius:.75rem; padding:1rem; }
+    ol.report-items { columns: 2 320px; padding-left:1.4rem; }
+    ol.report-items li { break-inside: avoid; margin:0 0 .75rem; padding-left:.25rem; }
+    table { width:100%; border-collapse:collapse; } th,td { border:1px solid var(--border); padding:.6rem; vertical-align:top; } th { background:#f3e8ff; text-align:left; }
+    @media (prefers-color-scheme: dark) { body { background:#1e102f; color:#ede9fe; } main,.box { background:#111827; } th,.canonical { background:#2e1065; } }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <p class="canonical"><strong>Canonical source:</strong> Markdown / JSON の調査記録を正本とし、このHTMLは人間レビュー用ビューとして扱う。</p>
+    <h1>DD / Research 20項目 Report</h1>
+    <p>投資・提携・導入判断のための20項目デューデリジェンス / リサーチ確認テンプレート。</p>
+  </header>
+
+  <section class="meta" aria-label="report metadata">
+    <div class="box"><strong>対象 / Subject</strong><br><span data-field="subject">TBD</span></div>
+    <div class="box"><strong>調査日 / Date</strong><br><span data-field="date">YYYY-MM-DD</span></div>
+    <div class="box"><strong>判定 / Verdict</strong><br><span data-field="verdict">go / no-go / watch</span></div>
+    <div class="box"><strong>信頼度 / Confidence</strong><br><span data-field="confidence">low / medium / high</span></div>
+  </section>
+
+  <h2>Executive summary</h2>
+  <p>主要結論、根拠、未確認リスク、次アクションを3〜5文で要約する。</p>
+
+  <h2>20項目チェックリスト</h2>
+  <ol class="report-items">
+    <li>対象概要: 何を評価するか</li>
+    <li>問題設定: 解決する課題の明確さ</li>
+    <li>市場 / ユーザー: 規模・痛み・利用頻度</li>
+    <li>プロダクト: 機能、成熟度、差別化</li>
+    <li>技術アーキテクチャ: 実装妥当性と依存</li>
+    <li>データ / ソース: 入手元、鮮度、検証性</li>
+    <li>チーム / 実行力: 経歴、速度、継続性</li>
+    <li>トラクション: 利用・売上・コミュニティ</li>
+    <li>競合: 代替手段と優位性</li>
+    <li>ビジネスモデル: 収益化と単価</li>
+    <li>財務 / 資金: ランウェイ、調達、コスト</li>
+    <li>法務 / 規制: 管轄、ライセンス、制約</li>
+    <li>セキュリティ: 脅威、監査、インシデント</li>
+    <li>運用リスク: SLA、障害対応、権限管理</li>
+    <li>ガバナンス: 意思決定と透明性</li>
+    <li>パートナー / エコシステム: 依存と強み</li>
+    <li>ロードマップ: 実現可能性とマイルストーン</li>
+    <li>レッドフラグ: 矛盾、未証明、過大主張</li>
+    <li>アップサイド: 成功シナリオと触媒</li>
+    <li>結論 / Next steps: 判断、条件、追加検証</li>
+  </ol>
+
+  <h2>Evidence matrix</h2>
+  <table>
+    <thead><tr><th>Claim</th><th>Evidence / Source</th><th>Status</th><th>Notes</th></tr></thead>
+    <tbody>
+      <tr><td>重要主張</td><td>URL / 文書 / データ</td><td>verified / partial / unverified</td><td>検証メモ</td></tr>
+    </tbody>
+  </table>
+
+  <h2>Independent verification</h2>
+  <ul>
+    <li>正本Markdown/JSONとHTMLの項目数・順序が一致していることを確認。</li>
+    <li>少なくとも重要な3主張は一次情報または複数ソースで検証。</li>
+    <li>未確認事項は「推測」ではなく明示的な未検証リスクとして記録。</li>
+  </ul>
+</main>
+</body>
+</html>

@@ -9,6 +9,10 @@ import tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "src"))
+
+from safeloop.html_artifacts import PUBLIC_HTML_ARTIFACTS, render_markdown_file_html
+
 DOC = ROOT / "docs" / "public-mvp-readiness.md"
 PYPROJECT = ROOT / "pyproject.toml"
 CLI = ROOT / "src" / "safeloop" / "cli.py"
@@ -43,6 +47,24 @@ BANNED_PUBLIC_OVERCLAIMS = [
 def project_version() -> str:
     data = tomllib.loads(PYPROJECT.read_text(encoding="utf-8"))
     return str(data["project"]["version"])
+
+
+def check_public_html_artifacts() -> list[str]:
+    failures: list[str] = []
+    for src_rel, dst_rel, title in PUBLIC_HTML_ARTIFACTS:
+        src = ROOT / src_rel
+        dst = ROOT / dst_rel
+        if not src.exists():
+            failures.append(f"missing HTML artifact source: {src_rel}")
+            continue
+        expected = render_markdown_file_html(src, title=title)
+        if not dst.exists():
+            failures.append(f"missing HTML artifact: {dst_rel}")
+            continue
+        actual = dst.read_text(encoding="utf-8")
+        if actual != expected:
+            failures.append(f"stale HTML artifact: {dst_rel}")
+    return failures
 
 
 def check() -> tuple[int, list[str]]:
@@ -94,6 +116,9 @@ def check() -> tuple[int, list[str]]:
         if "compens" in cli_text and "compens" not in demo_text:
             failures.append("compensation CLI appears present but demo lacks compensation/manual-review hook")
 
+    html_artifact_failures = check_public_html_artifacts()
+    failures.extend(html_artifact_failures)
+
     version = project_version()
     if not re.fullmatch(r"\d+\.\d+\.\d+", version):
         failures.append(f"project version is not semver x.y.z: {version}")
@@ -103,6 +128,7 @@ def check() -> tuple[int, list[str]]:
     messages.append("readiness-cli=present" if not missing_commands else "readiness-cli=missing")
     messages.append("demo-script=present" if DEMO.exists() else "demo-script=missing")
     messages.append("demo-verifier-help=ok" if not cli_help_failures else "demo-verifier-help=failed")
+    messages.append("html-artifacts=synced" if not html_artifact_failures else "html-artifacts=out-of-sync")
     messages.append("release-tag=not-created")
     messages.append("build-gate=pyproject-present")
 

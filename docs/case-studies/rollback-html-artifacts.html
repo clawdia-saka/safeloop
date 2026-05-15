@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SafeLoop Rollback Case Study HTML Artifacts</title>
+<style>
+body { font-family: system-ui, -apple-system, Segoe UI, sans-serif; margin: 2rem; color: #172033; background: #f7f8fb; }
+main { max-width: 1040px; margin: 0 auto; }
+.card, article { background: white; border: 1px solid #d8deea; border-radius: 12px; padding: 1rem 1.25rem; margin: 1rem 0; box-shadow: 0 1px 2px rgba(20,30,50,.04); }
+.badge { display: inline-block; background: #eaf2ff; color: #123e73; border-radius: 999px; padding: .2rem .55rem; font-size: .85rem; }
+pre { overflow-x: auto; background: #0f172a; color: #e2e8f0; padding: 1rem; border-radius: 8px; }
+code { background: #eef2f7; padding: .05rem .25rem; border-radius: 4px; }
+pre code { background: transparent; padding: 0; }
+.boundary { border-left: 5px solid #b7791f; }
+</style>
+</head>
+<body><main>
+<p class="badge">generated from canonical Markdown: /home/tt/.openclaw/workspace/safeloop-readiness-pr/docs/html-readiness-artifacts.md</p>
+<section class="card boundary"><h2>Claim boundaries</h2><ul><li>Exact rollback is only claimed for covered local file changes.</li>
+<li>External side effects require compensation/manual review and are not exact rollback.</li>
+<li>External side-effect statuses such as best_effort or verified are review labels, not exact rollback guarantees.</li>
+<li>Local artifacts are tamper-evident review aids, not tamper-proof guarantees.</li>
+<li>SafeLoop does not claim a remote transparency log unless one is explicitly implemented and configured.</li></ul></section>
+<article>
+<h1>SafeLoop HTML readiness demo artifact</h1>
+<p>SafeLoop can render a self-contained local HTML report from an existing run directory:</p>
+<pre><code>safeloop html-report &lt;run_dir&gt;
+# writes &lt;run_dir&gt;/safeloop-readiness-report.html</code></pre>
+<p>The HTML embeds local JSON artifact snapshots available at render time, including run metadata, review summaries, rollback plans/results, policy suggestions, local anchors, and selected checkpoint artifacts. It does not load external network resources.</p>
+<p>Boundary language for demos and public readiness:</p>
+<ul>
+<li>Exact rollback is only claimed for covered local file changes.</li>
+<li>External side effects require compensation/manual review and are not exact rollback.</li>
+<li>External side-effect statuses such as <code>best_effort</code> or <code>verified</code> are review labels, not exact rollback guarantees.</li>
+<li>Local artifacts are tamper-evident review aids, not tamper-proof guarantees.</li>
+<li>SafeLoop does not claim a remote transparency log unless one is explicitly implemented and configured.</li>
+</ul>
+</article>
+</main></body></html>

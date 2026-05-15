@@ -1,6 +1,14 @@
 # SafeLoop
 
-**SafeLoop 0.2.0 is prepared as a release candidate in this branch; publish/tag is a separate manual release step.**
+**SafeLoop v0.2.1 candidate readiness is complete. Release decision is pending explicit TT approval. No tag, GitHub Release, or PyPI publish should happen yet.**
+
+Current release posture:
+
+- release action: HOLD
+- PR #129 is a docs/test-only release notes candidate
+- No runtime behavior change
+- No rollback/compensation semantics change
+- No tag, GitHub Release, or PyPI publish until explicit TT approval
 
 SafeLoop is a non-blocking watchdog and reversible local timeline for long-running AI agents.
 

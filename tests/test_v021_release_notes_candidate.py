@@ -2,11 +2,17 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 DOC = ROOT / "docs" / "release-notes-0.2.1-candidate.md"
+README = ROOT / "README.md"
 
 
 def _doc_text() -> str:
+    assert DOC.exists()
     return DOC.read_text(encoding="utf-8")
 
+
+def _readme() -> str:
+    assert README.exists()
+    return README.read_text(encoding="utf-8")
 
 def test_v021_release_notes_candidate_file_exists() -> None:
     assert DOC.exists()
@@ -60,3 +66,15 @@ def test_v021_release_notes_candidate_no_publish_commands() -> None:
     ]
     for phrase in forbidden:
         assert phrase not in text
+
+
+def test_readme_declares_v021_candidate_hold_state() -> None:
+    text = _readme()
+
+    assert "SafeLoop v0.2.1 candidate readiness is complete." in text
+    assert "Release decision is pending explicit TT approval." in text
+    assert "No tag, GitHub Release, or PyPI publish should happen yet." in text
+    assert "release action: HOLD" in text
+    assert "docs/test-only release notes candidate" in text
+    assert "No runtime behavior change" in text
+    assert "No rollback/compensation semantics change" in text

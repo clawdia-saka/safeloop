@@ -36,6 +36,7 @@ from safeloop.external_effects import ExternalEffectValidationError, record_exte
 from safeloop.html_artifacts import write_docs_packet_html, write_markdown_doc_html, write_readiness_html
 from safeloop.local_anchor import create_local_anchor, verify_local_anchor
 from safeloop.operator_packet import write_operator_packet_v2
+from safeloop.operator_packet_manifest import verify_operator_packet_manifest, write_operator_packet_manifest
 from safeloop.policy_check import PolicyCheckError, build_policy_rollback_suggestion, run_policy_check
 from safeloop.rollback_groups import build_rollback_groups, print_rollback_groups
 from safeloop.side_effect_ledger import read_side_effect_events
@@ -665,6 +666,10 @@ def main(argv: list[str] | None = None) -> int:
     op.add_argument("--output", help="Output path; defaults to RUN_DIR/operator-packet-v2.md")
     op.add_argument("--external-evidence", action="append", default=[], help="Path or reference for outside-action evidence. Can be repeated.")
     op.add_argument("--compensation-adapter", default="manual", help="Compensation adapter label for external evidence rows.")
+    op.add_argument("--write-manifest", action="store_true", help="Write RUN_DIR/operator-packet-manifest.json alongside the packet.")
+    op_verify = sub.add_parser("operator-packet-verify", help="Verify an operator packet manifest against local packet/source artifact hashes.")
+    op_verify.add_argument("run_dir")
+    op_verify.add_argument("--manifest", help="Manifest path; defaults to RUN_DIR/operator-packet-manifest.json")
     hr = sub.add_parser("html-report")
     hr.add_argument("run_dir")
     hr.add_argument("--output", help="HTML output path; defaults to <run_dir>/safeloop-readiness-report.html")
@@ -882,8 +887,28 @@ def main(argv: list[str] | None = None) -> int:
         if marker in packet:
             next_action = packet.split(marker, 1)[1].splitlines()[0].strip() or "unknown"
         print(f"Operator packet v2 written: {out}")
+        if args.write_manifest:
+            manifest = write_operator_packet_manifest(run_dir, out)
+            print(f"Operator packet manifest written: {run_dir / 'operator-packet-manifest.json'}")
+            print(f"manifest status: {manifest['verification']['status']}")
         print(f"recommended next action: {next_action}")
         return 0
+    if args.cmd == "operator-packet-verify":
+        run_dir = Path(args.run_dir)
+        try:
+            result = verify_operator_packet_manifest(
+                run_dir,
+                manifest_path=Path(args.manifest) if args.manifest else None,
+            )
+        except (FileNotFoundError, json.JSONDecodeError) as exc:
+            print(f"operator-packet verification: invalid", file=sys.stderr)
+            print(str(exc), file=sys.stderr)
+            return 2
+        verification = result["verification"]
+        print(f"operator-packet verification: {verification['status']}")
+        for issue in verification.get("issues", []):
+            print(f"issue: {issue}")
+        return 0 if verification["status"] == "valid" else 1
     if args.cmd == "html-report":
         output = write_readiness_html(Path(args.run_dir), Path(args.output) if args.output else None)
         print(f"SafeLoop HTML readiness report: {output}")

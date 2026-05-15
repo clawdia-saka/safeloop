@@ -36,7 +36,11 @@ from safeloop.external_effects import ExternalEffectValidationError, record_exte
 from safeloop.html_artifacts import write_docs_packet_html, write_markdown_doc_html, write_readiness_html
 from safeloop.local_anchor import create_local_anchor, verify_local_anchor
 from safeloop.operator_packet import write_operator_packet_v2
-from safeloop.operator_packet_manifest import verify_operator_packet_manifest, write_operator_packet_manifest
+from safeloop.operator_packet_manifest import (
+    validate_operator_packet_manifest_packet_path,
+    verify_operator_packet_manifest,
+    write_operator_packet_manifest,
+)
 from safeloop.policy_check import PolicyCheckError, build_policy_rollback_suggestion, run_policy_check
 from safeloop.rollback_groups import build_rollback_groups, print_rollback_groups
 from safeloop.side_effect_ledger import read_side_effect_events
@@ -875,6 +879,12 @@ def main(argv: list[str] | None = None) -> int:
             print(f"missing run.json in run directory: {run_dir}", file=sys.stderr)
             return 2
         output = Path(args.output) if args.output else run_dir / "operator-packet-v2.md"
+        if args.write_manifest:
+            try:
+                validate_operator_packet_manifest_packet_path(run_dir, output)
+            except ValueError as exc:
+                print(str(exc), file=sys.stderr)
+                return 2
         out = write_operator_packet_v2(
             run_dir,
             output_path=output,

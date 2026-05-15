@@ -49,6 +49,43 @@ def _relative_to_run(run_path: Path, path: Path) -> str:
         return str(path)
 
 
+def _safe_run_relative_path(rel_path: str) -> str:
+    rel = rel_path.replace("\\", "/")
+    parts = Path(rel).parts
+    if Path(rel).is_absolute() or rel in {"", "."} or ".." in parts:
+        raise ValueError(f"artifact path must stay under run directory: {rel_path}")
+    return rel
+
+
+def _safe_run_file(run_path: Path, rel_path: str) -> Path:
+    rel = _safe_run_relative_path(rel_path)
+    base = run_path.resolve()
+    candidate = run_path / rel
+    current = run_path
+    for part in Path(rel).parts:
+        current = current / part
+        if current.is_symlink():
+            raise ValueError(f"artifact path must not contain symlinks: {rel_path}")
+    resolved = candidate.resolve(strict=False)
+    try:
+        resolved.relative_to(base)
+    except ValueError as exc:
+        raise ValueError(f"artifact path must stay under run directory: {rel_path}") from exc
+    if candidate.exists() and not candidate.is_file():
+        raise ValueError(f"artifact path must be a regular file: {rel_path}")
+    return candidate
+
+
+def _safe_sha256_run_file(run_path: Path, rel_path: str) -> str | None:
+    return _sha256_file(_safe_run_file(run_path, rel_path))
+
+
+def validate_operator_packet_manifest_packet_path(run_dir: str | Path, packet_path: str | Path) -> None:
+    run_path = Path(run_dir)
+    packet = Path(packet_path)
+    _safe_run_file(run_path, _relative_to_run(run_path, packet))
+
+
 def _load_run_id(run_path: Path) -> str | None:
     try:
         data = json.loads((run_path / "run.json").read_text(encoding="utf-8"))
@@ -59,8 +96,7 @@ def _load_run_id(run_path: Path) -> str | None:
 
 
 def _source_artifact_entry(run_path: Path, rel_path: str, required: bool) -> dict[str, Any]:
-    path = run_path / rel_path
-    digest = _sha256_file(path)
+    digest = _safe_sha256_run_file(run_path, rel_path)
     return {
         "path": rel_path,
         "sha256": digest,
@@ -76,11 +112,14 @@ def build_operator_packet_manifest(
     generated_at: str | None = None,
 ) -> dict[str, Any]:
     run_path = Path(run_dir)
-    packet = Path(packet_path) if packet_path is not None else run_path / "operator-packet-v2.md"
-    packet_digest = _sha256_file(packet)
+    raw_packet = Path(packet_path) if packet_path is not None else Path("operator-packet-v2.md")
+    packet = raw_packet if raw_packet.is_absolute() else run_path / raw_packet
+    packet_rel = _relative_to_run(run_path, packet)
+    safe_packet = _safe_run_file(run_path, packet_rel)
+    packet_digest = _sha256_file(safe_packet)
     return {
         "schema_version": SCHEMA_VERSION,
-        "packet_path": _relative_to_run(run_path, packet),
+        "packet_path": packet_rel,
         "packet_sha256": packet_digest,
         "generated_at": generated_at or _utc_now(),
         "run_id": _load_run_id(run_path),
@@ -128,11 +167,15 @@ def verify_operator_packet_manifest(
         issues.append(f"schema_version mismatch: {manifest.get('schema_version')}")
 
     packet_rel = str(manifest.get("packet_path") or "operator-packet-v2.md")
-    packet_path = run_path / packet_rel
-    current_packet_sha = _sha256_file(packet_path)
-    if current_packet_sha is None:
+    try:
+        packet_path = _safe_run_file(run_path, packet_rel)
+    except ValueError as exc:
+        packet_path = None
+        issues.append(str(exc))
+    current_packet_sha = _sha256_file(packet_path) if packet_path is not None else None
+    if packet_path is not None and current_packet_sha is None:
         issues.append(f"packet missing: {packet_rel}")
-    elif current_packet_sha != manifest.get("packet_sha256"):
+    elif packet_path is not None and current_packet_sha != manifest.get("packet_sha256"):
         issues.append("packet_sha256 mismatch")
 
     if manifest.get("boundary") != BOUNDARY:
@@ -150,7 +193,11 @@ def verify_operator_packet_manifest(
             continue
         if entry.get("required") is not required:
             issues.append(f"source artifact required flag mismatch: {rel_path}")
-        current_sha = _sha256_file(run_path / rel_path)
+        try:
+            current_sha = _safe_sha256_run_file(run_path, rel_path)
+        except ValueError as exc:
+            issues.append(str(exc))
+            continue
         was_present = entry.get("present") is True
         if current_sha is None:
             if required or was_present:

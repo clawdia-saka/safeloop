@@ -199,3 +199,69 @@ def test_operator_packet_verify_accepts_custom_manifest_path(tmp_path: Path) -> 
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "operator-packet verification: valid" in result.stdout
+
+
+def test_operator_packet_verify_rejects_manifest_packet_path_traversal(tmp_path: Path) -> None:
+    run_dir = make_run_dir(tmp_path)
+    packet = write_operator_packet_v2(run_dir)
+    manifest = write_operator_packet_manifest(run_dir, packet)
+    manifest["packet_path"] = "../outside.md"
+    (run_dir / "operator-packet-manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+
+    result = verify_operator_packet_manifest(run_dir)
+
+    assert result["verification"]["status"] == "invalid"
+    assert any("artifact path must stay under run directory" in issue for issue in result["verification"]["issues"])
+
+
+def test_operator_packet_verify_rejects_manifest_packet_path_absolute(tmp_path: Path) -> None:
+    run_dir = make_run_dir(tmp_path)
+    packet = write_operator_packet_v2(run_dir)
+    manifest = write_operator_packet_manifest(run_dir, packet)
+    manifest["packet_path"] = str(tmp_path / "outside.md")
+    (run_dir / "operator-packet-manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+
+    result = verify_operator_packet_manifest(run_dir)
+
+    assert result["verification"]["status"] == "invalid"
+    assert any("artifact path must stay under run directory" in issue for issue in result["verification"]["issues"])
+
+
+def test_operator_packet_manifest_rejects_symlinked_source_artifact(tmp_path: Path) -> None:
+    run_dir = make_run_dir(tmp_path)
+    outside = tmp_path / "outside-plan.json"
+    outside.write_text(json.dumps({"status": "outside"}), encoding="utf-8")
+    (run_dir / "rollback-plan.json").unlink()
+    (run_dir / "rollback-plan.json").symlink_to(outside)
+    packet = write_operator_packet_v2(run_dir)
+
+    try:
+        write_operator_packet_manifest(run_dir, packet)
+    except ValueError as exc:
+        assert "artifact path must not contain symlinks" in str(exc)
+    else:
+        raise AssertionError("symlinked source artifact should be rejected")
+
+
+def test_operator_packet_manifest_rejects_output_outside_run_dir(tmp_path: Path) -> None:
+    run_dir = make_run_dir(tmp_path)
+    packet = tmp_path / "outside-packet.md"
+    packet.write_text("outside packet", encoding="utf-8")
+
+    try:
+        write_operator_packet_manifest(run_dir, packet)
+    except ValueError as exc:
+        assert "artifact path must stay under run directory" in str(exc)
+    else:
+        raise AssertionError("manifested packet output outside run_dir should be rejected")
+
+
+def test_operator_packet_cli_write_manifest_rejects_output_outside_run_dir_before_writing(tmp_path: Path) -> None:
+    run_dir = make_run_dir(tmp_path)
+    outside_packet = tmp_path / "outside-packet.md"
+
+    result = run_cli("operator-packet", str(run_dir), "--output", str(outside_packet), "--write-manifest")
+
+    assert result.returncode == 2
+    assert "artifact path must stay under run directory" in result.stderr
+    assert not outside_packet.exists()

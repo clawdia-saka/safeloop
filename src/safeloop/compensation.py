@@ -53,8 +53,46 @@ def _required_operator_action(capability: str, effect_class: str) -> str:
     return "operator_verify_required: verified compensation may complete mitigation but is not exact rollback"
 
 
+def _has_verified_compensation_evidence(compensation: dict[str, Any]) -> bool:
+    """Return True when a verified compensation claim carries local evidence.
+
+    A bare ``{"capability": "verified"}`` is only a status label. SafeLoop
+    requires local receipt/evidence metadata before treating that label as an
+    acceptable mitigation signal; otherwise the operator packet must remain
+    blocked/manual-review-required.
+    """
+    receipt = compensation.get("receipt")
+    if isinstance(receipt, dict) and any(
+        isinstance(receipt.get(key), str) and receipt.get(key, "").strip()
+        for key in ("receipt_id", "external_ref", "status", "verified_at", "path", "sha256")
+    ):
+        return True
+
+    for key in ("evidence", "evidence_refs"):
+        value = compensation.get(key)
+        entries = value if isinstance(value, list) else [value]
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            if any(
+                isinstance(entry.get(field), str) and entry.get(field, "").strip()
+                for field in ("path", "sha256", "receipt_id", "external_ref", "verified_at")
+            ):
+                return True
+
+    receipt_path = compensation.get("receipt_path")
+    receipt_sha256 = compensation.get("receipt_sha256")
+    return bool(
+        isinstance(receipt_path, str)
+        and receipt_path.strip()
+        and isinstance(receipt_sha256, str)
+        and receipt_sha256.strip()
+    )
+
+
 def _plan_item(run_dir: Path, event: dict[str, Any]) -> dict[str, Any]:
-    comp = event.get("compensation") if isinstance(event.get("compensation"), dict) else {}
+    raw_comp = event.get("compensation")
+    comp: dict[str, Any] = dict(raw_comp) if isinstance(raw_comp, dict) else {}
     capability = str(comp.get("capability") or "none")
     if capability not in CAPABILITIES:
         capability = "none"
@@ -66,6 +104,12 @@ def _plan_item(run_dir: Path, event: dict[str, Any]) -> dict[str, Any]:
         warnings.append("manual_review_required")
     if capability in {"best_effort", "verified"}:
         warnings.append("compensation is mitigation, not exact rollback")
+    if capability == "verified" and not _has_verified_compensation_evidence(comp):
+        blockers.append({
+            "code": "verified_compensation_missing_evidence",
+            "message": "verified compensation requires local evidence or receipt metadata",
+        })
+        warnings.append("manual_review_required: verified compensation missing local evidence")
     action_ids = _action_ids_for_side_effect(run_dir, event)
     item = {
         "side_effect_id": str(event.get("event_id") or event.get("side_effect_id") or "unknown"),
@@ -73,7 +117,7 @@ def _plan_item(run_dir: Path, event: dict[str, Any]) -> dict[str, Any]:
         "phase": str(event.get("phase") or "unknown"),
         "adapter": event.get("adapter") if isinstance(event.get("adapter"), dict) else {"name": str(event.get("adapter") or "unknown")},
         "external_ref": event.get("external_ref"),
-        "compensation": {"capability": capability, **comp},
+        "compensation": {**comp, "capability": capability},
         "exact_rollback": False,
         "required_operator_action": _required_operator_action(capability, str(event.get("effect_class") or "unknown")),
         "blockers": blockers,
@@ -94,10 +138,15 @@ def build_compensation_plan(run_dir: str | Path, *, side_effect_id: str | None =
     if action_id:
         items = [item for item in items if item.get("action_id") == action_id or action_id in item.get("action_ids", [])]
     blockers = [b for item in items for b in item.get("blockers", [])]
-    warnings: list[str] = []
+    plan_warnings: list[str] = []
+    for item in items:
+        for warning in item.get("warnings", []):
+            if isinstance(warning, str) and warning not in plan_warnings:
+                plan_warnings.append(warning)
+    warnings: list[str] = plan_warnings
     if not items:
         warnings.append("manual_review_required: no matching side effects found")
-    if any(item.get("compensation", {}).get("capability") == "manual" for item in items):
+    if any(item.get("compensation", {}).get("capability") == "manual" for item in items) and "manual_review_required" not in warnings:
         warnings.append("manual_review_required")
     plan = {
         "schema_version": SCHEMA_VERSION,

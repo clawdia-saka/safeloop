@@ -67,6 +67,48 @@ def test_best_effort_and_verified_are_never_exact_rollback(tmp_path):
     assert all(item["exact_rollback"] is False for item in plan["items"])
 
 
+def test_verified_compensation_without_local_evidence_is_blocked(tmp_path):
+    run_dir = _run_dir(tmp_path)
+    _append(run_dir, "verified")
+
+    plan = build_compensation_plan(run_dir)
+    item = plan["items"][0]
+
+    assert plan["status"] == "blocked"
+    assert item["blockers"][0]["code"] == "verified_compensation_missing_evidence"
+    assert "manual_review_required" in " ".join(item["warnings"] + plan["warnings"])
+
+
+def test_verified_compensation_with_trivial_evidence_is_blocked(tmp_path):
+    run_dir = _run_dir(tmp_path)
+    sid = _append(run_dir, "verified")
+    event = json.loads((run_dir / "side-effects.jsonl").read_text(encoding="utf-8").splitlines()[0])
+    event["compensation"] = {"capability": "verified", "verified_by": "operator", "evidence": [{}]}
+    (run_dir / "side-effects.jsonl").write_text(json.dumps(event, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
+
+    plan = build_compensation_plan(run_dir, side_effect_id=sid)
+
+    assert plan["status"] == "blocked"
+    assert plan["items"][0]["blockers"][0]["code"] == "verified_compensation_missing_evidence"
+
+
+def test_verified_compensation_with_receipt_metadata_remains_manual_review_required(tmp_path):
+    run_dir = _run_dir(tmp_path)
+    sid = _append(run_dir, "verified")
+    event = json.loads((run_dir / "side-effects.jsonl").read_text(encoding="utf-8").splitlines()[0])
+    event["compensation"] = {
+        "capability": "verified",
+        "receipt": {"receipt_id": "rcpt-1", "status": "compensated", "verified_at": "2026-05-17T00:00:00Z"},
+    }
+    (run_dir / "side-effects.jsonl").write_text(json.dumps(event, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
+
+    plan = build_compensation_plan(run_dir, side_effect_id=sid)
+
+    assert plan["status"] == "manual_review_required"
+    assert plan["items"][0]["blockers"] == []
+    assert "compensation is mitigation, not exact rollback" in plan["warnings"]
+
+
 def test_selected_action_plan_includes_related_side_effects(tmp_path, monkeypatch):
     run_dir = _run_dir(tmp_path)
     _append(run_dir, "best_effort", action_id="act-0003")

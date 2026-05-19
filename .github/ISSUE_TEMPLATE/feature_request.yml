@@ -1,0 +1,41 @@
+name: Feature request
+description: Suggest a scoped SafeLoop improvement.
+title: "feat: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        SafeLoop is recoverability-first. Please keep exact rollback claims limited to covered local file changes.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What agent-operation problem should this solve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Describe the smallest useful change.
+    validations:
+      required: true
+  - type: dropdown
+    id: boundary
+    attributes:
+      label: Recovery boundary
+      options:
+        - Covered local file rollback
+        - External compensation / manual review
+        - Evidence / audit only
+        - Documentation or packaging
+        - Unsure
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+    validations:
+      required: false

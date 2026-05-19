@@ -2,3 +2,7 @@ __pycache__/
 .pytest_cache/
 *.py[cod]
 .worktrees/
+.venv/
+*.egg-info/
+build/
+dist/

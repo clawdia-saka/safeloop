@@ -1,0 +1,60 @@
+name: Bug report
+description: Report a reproducible SafeLoop bug.
+title: "bug: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug. Do not include secrets, private run artifacts, real external-service payloads, or vulnerability details.
+  - type: input
+    id: version
+    attributes:
+      label: SafeLoop version or commit
+      description: Use `safeloop --version` or the commit SHA.
+      placeholder: "0.2.0 or e5f63d1"
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - watch-run / timeline
+        - verify-artifacts / anchors
+        - rollback plan/apply
+        - compensation / manual review
+        - control plane / approvals
+        - docs / packaging
+        - other
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Minimal local reproduction
+      description: Prefer fake/local data and commands that can run without external accounts.
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Safety checklist
+      options:
+        - label: I removed secrets, tokens, private logs, and real external-service payloads.
+          required: true
+        - label: This is not a security vulnerability report with exploit details.
+          required: true

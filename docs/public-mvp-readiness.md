@@ -62,6 +62,8 @@ Exact rollback is only claimed for covered local file changes inside the demo re
 - Version source: `pyproject.toml` (`project.version`).
 - Current reviewed version: `0.2.0`.
 - Build readiness boundary: this packet checks local metadata and verifier presence. A separate maintainer release flow may build distributions, sign artifacts, upload packages, or create tags.
+- Community readiness files: `LICENSE`, `SECURITY.md`, `CONTRIBUTING.md`, issue templates, PR template, CI, and release workflow are part of the public repo gate.
+- Release automation: `.github/workflows/ci.yml` runs tests, public readiness checks, build, and Twine metadata validation. `.github/workflows/release.yml` publishes GitHub releases and PyPI packages from matching `vX.Y.Z` tags after maintainers configure PyPI Trusted Publishing.
 - Local optional build command for maintainers:
 
 ```bash

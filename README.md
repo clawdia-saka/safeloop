@@ -1,12 +1,16 @@
 # SafeLoop
 
-**SafeLoop 0.2.0 is prepared as a release candidate in this branch; publish/tag is a separate manual release step.**
+[![CI](https://github.com/clawdia-saka/safeloop/actions/workflows/ci.yml/badge.svg)](https://github.com/clawdia-saka/safeloop/actions/workflows/ci.yml)
+[![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](pyproject.toml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-SafeLoop is a non-blocking watchdog and reversible local timeline for long-running AI agents.
+SafeLoop is the local flight recorder and recovery layer for long-running AI agents.
 
 It records local file side effects, checkpoints repo changes, verifies tamper-evident artifacts, supports exact local undo for covered file changes, and marks external side effects as **not tracked** in this release instead of pretending they are blindly reversible.
 
 In short: **roll back covered local files, compensate or manually review external effects, and audit everything.** See [`docs/recoverability-first.md`](docs/recoverability-first.md) for the product boundary and the [threat model](docs/threat-model.md) for audit boundaries.
+
+Current source version: **SafeLoop 0.2.0**. The release workflow publishes GitHub releases and PyPI packages from version tags; until `v0.2.0` is tagged and published, install from this repository.
 
 ![SafeLoop recoverability demo](docs/assets/safeloop-readme-demo.gif)
 
@@ -24,14 +28,16 @@ SafeLoop 0.2.0 hardens the local watchdog, delta-audit packet, and control-plane
 
 ## Install
 
-SafeLoop requires Python 3.11 or newer. Install the published package with `pipx` when available:
+SafeLoop requires Python 3.11 or newer.
+
+After the PyPI package is published, install it with `pipx`:
 
 ```bash
 pipx install safeloop
 safeloop --help
 ```
 
-Or install into a virtual environment:
+Or install it into a virtual environment:
 
 ```bash
 python3 -m venv .venv
@@ -40,7 +46,13 @@ python -m pip install safeloop
 safeloop --version
 ```
 
-If you need the exact 0.1.4 release tag before a PyPI artifact is available, install from Git:
+Before the PyPI package is published, install from the repository:
+
+```bash
+pipx install git+https://github.com/clawdia-saka/safeloop.git
+```
+
+If you need the exact 0.2.0 release source once the tag exists, install from Git:
 
 ```bash
 pipx install git+https://github.com/clawdia-saka/safeloop.git@v0.2.0  # after the v0.2.0 tag exists
@@ -265,12 +277,12 @@ Build and locally smoke-test a distribution without publishing:
 ```bash
 python -m build
 python3 -m venv /tmp/safeloop-wheel-smoke
-/tmp/safeloop-wheel-smoke/bin/python -m pip install dist/safeloop-0.1.4-py3-none-any.whl
+/tmp/safeloop-wheel-smoke/bin/python -m pip install dist/safeloop-0.2.0-py3-none-any.whl
 /tmp/safeloop-wheel-smoke/bin/safeloop --help
 /tmp/safeloop-wheel-smoke/bin/safeloop --version
 ```
 
-For the public MVP readiness boundary, see [`docs/public-mvp-readiness.md`](docs/public-mvp-readiness.md).
+For the public MVP readiness boundary, see [`docs/public-mvp-readiness.md`](docs/public-mvp-readiness.md). For maintainer release, tag, and PyPI steps, see [`docs/release.md`](docs/release.md).
 
 ## Rollback public readiness skeleton
 
@@ -286,7 +298,7 @@ transparency log unless one is explicitly implemented and configured.
 
 ## Historical references
 
-These documents describe earlier release boundaries and remain useful for context, but SafeLoop 0.2.0 is the prepared release candidate described above:
+These documents describe earlier release boundaries and remain useful for context, but SafeLoop 0.2.0 is the current source version described above:
 
 - [`docs/safeloop-0.0.3-agent-watchdog-rc.md`](docs/safeloop-0.0.3-agent-watchdog-rc.md)
 - [`docs/release-notes-0.0.3.md`](docs/release-notes-0.0.3.md)

@@ -14,6 +14,17 @@ PYPROJECT = ROOT / "pyproject.toml"
 CLI = ROOT / "src" / "safeloop" / "cli.py"
 DEMO = ROOT / "examples" / "rollback_selective_demo.sh"
 FULL_DEMO = ROOT / "examples" / "full_demo.sh"
+COMMUNITY_FILES = [
+    ROOT / "LICENSE",
+    ROOT / "SECURITY.md",
+    ROOT / "CONTRIBUTING.md",
+    ROOT / "CODE_OF_CONDUCT.md",
+    ROOT / ".github" / "PULL_REQUEST_TEMPLATE.md",
+    ROOT / ".github" / "ISSUE_TEMPLATE" / "bug_report.yml",
+    ROOT / ".github" / "ISSUE_TEMPLATE" / "feature_request.yml",
+]
+CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
+RELEASE_WORKFLOW = ROOT / ".github" / "workflows" / "release.yml"
 
 REQUIRED_DOC_MARKERS = [
     "# SafeLoop Public MVP Readiness Packet",
@@ -122,6 +133,26 @@ def check() -> tuple[int, list[str]]:
             if marker not in full_demo_text:
                 failures.append(f"full demo script missing marker: {marker}")
 
+    missing_community_files = [path.relative_to(ROOT).as_posix() for path in COMMUNITY_FILES if not path.exists()]
+    if missing_community_files:
+        failures.append("missing community file(s): " + ", ".join(missing_community_files))
+
+    if not CI_WORKFLOW.exists():
+        failures.append("missing CI workflow: .github/workflows/ci.yml")
+    else:
+        ci_text = CI_WORKFLOW.read_text(encoding="utf-8")
+        for marker in ["python -m pytest -q", "python scripts/public_readiness.py --check", "python -m build"]:
+            if marker not in ci_text:
+                failures.append(f"CI workflow missing marker: {marker}")
+
+    if not RELEASE_WORKFLOW.exists():
+        failures.append("missing release workflow: .github/workflows/release.yml")
+    else:
+        release_text = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+        for marker in ["refs/tags/", "pypa/gh-action-pypi-publish", "softprops/action-gh-release"]:
+            if marker not in release_text:
+                failures.append(f"release workflow missing marker: {marker}")
+
     version = project_version()
     if not re.fullmatch(r"\d+\.\d+\.\d+", version):
         failures.append(f"project version is not semver x.y.z: {version}")
@@ -132,6 +163,9 @@ def check() -> tuple[int, list[str]]:
     messages.append("demo-script=present" if DEMO.exists() else "demo-script=missing")
     messages.append("full-demo=present" if FULL_DEMO.exists() else "full-demo=missing")
     messages.append("demo-verifier-help=ok" if not cli_help_failures else "demo-verifier-help=failed")
+    messages.append("community-files=present" if not missing_community_files else "community-files=missing")
+    messages.append("ci-workflow=present" if CI_WORKFLOW.exists() else "ci-workflow=missing")
+    messages.append("release-workflow=present" if RELEASE_WORKFLOW.exists() else "release-workflow=missing")
     messages.append("release-tag=not-created")
     messages.append("build-gate=pyproject-present")
 

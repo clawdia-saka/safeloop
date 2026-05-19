@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=69"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -9,6 +9,8 @@ description = "Local watchdog and tamper-evident timeline for long-running AI ag
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [{ name = "Nous Research" }]
+license = "MIT"
+license-files = ["LICENSE"]
 keywords = ["ai-agents", "watchdog", "rollback", "audit", "cli"]
 classifiers = [
   "Development Status :: 3 - Alpha",
@@ -33,6 +35,14 @@ Documentation = "https://github.com/clawdia-saka/safeloop#readme"
 [project.optional-dependencies]
 api = ["fastapi>=0.110"]
 yaml = ["PyYAML>=6"]
+dev = [
+  "build>=1",
+  "fastapi>=0.110",
+  "httpx>=0.27",
+  "PyYAML>=6",
+  "pytest>=8",
+  "twine>=5",
+]
 
 [project.scripts]
 safeloop = "safeloop.cli:main"

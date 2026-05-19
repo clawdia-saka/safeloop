@@ -1,0 +1,29 @@
+name: Release readiness
+description: Track a release, tag, or PyPI readiness issue.
+title: "release: "
+labels: ["release"]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      placeholder: "0.2.0"
+    validations:
+      required: true
+  - type: checkboxes
+    id: gates
+    attributes:
+      label: Required gates
+      options:
+        - label: `pyproject.toml` version is correct.
+        - label: README install and wheel smoke-test examples match the version.
+        - label: `docs/release-notes-*` are updated.
+        - label: `python -m pytest -q` passes.
+        - label: `python scripts/public_readiness.py --check` passes.
+        - label: `python -m build` passes.
+        - label: GitHub release and PyPI Trusted Publishing are ready.
+  - type: textarea
+    id: notes
+    attributes:
+      label: Notes
+      description: Link related PRs, CI runs, or manual release decisions.

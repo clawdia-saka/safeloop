@@ -24,6 +24,7 @@ Expected gate output includes:
 public-readiness: ok
 version=0.2.0
 demo-verifier=present
+packet-upload=present
 release-tag=not-created
 ```
 
@@ -36,6 +37,9 @@ The public MVP demo boundary is local and verifier-backed. The packet requires t
 - `safeloop verify-artifacts <run_dir>` for local run artifact/hash-chain verification.
 - `safeloop verify-anchor <run_dir>` for local anchor verification.
 - `safeloop audit-control-plane-anchors --db <db> --anchors <anchors.jsonl> --output-dir <dir>` for local control-plane anchor audit evidence.
+- `safeloop demo` for a one-command local packet demo that writes `operator-packet-v2.md` and `operator-packet-manifest.json`.
+- `safeloop doctor` for local install, repo, and GitHub Action packet-upload readiness checks.
+- `safeloop init --agent codex` for local Codex-oriented SafeLoop setup files under `.safeloop/`.
 
 These commands support review and demos. They do not assert remote transparency, immutable timestamping, or hosted governance.
 
@@ -63,7 +67,7 @@ Exact rollback is only claimed for covered local file changes inside the demo re
 - Current reviewed version: `0.2.0`.
 - Build readiness boundary: this packet checks local metadata and verifier presence. A separate maintainer release flow may build distributions, sign artifacts, upload packages, or create tags.
 - Community readiness files: `LICENSE`, `SECURITY.md`, `CONTRIBUTING.md`, issue templates, PR template, CI, and release workflow are part of the public repo gate.
-- Release automation: `.github/workflows/ci.yml` runs tests, public readiness checks, build, and Twine metadata validation. `.github/workflows/release.yml` publishes GitHub releases and PyPI packages from matching `vX.Y.Z` tags after maintainers configure PyPI Trusted Publishing.
+- Release automation: `.github/workflows/ci.yml` runs tests, public readiness checks, a `safeloop demo --output-dir .safeloop/ci-demo --json` packet generation step, GitHub Action upload of the `safeloop-packet-demo` artifact, build, and Twine metadata validation. `.github/workflows/release.yml` publishes GitHub releases and PyPI packages from matching `vX.Y.Z` tags after maintainers configure PyPI Trusted Publishing.
 - Local optional build command for maintainers:
 
 ```bash

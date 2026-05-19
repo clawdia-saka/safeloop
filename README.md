@@ -30,7 +30,7 @@ SafeLoop 0.2.0 hardens the local watchdog, delta-audit packet, and control-plane
 
 SafeLoop requires Python 3.11 or newer.
 
-After the PyPI package is published, install it with `pipx`:
+Install it with `pipx`:
 
 ```bash
 pipx install safeloop
@@ -46,25 +46,40 @@ python -m pip install safeloop
 safeloop --version
 ```
 
-Before the PyPI package is published, install from the repository:
+Or install from the repository:
 
 ```bash
 pipx install git+https://github.com/clawdia-saka/safeloop.git
 ```
 
-If you need the exact 0.2.0 release source once the tag exists, install from Git:
+If you need the exact 0.2.0 release source, install from Git:
 
 ```bash
-pipx install git+https://github.com/clawdia-saka/safeloop.git@v0.2.0  # after the v0.2.0 tag exists
+pipx install git+https://github.com/clawdia-saka/safeloop.git@v0.2.0
 ```
 
 Git tag install into a local virtual environment:
 
 ```bash
-python3 -m venv .venv && . .venv/bin/activate && python -m pip install 'safeloop @ git+https://github.com/clawdia-saka/safeloop.git@v0.2.0'  # after the v0.2.0 tag exists
+python3 -m venv .venv && . .venv/bin/activate && python -m pip install 'safeloop @ git+https://github.com/clawdia-saka/safeloop.git@v0.2.0'
 ```
 
 ## Quickstart
+
+Check the local install and initialize Codex-oriented SafeLoop files for a repo:
+
+```bash
+safeloop doctor
+safeloop init --agent codex
+```
+
+Run the one-command local packet demo:
+
+```bash
+safeloop demo
+```
+
+It creates a temporary local repo, records a SafeLoop run, verifies artifacts, rolls back the covered local file, and writes `operator-packet-v2.md` plus `operator-packet-manifest.json`.
 
 Minimal end-to-end local rollback smoke test:
 
@@ -101,7 +116,19 @@ Actions outside the local repo are manual-review/compensation only; SafeLoop nev
 
 ## Demo commands
 
-The public demo path is intentionally five commands:
+The shortest public demo path is:
+
+```bash
+safeloop demo
+```
+
+For CI or artifact upload, pin the output directory:
+
+```bash
+safeloop demo --output-dir .safeloop/ci-demo --json
+```
+
+The lower-level public demo path is intentionally five commands:
 
 ```bash
 safeloop watch-run

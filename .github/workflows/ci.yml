@@ -39,6 +39,20 @@ jobs:
       - name: Check public readiness packet
         run: python scripts/public_readiness.py --check
 
+      - name: Generate SafeLoop packet demo
+        if: matrix.python-version == '3.12'
+        run: safeloop demo --output-dir .safeloop/ci-demo --json
+
+      - name: Upload SafeLoop packet demo
+        if: matrix.python-version == '3.12'
+        uses: actions/upload-artifact@v4
+        with:
+          name: safeloop-packet-demo
+          path: |
+            .safeloop/ci-demo/demo-summary.json
+            .safeloop/ci-demo/runs/**
+          if-no-files-found: error
+
       - name: Build distribution
         run: python -m build
 

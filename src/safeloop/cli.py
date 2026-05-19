@@ -3,7 +3,10 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import shutil
+import subprocess
 import sys
+import tempfile
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
@@ -86,6 +89,314 @@ def _rollback_artifact(run_dir: Path, checkpoint_id: str, res: dict, *, apply: b
 
 def _load_json(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _run_checked(cmd: list[str], *, cwd: Path) -> None:
+    subprocess.run(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True)
+
+
+def _status_from_checks(checks: dict[str, dict]) -> str:
+    statuses = {check["status"] for check in checks.values()}
+    if "error" in statuses:
+        return "errors"
+    if "warn" in statuses:
+        return "warnings"
+    return "ok"
+
+
+def _doctor_report(repo: Path) -> dict:
+    repo = repo.resolve()
+    checks: dict[str, dict] = {}
+    checks["python"] = {
+        "status": "ok" if sys.version_info >= (3, 11) else "error",
+        "message": f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
+    }
+    try:
+        package_version = version("safeloop")
+    except PackageNotFoundError:
+        package_version = "0.2.0"
+    checks["package"] = {"status": "ok", "message": f"safeloop {package_version}"}
+    checks["git"] = {
+        "status": "ok" if shutil.which("git") else "error",
+        "message": shutil.which("git") or "git not found on PATH",
+    }
+    checks["repo"] = {
+        "status": "ok" if (repo / ".git").exists() else "warn",
+        "message": str(repo) if (repo / ".git").exists() else f"{repo} is not a git checkout",
+    }
+    cli_commands = ["demo", "doctor", "init", "watch-run", "operator-packet", "operator-packet-verify", "rollback"]
+    checks["cli"] = {"status": "ok", "commands": cli_commands, "message": "required CLI surfaces are installed"}
+    ci = repo / ".github" / "workflows" / "ci.yml"
+    if ci.exists():
+        ci_text = ci.read_text(encoding="utf-8")
+        packet_markers = [
+            "safeloop demo --output-dir .safeloop/ci-demo --json",
+            "actions/upload-artifact@v4",
+            "safeloop-packet-demo",
+        ]
+        missing = [marker for marker in packet_markers if marker not in ci_text]
+        checks["github_action_packet_upload"] = {
+            "status": "ok" if not missing else "warn",
+            "message": "CI uploads SafeLoop demo packet artifacts" if not missing else "CI packet upload markers missing: " + ", ".join(missing),
+            "artifact_name": "safeloop-packet-demo",
+        }
+    else:
+        checks["github_action_packet_upload"] = {
+            "status": "warn",
+            "message": "missing .github/workflows/ci.yml",
+            "artifact_name": "safeloop-packet-demo",
+        }
+    return {
+        "schema_version": "safeloop.doctor.v1",
+        "status": _status_from_checks(checks),
+        "repo": str(repo),
+        "checks": checks,
+    }
+
+
+def _print_doctor(report: dict) -> None:
+    print("SafeLoop doctor")
+    print(f"status: {report['status']}")
+    for name, check in report["checks"].items():
+        status = check["status"]
+        message = check.get("message", "")
+        print(f"[{status}] {name}: {message}")
+
+
+def _codex_agent_instructions() -> str:
+    return """# SafeLoop Codex Agent Notes
+
+Use SafeLoop for local evidence packets around long-running or risky agent work.
+
+- Run `safeloop doctor` before relying on packet upload or local rollback evidence.
+- Run `safeloop demo` to produce a local sample run with `operator-packet-v2.md` and `operator-packet-manifest.json`.
+- For real work, wrap commands with `safeloop watch-run --task-id <task> --repo "$PWD" -- <command>`.
+- Generate review evidence with `safeloop operator-packet RUN_DIR --write-manifest`.
+- Treat actions outside the local repo as compensation/manual-review only; do not claim exact rollback for external systems.
+"""
+
+
+def _init_agent(repo: Path, *, agent: str, force: bool) -> dict:
+    agent = agent.lower()
+    if agent != "codex":
+        raise ValueError("supported agents: codex")
+    repo = repo.resolve()
+    safeloop_dir = repo / ".safeloop"
+    config_path = safeloop_dir / "config.json"
+    instructions_path = safeloop_dir / "AGENTS.codex.md"
+    config = {
+        "schema_version": "safeloop.init.v1",
+        "agent": "codex",
+        "packet_dir": ".safeloop/packets",
+        "recommended_commands": [
+            "safeloop doctor",
+            "safeloop demo",
+            "safeloop operator-packet RUN_DIR --write-manifest",
+        ],
+        "boundaries": {
+            "local_file_rollback": "covered artifacts only",
+            "external_actions": "manual_review_or_compensation",
+            "exact_external_rollback": False,
+        },
+    }
+    outputs = {
+        config_path: json.dumps(config, indent=2, sort_keys=True) + "\n",
+        instructions_path: _codex_agent_instructions(),
+    }
+    written: list[str] = []
+    unchanged: list[str] = []
+    conflicts: list[str] = []
+    safeloop_dir.mkdir(parents=True, exist_ok=True)
+    for path, content in outputs.items():
+        if path.exists():
+            existing = path.read_text(encoding="utf-8")
+            if existing == content:
+                unchanged.append(str(path))
+                continue
+            if not force:
+                conflicts.append(str(path))
+                continue
+        path.write_text(content, encoding="utf-8")
+        written.append(str(path))
+    if conflicts:
+        raise FileExistsError("would overwrite existing SafeLoop init file(s): " + ", ".join(conflicts))
+    (safeloop_dir / "packets").mkdir(parents=True, exist_ok=True)
+    return {
+        "schema_version": "safeloop.init-result.v1",
+        "status": "ok",
+        "agent": agent,
+        "repo": str(repo),
+        "written": written,
+        "unchanged": unchanged,
+        "packet_dir": str(safeloop_dir / "packets"),
+    }
+
+
+def _prepare_demo_root(output_dir: str | None, *, force: bool) -> Path:
+    root = Path(output_dir).resolve() if output_dir else Path(tempfile.mkdtemp(prefix="safeloop-demo-")).resolve()
+    demo_paths = [
+        root / "repo",
+        root / "runs",
+        root / "fake-external-service.log",
+        root / "agent.py",
+        root / "demo-summary.json",
+    ]
+    existing = [path for path in demo_paths if path.exists()]
+    if existing and not force:
+        raise FileExistsError("demo output already exists; pass --force or choose a new --output-dir: " + ", ".join(str(p) for p in existing))
+    if force:
+        for path in existing:
+            if path.is_dir():
+                shutil.rmtree(path)
+            else:
+                path.unlink()
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def _write_demo_v1_packet(run_dir: Path, demo_repo: Path, external_log: Path, run_id: str, checkpoint_id: str) -> Path:
+    packet = run_dir / "operator-packet.md"
+    packet.write_text(
+        "\n".join(
+            [
+                "# SafeLoop demo operator packet",
+                "",
+                f"Run directory: {run_dir}",
+                f"Repository: {demo_repo}",
+                f"Local change evidence: {run_dir / 'checkpoints' / checkpoint_id / 'diff.patch'}",
+                f"Artifact verification: {run_dir / 'verification' / 'verify-artifacts-result.json'}",
+                f"Rollback plan: {run_dir / 'rollback-plan.json'}",
+                f"External evidence: {external_log}",
+                "",
+                "Decision boundary:",
+                "- Covered local file rollback: service.md was rolled back from verified local artifacts.",
+                "- External action: fake ticket remains manual-review/compensation territory.",
+                f"- Exact rollback is not claimed for anything outside {demo_repo}.",
+                "",
+                "Rollback command:",
+                f"safeloop rollback apply {run_dir} {run_id} {checkpoint_id} --files service.md",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    return packet
+
+
+def _run_demo(*, output_dir: str | None, force: bool) -> dict:
+    root = _prepare_demo_root(output_dir, force=force)
+    demo_repo = root / "repo"
+    run_root = root / "runs"
+    external_log = root / "fake-external-service.log"
+    demo_repo.mkdir(parents=True)
+    run_root.mkdir(parents=True)
+    _run_checked(["git", "init", "-q"], cwd=demo_repo)
+    _run_checked(["git", "config", "user.email", "demo@example.test"], cwd=demo_repo)
+    _run_checked(["git", "config", "user.name", "demo"], cwd=demo_repo)
+    (demo_repo / "service.md").write_text("status: stable\n", encoding="utf-8")
+    _run_checked(["git", "add", "service.md"], cwd=demo_repo)
+    _run_checked(["git", "commit", "-q", "-m", "init"], cwd=demo_repo)
+    agent = root / "agent.py"
+    agent.write_text(
+        "\n".join(
+            [
+                "from pathlib import Path",
+                "import sys",
+                "",
+                "external_log = Path(sys.argv[1])",
+                "Path('service.md').write_text(",
+                "    'status: changed by safeloop demo\\n'",
+                "    'handoff: operator must review external-service evidence\\n',",
+                "    encoding='utf-8',",
+                ")",
+                "external_log.write_text(",
+                "    'fake-ticket: created outside repo; external_review_required; exact_rollback=false\\n',",
+                "    encoding='utf-8',",
+                ")",
+                "print('agent changed service.md and simulated an external ticket')",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    code, run_dir = watch_run(
+        "demo",
+        demo_repo,
+        [sys.executable, str(agent), str(external_log)],
+        run_root,
+        debounce_ms=250,
+        max_interval_sec=0,
+    )
+    if code != 0:
+        raise RuntimeError(f"demo agent exited with code {code}; see {run_dir}")
+    run = _load_json(run_dir / "run.json")
+    checkpoints = sorted((run_dir / "checkpoints").glob("cp-*"))
+    if not checkpoints:
+        raise RuntimeError(f"demo did not create a checkpoint: {run_dir}")
+    checkpoint_id = checkpoints[-1].name
+    verification = verify_run(run_dir)
+    if verification["status"] not in {"valid", "warning"}:
+        raise RuntimeError(f"demo artifact verification failed: {verification['status']}")
+    _review_summary(run_dir)
+    plan = _selected_rollback(run_dir, run["run_id"], ["service.md"], checkpoint_id=checkpoint_id, apply=False)
+    plan["compensation"] = compensation_section_for_rollback(run_dir, action_id=None, include_compensation=False)
+    atomic_json(run_dir / "rollback-plan.json", plan)
+    _append_rollback_event(
+        run_dir,
+        "rollback_plan_created",
+        {
+            "operation": "rollback_selected_files",
+            "target": plan["target"],
+            "selected_files": ["service.md"],
+            "artifact_digests": {"rollback-plan.json": sha_file(run_dir / "rollback-plan.json")},
+        },
+    )
+    result = _selected_rollback(run_dir, run["run_id"], ["service.md"], checkpoint_id=checkpoint_id, apply=True)
+    _append_rollback_event(
+        run_dir,
+        "rollback_applied" if result["status"] == "applied" else "rollback_blocked",
+        {
+            "operation": "rollback_selected_files",
+            "rollback_status": result["status"],
+            "target": result["target"],
+            "selected_files": ["service.md"],
+            "artifact_digests": {
+                "rollback-plan.json": sha_file(run_dir / "rollback-plan.json"),
+                "rollback-result.json": sha_file(run_dir / "rollback-result.json"),
+            },
+        },
+    )
+    v1_packet = _write_demo_v1_packet(run_dir, demo_repo, external_log, run["run_id"], checkpoint_id)
+    v2_packet = write_operator_packet_v2(
+        run_dir,
+        output_path=run_dir / "operator-packet-v2.md",
+        external_evidence=[str(external_log)],
+        compensation_adapter="manual",
+    )
+    manifest = write_operator_packet_manifest(run_dir, v2_packet)
+    summary = {
+        "schema_version": "safeloop.demo.v1",
+        "status": "ok",
+        "workspace": str(root),
+        "repo": str(demo_repo),
+        "run_dir": str(run_dir),
+        "run_id": run["run_id"],
+        "checkpoint_id": checkpoint_id,
+        "verification_status": verification["status"],
+        "rollback_status": result["status"],
+        "operator_packet": str(v2_packet),
+        "operator_packet_v1": str(v1_packet),
+        "operator_packet_manifest": str(run_dir / "operator-packet-manifest.json"),
+        "manifest_status": manifest["verification"]["status"],
+        "demo_summary": str(root / "demo-summary.json"),
+        "external_effects": {
+            "evidence": str(external_log),
+            "exact_rollback": False,
+            "status": "manual_review_required",
+        },
+    }
+    atomic_json(root / "demo-summary.json", summary)
+    return summary
 
 
 def _append_rollback_event(run_dir: Path, event_type: str, payload: dict) -> None:
@@ -583,6 +894,18 @@ def main(argv: list[str] | None = None) -> int:
         package_version = "0.2.0"
     parser.add_argument("--version", action="version", version=f"%(prog)s {package_version}")
     sub = parser.add_subparsers(dest="cmd", required=True)
+    demo = sub.add_parser("demo", help="Run a local SafeLoop demo and write packet artifacts.")
+    demo.add_argument("--output-dir", help="Directory for demo repo, runs, and demo-summary.json. Defaults to a temp directory.")
+    demo.add_argument("--force", action="store_true", help="Replace existing demo files under --output-dir.")
+    demo.add_argument("--json", action="store_true", help="Print machine-readable demo summary.")
+    doctor = sub.add_parser("doctor", help="Check local SafeLoop install, repo, and packet-upload readiness.")
+    doctor.add_argument("--repo", default=".", help="Repository root to inspect. Defaults to current directory.")
+    doctor.add_argument("--json", action="store_true", help="Print machine-readable doctor report.")
+    init = sub.add_parser("init", help="Initialize SafeLoop local agent config.")
+    init.add_argument("--agent", required=True, choices=["codex"], help="Agent profile to initialize.")
+    init.add_argument("--repo", default=".", help="Repository root to initialize. Defaults to current directory.")
+    init.add_argument("--force", action="store_true", help="Overwrite existing SafeLoop init files.")
+    init.add_argument("--json", action="store_true", help="Print machine-readable init result.")
     w = sub.add_parser("watch-run")
     w.add_argument("--task-id", required=True)
     w.add_argument("--repo", required=True)
@@ -707,6 +1030,46 @@ def main(argv: list[str] | None = None) -> int:
     rb_apply.add_argument("--action")
     args = parser.parse_args(argv)
 
+    if args.cmd == "demo":
+        try:
+            summary = _run_demo(output_dir=args.output_dir, force=args.force)
+        except (FileExistsError, RuntimeError, subprocess.CalledProcessError) as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+        if args.json:
+            print(json.dumps(summary, indent=2, sort_keys=True))
+        else:
+            print("SafeLoop demo complete")
+            print(f"workspace: {summary['workspace']}")
+            print(f"run id: {summary['run_id']}")
+            print(f"run dir: {summary['run_dir']}")
+            print(f"operator packet: {summary['operator_packet']}")
+            print(f"operator packet manifest: {summary['operator_packet_manifest']}")
+            print("external exact rollback: false")
+        return 0
+    if args.cmd == "doctor":
+        report = _doctor_report(Path(args.repo))
+        if args.json:
+            print(json.dumps(report, indent=2, sort_keys=True))
+        else:
+            _print_doctor(report)
+        return 1 if report["status"] == "errors" else 0
+    if args.cmd == "init":
+        try:
+            result = _init_agent(Path(args.repo), agent=args.agent, force=args.force)
+        except (ValueError, FileExistsError) as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+        if args.json:
+            print(json.dumps(result, indent=2, sort_keys=True))
+        else:
+            print(f"SafeLoop initialized for {result['agent']}")
+            for path in result["written"]:
+                print(f"written: {path}")
+            for path in result["unchanged"]:
+                print(f"unchanged: {path}")
+            print(f"packet dir: {result['packet_dir']}")
+        return 0
     if args.cmd in {"watch-run", "watch"}:
         if args.cmd == "watch" and not args.loop:
             print("watch requires --loop", file=sys.stderr)

@@ -42,6 +42,9 @@ REQUIRED_DOC_MARKERS = [
     "safeloop verify-artifacts",
     "safeloop verify-anchor",
     "safeloop audit-control-plane-anchors",
+    "safeloop demo",
+    "safeloop doctor",
+    "safeloop init --agent codex",
     "python scripts/public_readiness.py --check",
     "bash examples/full_demo.sh",
 ]
@@ -78,12 +81,12 @@ def check() -> tuple[int, list[str]]:
 
     cli_text = CLI.read_text(encoding="utf-8")
     demo_verifiers = ["verify-artifacts", "verify-anchor", "audit-control-plane-anchors"]
-    readiness_commands = ["review", "explain", "policy-check", "rollback"]
+    readiness_commands = ["demo", "doctor", "init", "review", "explain", "policy-check", "rollback"]
     missing_verifiers = [name for name in demo_verifiers if name not in cli_text]
     missing_commands = [
         name
         for name in readiness_commands
-        if f'add_parser("{name}")' not in cli_text and f'add_parser(\n        "{name}"' not in cli_text
+        if f'add_parser("{name}"' not in cli_text and f'add_parser(\n        "{name}"' not in cli_text
     ]
     cli_help_failures: list[str] = []
     for name in [*demo_verifiers, *readiness_commands]:
@@ -137,11 +140,21 @@ def check() -> tuple[int, list[str]]:
     if missing_community_files:
         failures.append("missing community file(s): " + ", ".join(missing_community_files))
 
+    packet_upload_present = False
     if not CI_WORKFLOW.exists():
         failures.append("missing CI workflow: .github/workflows/ci.yml")
     else:
         ci_text = CI_WORKFLOW.read_text(encoding="utf-8")
-        for marker in ["python -m pytest -q", "python scripts/public_readiness.py --check", "python -m build"]:
+        ci_markers = [
+            "python -m pytest -q",
+            "python scripts/public_readiness.py --check",
+            "safeloop demo --output-dir .safeloop/ci-demo --json",
+            "actions/upload-artifact@v4",
+            "safeloop-packet-demo",
+            "python -m build",
+        ]
+        packet_upload_present = all(marker in ci_text for marker in ci_markers[2:5])
+        for marker in ci_markers:
             if marker not in ci_text:
                 failures.append(f"CI workflow missing marker: {marker}")
 
@@ -165,6 +178,7 @@ def check() -> tuple[int, list[str]]:
     messages.append("demo-verifier-help=ok" if not cli_help_failures else "demo-verifier-help=failed")
     messages.append("community-files=present" if not missing_community_files else "community-files=missing")
     messages.append("ci-workflow=present" if CI_WORKFLOW.exists() else "ci-workflow=missing")
+    messages.append("packet-upload=present" if packet_upload_present else "packet-upload=missing")
     messages.append("release-workflow=present" if RELEASE_WORKFLOW.exists() else "release-workflow=missing")
     messages.append("release-tag=not-created")
     messages.append("build-gate=pyproject-present")

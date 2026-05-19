@@ -43,6 +43,9 @@ def test_ci_and_release_workflows_exist_and_cover_pypi() -> None:
     assert "python scripts/public_readiness.py --check" in ci
     assert "python -m build" in ci
     assert "python -m twine check dist/*" in ci
+    assert "safeloop demo --output-dir .safeloop/ci-demo --json" in ci
+    assert "actions/upload-artifact@v4" in ci
+    assert "safeloop-packet-demo" in ci
     assert "pypa/gh-action-pypi-publish@release/v1" in release
     assert "softprops/action-gh-release@v2" in release
     assert "Validate tag matches pyproject version" in release

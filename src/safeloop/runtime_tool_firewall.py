@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 from datetime import datetime, timezone
 from pathlib import Path
@@ -233,12 +234,15 @@ def _base_record(
     reason: str,
     route: Route,
     route_reason: str,
+    source: str,
+    action_id: str | None = None,
 ) -> dict[str, Any]:
     manual_review_required = route == "manual_review"
-    return {
+    record = {
         "schema_version": SCHEMA_VERSION,
         "timestamp": _utc_now(),
         "run_id": run_id,
+        "source": source,
         "tool": tool,
         "action": action,
         "target": target,
@@ -253,6 +257,9 @@ def _base_record(
         "exact_rollback": route == "quarantine",
         "external_dispatch_allowed": False,
     }
+    if action_id:
+        record["action_id"] = action_id
+    return record
 
 
 def _route_quarantine(
@@ -339,6 +346,8 @@ def route_tool_action(
     actor: str = "unknown",
     target_kind: TargetKind = "auto",
     dry_run: bool = False,
+    source: str = "api",
+    action_id: str | None = None,
 ) -> dict[str, Any]:
     """Route a tool request to quarantine, external outbox, or manual review.
 
@@ -353,6 +362,8 @@ def route_tool_action(
     reason_value = (reason or "").strip()
     actor_value = (actor or "").strip() or "unknown"
     kind_value = (target_kind or "auto").strip()
+    source_value = (source or "").strip() or "api"
+    action_id_value = (action_id or "").strip() or None
     if kind_value not in _TARGET_KINDS:
         raise RuntimeToolFirewallError(f"target_kind must be one of: {', '.join(sorted(_TARGET_KINDS))}")
     if not tool_value:
@@ -377,6 +388,8 @@ def route_tool_action(
         reason=reason_value,
         route=route,
         route_reason=route_reason,
+        source=source_value,
+        action_id=action_id_value,
     )
     if dry_run:
         record["dry_run"] = True
@@ -432,6 +445,72 @@ def route_tool_action(
     record.setdefault("artifacts", [])
     record["artifacts"] = sorted(dict.fromkeys([FIREWALL_LOG, *record["artifacts"]]))
     return _append_firewall_event(run_path, record)
+
+
+def _env_run_dir() -> Path:
+    run_dir = os.environ.get("SAFELOOP_RUN_DIR")
+    if not run_dir:
+        raise RuntimeToolFirewallError("run_dir is required when SAFELOOP_RUN_DIR is not set")
+    return Path(run_dir)
+
+
+def _validate_env_run_binding(run_path: Path) -> None:
+    expected_run_id = os.environ.get("SAFELOOP_RUN_ID")
+    if not expected_run_id:
+        raise RuntimeToolFirewallError("SAFELOOP_RUN_ID is required when run_dir is omitted")
+    actual_run_id = _load_run_id(run_path)
+    if actual_run_id != expected_run_id:
+        raise RuntimeToolFirewallError(
+            f"SAFELOOP_RUN_ID mismatch for {run_path}: env={expected_run_id!r} run.json={actual_run_id!r}"
+        )
+
+
+def firewall_preflight(
+    *,
+    tool: str,
+    action: str,
+    target: str,
+    reason: str,
+    run_dir: str | Path | None = None,
+    workspace_root: str | Path = ".",
+    actor: str = "unknown",
+    target_kind: TargetKind = "auto",
+    dry_run: bool = False,
+    strict: bool = False,
+    action_id: str | None = None,
+) -> dict[str, Any]:
+    """Classify and record a runtime tool request before execution.
+
+    The helper never executes the requested tool. When ``run_dir`` is omitted,
+    it binds to the active SafeLoop run via ``SAFELOOP_RUN_DIR`` and verifies
+    ``SAFELOOP_RUN_ID`` against ``run.json``. When called inside
+    ``action_span()``, the current ``SAFELOOP_ACTION_ID`` is attached to the
+    firewall event unless an explicit ``action_id`` is provided.
+    """
+
+    run_path = Path(run_dir) if run_dir is not None else _env_run_dir()
+    if run_dir is None:
+        _validate_env_run_binding(run_path)
+    effective_action_id = (action_id or "").strip() or os.environ.get("SAFELOOP_ACTION_ID") or None
+    event = route_tool_action(
+        run_path,
+        tool=tool,
+        action=action,
+        target=target,
+        workspace_root=workspace_root,
+        reason=reason,
+        actor=actor,
+        target_kind=target_kind,
+        dry_run=dry_run,
+        source="runtime_helper",
+        action_id=effective_action_id,
+    )
+    if strict and event.get("route") == "manual_review":
+        route_reason = event.get("route_reason") or "manual_review"
+        raise RuntimeToolFirewallError(
+            f"runtime tool firewall preflight requires manual review: {route_reason}"
+        )
+    return event
 
 
 def read_runtime_tool_firewall_events(run_dir: str | Path) -> list[dict[str, Any]]:

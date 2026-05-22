@@ -138,6 +138,15 @@ safeloop firewall route "$RUN_DIR" --tool mystery --action transmogrify --target
 safeloop firewall list "$RUN_DIR" --json
 ```
 
+Agent code can use the same route layer before calling a tool. Under `safeloop watch-run`, `firewall_preflight()` reads `SAFELOOP_RUN_DIR` and records the active `action_span()` ID on the firewall event:
+
+```python
+from safeloop import action_span, firewall_preflight
+
+with action_span("inspect_docs", intent="read docs"):
+    firewall_preflight(tool="rg", action="search", target="README.md", reason="inspect docs")
+```
+
 Default route: destructive/local mutation goes to quarantine, external write/send/publish goes to `external-outbox.json`, and unknown semantics go to manual review. The firewall log is hash-chained under a file lock. `--dry-run` classifies without writing artifacts, and `--strict` exits non-zero for manual review. External dispatch stays `false`, and external actions remain `exact_rollback: false`. See [`docs/specs/runtime-tool-firewall-v1.md`](docs/specs/runtime-tool-firewall-v1.md).
 
 ## Demo commands

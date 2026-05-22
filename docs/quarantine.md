@@ -35,6 +35,8 @@ safeloop firewall route "$RUN_DIR" --tool rm --action delete --target generated.
 
 The firewall records `runtime-tool-firewall.jsonl` as a hash-chained log under a file lock. Destructive/local mutation routes to quarantine, external write/send/publish routes to `external-outbox.json`, and unknown semantics route to manual review. Use `--dry-run --strict` to classify a request without writing artifacts and fail the command when the request would require manual review.
 
+Agent/runtime code can call `firewall_preflight()` before a tool call. Under `action_span()`, SafeLoop records the span's `action_id` on the firewall event so operator packets can link `runtime-tool-firewall.jsonl` back to `action-events.jsonl`.
+
 List items:
 
 ```bash

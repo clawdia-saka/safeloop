@@ -430,6 +430,8 @@ def render_operator_packet_v2(
         )
     for item in firewall_items:
         evidence = ["runtime-tool-firewall.jsonl"]
+        if item.get("action_id"):
+            evidence.append("action-events.jsonl")
         if item.get("quarantine_item_id"):
             evidence.append("quarantine")
         if item.get("outbox_id"):

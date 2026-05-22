@@ -13,7 +13,7 @@ from safeloop.external_outbox import read_external_outbox
 from safeloop.operator_packet import render_operator_packet_v2
 from safeloop.operator_packet_manifest import write_operator_packet_manifest
 from safeloop.quarantine import list_quarantine
-from safeloop.runtime_tool_firewall import RuntimeToolFirewallError, read_runtime_tool_firewall_events, route_tool_action
+from safeloop.runtime_tool_firewall import RuntimeToolFirewallError, firewall_preflight, read_runtime_tool_firewall_events, route_tool_action
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -226,6 +226,53 @@ def test_read_only_tool_routes_to_allow_read_only(tmp_path: Path) -> None:
     assert not (run_dir / "external-outbox.json").exists()
 
 
+def test_firewall_preflight_uses_safeloop_run_env_and_action_id(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    run_dir = make_run_dir(tmp_path)
+    monkeypatch.setenv("SAFELOOP_RUN_DIR", str(run_dir))
+    monkeypatch.setenv("SAFELOOP_RUN_ID", "run-firewall")
+    monkeypatch.setenv("SAFELOOP_ACTION_ID", "act-preflight")
+
+    event = firewall_preflight(tool="rg", action="search", target="README.md", reason="inspect docs")
+
+    assert event["source"] == "runtime_helper"
+    assert event["action_id"] == "act-preflight"
+    assert event["route"] == "allow_read_only"
+    persisted = read_runtime_tool_firewall_events(run_dir)[0]
+    assert persisted["action_id"] == "act-preflight"
+    assert persisted["source"] == "runtime_helper"
+
+
+def test_firewall_preflight_strict_manual_review_records_then_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    run_dir = make_run_dir(tmp_path)
+    monkeypatch.setenv("SAFELOOP_RUN_DIR", str(run_dir))
+    monkeypatch.setenv("SAFELOOP_RUN_ID", "run-firewall")
+
+    with pytest.raises(RuntimeToolFirewallError, match="requires manual review"):
+        firewall_preflight(
+            tool="mystery",
+            action="transmogrify",
+            target="opaque-ref",
+            reason="agent requested an unknown capability",
+            strict=True,
+        )
+
+    events = read_runtime_tool_firewall_events(run_dir)
+    assert len(events) == 1
+    assert events[0]["route"] == "manual_review"
+    assert events[0]["manual_review_required"] is True
+
+
+def test_firewall_preflight_validates_env_run_id_before_writing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    run_dir = make_run_dir(tmp_path)
+    monkeypatch.setenv("SAFELOOP_RUN_DIR", str(run_dir))
+    monkeypatch.setenv("SAFELOOP_RUN_ID", "wrong-run")
+
+    with pytest.raises(RuntimeToolFirewallError, match="SAFELOOP_RUN_ID mismatch"):
+        firewall_preflight(tool="rg", action="search", target="README.md", reason="inspect docs")
+
+    assert not (run_dir / "runtime-tool-firewall.jsonl").exists()
+
+
 def test_dry_run_classifies_without_writing_firewall_or_downstream_artifacts(tmp_path: Path) -> None:
     workspace = make_workspace(tmp_path)
     run_dir = make_run_dir(tmp_path)
@@ -273,6 +320,7 @@ def test_firewall_cli_route_outputs_json(tmp_path: Path) -> None:
     event = json.loads(result.stdout)
     assert event["route"] == "external_outbox"
     assert event["outbox_id"] == "outbox-0001"
+    assert event["source"] == "cli"
 
 
 def test_firewall_cli_dry_run_strict_manual_review_returns_nonzero_without_writing(tmp_path: Path) -> None:
@@ -324,6 +372,23 @@ def test_operator_packet_and_manifest_surface_firewall_artifact(tmp_path: Path) 
     assert firewall["required"] is False
 
 
+def test_operator_packet_surfaces_action_event_evidence_for_correlated_firewall_event(tmp_path: Path) -> None:
+    run_dir = make_run_dir(tmp_path)
+    route_tool_action(
+        run_dir,
+        tool="mystery",
+        action="transmogrify",
+        target="opaque-ref",
+        reason="agent requested an unknown capability",
+        source="runtime_helper",
+        action_id="act-fw",
+    )
+
+    packet = render_operator_packet_v2(run_dir)
+
+    assert "| fw-0001 | runtime_tool_firewall | opaque-ref | manual_review | false | runtime-tool-firewall.jsonl; action-events.jsonl |" in packet
+
+
 def test_runtime_tool_firewall_docs_pin_default_routes() -> None:
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     spec = (ROOT / "docs" / "specs" / "runtime-tool-firewall-v1.md").read_text(encoding="utf-8")
@@ -334,3 +399,5 @@ def test_runtime_tool_firewall_docs_pin_default_routes() -> None:
         assert "quarantine" in text
         assert "external-outbox.json" in text
         assert "manual review" in text
+    assert "firewall_preflight" in readme
+    assert "firewall_preflight" in spec

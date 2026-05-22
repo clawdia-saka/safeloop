@@ -133,11 +133,22 @@ def action_span(name: str, *, intent: str | None = None) -> Iterator[str | None]
     }
     before = _snapshot_text(Path.cwd())
     append_action_event(path, {**common, "event_type": "action_started", "timestamp": _now()})
+    previous_action_id = os.environ.get("SAFELOOP_ACTION_ID")
+    os.environ["SAFELOOP_ACTION_ID"] = action_id
     try:
         yield action_id
     finally:
-        files, hunks = _action_changes(Path.cwd(), before)
-        append_action_event(path, {**common, "event_type": "action_finished", "timestamp": _now(), "files": files, "hunks": hunks})
+        try:
+            files, hunks = _action_changes(Path.cwd(), before)
+            append_action_event(
+                path,
+                {**common, "event_type": "action_finished", "timestamp": _now(), "files": files, "hunks": hunks},
+            )
+        finally:
+            if previous_action_id is None:
+                os.environ.pop("SAFELOOP_ACTION_ID", None)
+            else:
+                os.environ["SAFELOOP_ACTION_ID"] = previous_action_id
 
 
 def verify_action_events(path: Path) -> dict[str, Any]:

@@ -7,6 +7,7 @@ from pathlib import Path
 from safeloop import action_span
 from safeloop.action_span import verify_action_events
 from safeloop.agent_watchdog import verify_run, watch_run
+from safeloop.runtime_tool_firewall import read_runtime_tool_firewall_events
 
 
 def _read_events(path: Path):
@@ -102,6 +103,29 @@ def test_action_span_inside_watched_agent_creates_action_events_and_verify_inclu
     result = verify_run(run_dir)
     assert result["status"] == "valid"
     assert "action-events.jsonl" in result["checked_artifacts"]
+
+
+def test_action_span_correlates_runtime_firewall_preflight(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    script = repo / "agent.py"
+    src_path = str(Path(__file__).resolve().parents[1] / "src")
+    script.write_text(
+        "import sys\n"
+        f"sys.path.insert(0, {src_path!r})\n"
+        "from safeloop import action_span, firewall_preflight\n"
+        "with action_span('inspect_docs', intent='read docs'):\n"
+        "    firewall_preflight(tool='rg', action='search', target='README.md', reason='inspect docs')\n"
+    )
+
+    code, run_dir = watch_run("task", repo, [sys.executable, str(script)], run_root=tmp_path / "runs", debounce_ms=10)
+    assert code == 0
+    action_events = _read_events(run_dir / "action-events.jsonl")
+    firewall_events = read_runtime_tool_firewall_events(run_dir)
+    assert len(firewall_events) == 1
+    assert firewall_events[0]["action_id"] == action_events[0]["action_id"]
+    assert firewall_events[0]["source"] == "runtime_helper"
+    assert verify_run(run_dir)["status"] == "valid"
 
 
 def test_verify_artifacts_validates_action_events_if_present(tmp_path, monkeypatch):

@@ -1455,6 +1455,7 @@ def main(argv: list[str] | None = None) -> int:
                     reason=args.reason,
                     actor=args.actor,
                     dry_run=args.dry_run,
+                    source="cli",
                 )
                 if args.json:
                     print(json.dumps(event, indent=2, sort_keys=True))

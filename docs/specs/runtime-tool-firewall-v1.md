@@ -24,6 +24,8 @@ Important fields:
 - `event_id`: run-local route event ID such as `fw-0001`
 - `prev_event_hash`: previous firewall route hash, or `null` for the first event
 - `event_hash`: SHA-256 hash over the canonical route event without `event_hash`
+- `source`: `cli`, `api`, or `runtime_helper`
+- `action_id`: optional `action-events.jsonl` action ID when the request is made inside an `action_span()`
 - `tool`, `action`, `target`, `target_kind`: narrow references for the requested tool intent
 - `route`: `allow_read_only`, `quarantine`, `external_outbox`, or `manual_review`
 - `route_reason`: why the default route was selected
@@ -78,6 +80,21 @@ List route events:
 ```bash
 safeloop firewall list RUN_DIR --json
 ```
+
+## Runtime Helper
+
+Use `firewall_preflight()` in agent/runtime code before a tool call. The helper only classifies and records the route; it does not call the tool.
+
+```python
+from safeloop import action_span, firewall_preflight
+
+with action_span("inspect_docs", intent="read docs"):
+    firewall_preflight(tool="rg", action="search", target="README.md", reason="inspect docs")
+```
+
+When `run_dir` is omitted, the helper reads `SAFELOOP_RUN_DIR` and validates `SAFELOOP_RUN_ID` against `run.json`. When called inside `action_span()`, SafeLoop sets `SAFELOOP_ACTION_ID` for the duration of the span and the firewall event records that ID. Operator packets show `action-events.jsonl` as supporting evidence for correlated firewall events.
+
+`strict=True` raises `RuntimeToolFirewallError` when the selected route is `manual_review`. Without `dry_run`, the manual-review route event is still persisted before the exception so the operator has audit evidence. With `dry_run=True`, no artifacts are written.
 
 ## Downstream Boundaries
 

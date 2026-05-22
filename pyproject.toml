@@ -41,7 +41,9 @@ dev = [
   "httpx>=0.27",
   "PyYAML>=6",
   "pytest>=8",
+  "setuptools>=77",
   "twine>=5",
+  "wheel>=0.45",
 ]
 
 [project.scripts]

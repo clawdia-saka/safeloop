@@ -59,3 +59,7 @@ def test_pyproject_exposes_release_metadata() -> None:
     assert project["license"] == "MIT"
     assert project["license-files"] == ["LICENSE"]
     assert "dev" in project["optional-dependencies"]
+    dev_dependencies = project["optional-dependencies"]["dev"]
+    assert "build>=1" in dev_dependencies
+    assert "setuptools>=77" in dev_dependencies
+    assert "wheel>=0.45" in dev_dependencies

@@ -44,7 +44,21 @@ def test_ci_and_release_workflows_exist_and_cover_pypi() -> None:
     assert "python -m build" in ci
     assert "python -m twine check dist/*" in ci
     assert "safeloop demo --output-dir .safeloop/ci-demo --json" in ci
-    assert "actions/upload-artifact@v4" in ci
+    assert "actions/checkout@v6" in ci
+    assert "actions/setup-python@v6" in ci
+    assert "actions/upload-artifact@v6" in ci
+    assert "actions/checkout@v6" in release
+    assert "actions/setup-python@v6" in release
+    assert "actions/upload-artifact@v6" in release
+    assert "actions/download-artifact@v7" in release
+    for deprecated in [
+        "actions/checkout@v4",
+        "actions/setup-python@v5",
+        "actions/upload-artifact@v4",
+        "actions/download-artifact@v4",
+    ]:
+        assert deprecated not in ci
+        assert deprecated not in release
     assert "safeloop-packet-demo" in ci
     assert "pypa/gh-action-pypi-publish@release/v1" in release
     assert "softprops/action-gh-release@v2" in release

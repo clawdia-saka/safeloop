@@ -1,15 +1,16 @@
-# SafeLoop Quarantine v1
+# SafeLoop Quarantine v2
 
 SafeLoop quarantine converts destructive local file cleanup into an inspectable lifecycle event before the irreversible boundary.
 
 The core capture scope is intentionally small:
 
-- local single regular file delete only
-- no directory quarantine
+- local regular file delete
+- explicit directory quarantine with `--recursive`
 - no symlink quarantine
 - no external side effects
 - no hosted control plane
 - no automatic tool firewall
+- no mutation of SafeLoop run artifacts
 
 Quarantine is not a replacement for review. It preserves evidence and a restore path for covered local files.
 
@@ -19,6 +20,12 @@ Put a file into quarantine:
 
 ```bash
 safeloop quarantine put generated.txt --run-dir "$RUN_DIR" --reason "cleanup generated artifact"
+```
+
+Put a directory into quarantine under the strict v2 boundary:
+
+```bash
+safeloop quarantine put generated-dir --recursive --run-dir "$RUN_DIR" --reason "cleanup generated directory"
 ```
 
 List items:
@@ -70,6 +77,7 @@ RUN_DIR/
         audit.jsonl
         payload/
           file
+          tree/
 ```
 
 `item.json` records the lifecycle status, original workspace-relative path, reason, actor, permissions, size, and pre-delete hash.
@@ -78,7 +86,13 @@ RUN_DIR/
 
 `audit.jsonl` records lifecycle events such as `captured`, `restored`, `purged`, and `tampered`.
 
-After purge, `payload/file` is removed and `item.json` becomes a `quarantine-tombstone.v1` record. The audit trail remains.
+After purge, payload bytes (`payload/file` or `payload/tree`) are removed and `item.json` becomes a `quarantine-tombstone.v1` record. The audit trail remains.
+
+For directory quarantine, `payload/tree` contains the captured directory tree and `restore-manifest.json` includes deterministic file entries, permissions, and a directory digest. Directory restore refuses an existing destination; remove or rename the destination before restoring.
+
+## Mutation Boundary
+
+Quarantine refuses to capture or restore paths inside the SafeLoop `RUN_DIR`. Recursive directory quarantine also refuses a directory that would contain the `RUN_DIR`. This protects `run.json`, `timeline.jsonl`, local anchors, verification results, quarantine metadata, and packet evidence from being mutated by the recovery mechanism itself.
 
 ## Operator Packet Manifest
 

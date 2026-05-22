@@ -50,6 +50,7 @@ from safeloop.quarantine import (
     build_quarantine_rollback_summary,
     empty_quarantine,
     list_quarantine,
+    put_directory_in_quarantine,
     purge_quarantine_item,
     put_file_in_quarantine,
     restore_quarantine_item,
@@ -148,7 +149,7 @@ def _doctor_report(repo: Path) -> dict:
         ci_text = ci.read_text(encoding="utf-8")
         packet_markers = [
             "safeloop demo --output-dir .safeloop/ci-demo --json",
-            "actions/upload-artifact@v4",
+            "actions/upload-artifact@v6",
             "safeloop-packet-demo",
         ]
         missing = [marker for marker in packet_markers if marker not in ci_text]
@@ -1065,6 +1066,7 @@ def main(argv: list[str] | None = None) -> int:
     quarantine_put.add_argument("--reason", required=True)
     quarantine_put.add_argument("--actor", default="unknown")
     quarantine_put.add_argument("--workspace-root", default=".")
+    quarantine_put.add_argument("--recursive", action="store_true", help="Quarantine a directory under the strict v2 boundary.")
     quarantine_list = quarantine_sub.add_parser("list", help="List quarantine item lifecycle status.")
     quarantine_list.add_argument("--run-dir", required=True)
     quarantine_list.add_argument("--json", action="store_true")
@@ -1348,7 +1350,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "quarantine":
         try:
             if args.quarantine_cmd == "put":
-                item = put_file_in_quarantine(
+                put = put_directory_in_quarantine if args.recursive else put_file_in_quarantine
+                item = put(
                     args.path,
                     run_dir=Path(args.run_dir),
                     workspace_root=Path(args.workspace_root),
@@ -1357,6 +1360,7 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 print(f"Quarantined file: {item['item_id']}")
                 print(f"status: {item['status']}")
+                print(f"action: {item['action']}")
                 print(f"original path: {item['original_path']}")
                 print("restore supported: true")
                 return 0

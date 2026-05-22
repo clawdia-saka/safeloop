@@ -149,7 +149,7 @@ def check() -> tuple[int, list[str]]:
             "python -m pytest -q",
             "python scripts/public_readiness.py --check",
             "safeloop demo --output-dir .safeloop/ci-demo --json",
-            "actions/upload-artifact@v4",
+            "actions/upload-artifact@v6",
             "safeloop-packet-demo",
             "python -m build",
         ]

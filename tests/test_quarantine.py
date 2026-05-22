@@ -16,6 +16,7 @@ from safeloop.quarantine import (
     build_quarantine_rollback_summary,
     empty_quarantine,
     list_quarantine,
+    put_directory_in_quarantine,
     purge_quarantine_item,
     put_file_in_quarantine,
     restore_quarantine_item,
@@ -134,10 +135,90 @@ def test_put_refuses_missing_directory_and_symlink_targets(tmp_path: Path) -> No
 
     with pytest.raises(QuarantineError, match="missing file"):
         put_file_in_quarantine(workspace / "missing.txt", run_dir=run_dir, workspace_root=workspace, reason="cleanup")
-    with pytest.raises(QuarantineError, match="directories are not supported"):
+    with pytest.raises(QuarantineError, match="directories require --recursive"):
         put_file_in_quarantine(directory, run_dir=run_dir, workspace_root=workspace, reason="cleanup")
     with pytest.raises(QuarantineError, match="symlinks are not supported"):
         put_file_in_quarantine(symlink, run_dir=run_dir, workspace_root=workspace, reason="cleanup")
+
+
+def test_recursive_directory_quarantine_restores_tree_under_v2_boundary(tmp_path: Path) -> None:
+    workspace = make_workspace(tmp_path)
+    run_dir = make_run_dir(tmp_path)
+    directory = workspace / "bundle"
+    nested = directory / "nested"
+    empty = directory / "empty"
+    nested.mkdir(parents=True)
+    empty.mkdir()
+    (directory / "README.txt").write_text("root\n", encoding="utf-8")
+    script = nested / "script.sh"
+    script.write_text("#!/bin/sh\necho hi\n", encoding="utf-8")
+    script.chmod(0o750)
+
+    item = put_directory_in_quarantine(directory, run_dir=run_dir, workspace_root=workspace, reason="cleanup tree")
+
+    assert item["schema_version"] == "quarantine-item.v2"
+    assert item["action"] == "delete_directory"
+    assert item["restore_type"] == "directory"
+    assert item["directory_file_count"] == 2
+    assert not directory.exists()
+    assert verify_quarantine_item(item["item_id"], run_dir=run_dir)["status"] == "valid"
+    listed = list_quarantine(run_dir)["items"][0]
+    assert listed["restore_type"] == "directory"
+
+    result = restore_quarantine_item(item["item_id"], run_dir=run_dir, workspace_root=workspace)
+
+    assert result["restore_type"] == "directory"
+    assert (directory / "README.txt").read_text(encoding="utf-8") == "root\n"
+    assert (nested / "script.sh").read_text(encoding="utf-8") == "#!/bin/sh\necho hi\n"
+    assert empty.is_dir()
+    assert stat_permissions(nested / "script.sh") == "0o750"
+
+
+def test_recursive_directory_quarantine_refuses_symlink_children(tmp_path: Path) -> None:
+    workspace = make_workspace(tmp_path)
+    run_dir = make_run_dir(tmp_path)
+    directory = workspace / "bundle"
+    directory.mkdir()
+    real_file = directory / "real.txt"
+    real_file.write_text("real\n", encoding="utf-8")
+    (directory / "link.txt").symlink_to(real_file)
+
+    with pytest.raises(QuarantineError, match="symlinks are not supported in recursive quarantine"):
+        put_directory_in_quarantine(directory, run_dir=run_dir, workspace_root=workspace, reason="cleanup tree")
+
+    assert directory.exists()
+    assert real_file.exists()
+
+
+def test_quarantine_refuses_run_artifact_mutation_boundary(tmp_path: Path) -> None:
+    workspace = tmp_path
+    run_dir = make_run_dir(workspace)
+
+    with pytest.raises(QuarantineError, match="SafeLoop run artifacts cannot be quarantined"):
+        put_file_in_quarantine(run_dir / "run.json", run_dir=run_dir, workspace_root=workspace, reason="cleanup")
+
+    bundle = workspace / "bundle"
+    nested_run = bundle / "run"
+    nested_run.mkdir(parents=True)
+    (nested_run / "run.json").write_text("{}", encoding="utf-8")
+
+    with pytest.raises(QuarantineError, match="directory quarantine cannot capture SafeLoop run artifacts"):
+        put_directory_in_quarantine(bundle, run_dir=nested_run, workspace_root=workspace, reason="cleanup tree")
+
+
+def test_restore_refuses_run_artifact_mutation_from_manifest(tmp_path: Path) -> None:
+    workspace = tmp_path
+    run_dir = make_run_dir(workspace)
+    target = workspace / "safe.txt"
+    target.write_text("safe\n", encoding="utf-8")
+    item = put_file_in_quarantine(target, run_dir=run_dir, workspace_root=workspace, reason="cleanup")
+    _, restore_manifest_path, _, _ = item_artifacts(run_dir, item["item_id"])
+    manifest = json.loads(restore_manifest_path.read_text(encoding="utf-8"))
+    manifest["original_path"] = "run/run.json"
+    restore_manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+
+    with pytest.raises(QuarantineError, match="SafeLoop run artifacts cannot be restored"):
+        restore_quarantine_item(item["item_id"], run_dir=run_dir, workspace_root=workspace, overwrite=True)
 
 
 def test_restore_restores_exact_content_and_permissions(tmp_path: Path) -> None:
@@ -291,6 +372,28 @@ def test_quarantine_cli_put_list_verify_restore(tmp_path: Path) -> None:
     assert "quarantine verify: valid" in verify.stdout
     assert restore.returncode == 0, restore.stdout + restore.stderr
     assert target.read_text(encoding="utf-8") == "cli\n"
+
+
+def test_quarantine_cli_recursive_directory_put_restore(tmp_path: Path) -> None:
+    workspace = make_workspace(tmp_path)
+    run_dir = make_run_dir(tmp_path)
+    directory = workspace / "cli-dir"
+    directory.mkdir()
+    (directory / "notes.txt").write_text("cli directory\n", encoding="utf-8")
+
+    put = run_cli("quarantine", "put", "cli-dir", "--recursive", "--run-dir", str(run_dir), "--reason", "cleanup", cwd=workspace)
+    assert put.returncode == 0, put.stdout + put.stderr
+    assert not directory.exists()
+    assert "action: delete_directory" in put.stdout
+    item_id = [line.split(":", 1)[1].strip() for line in put.stdout.splitlines() if line.startswith("Quarantined file:")][0]
+
+    listed = run_cli("quarantine", "list", "--run-dir", str(run_dir), "--json", cwd=workspace)
+    restore = run_cli("quarantine", "restore", item_id, "--run-dir", str(run_dir), cwd=workspace)
+
+    assert listed.returncode == 0, listed.stdout + listed.stderr
+    assert json.loads(listed.stdout)["items"][0]["restore_type"] == "directory"
+    assert restore.returncode == 0, restore.stdout + restore.stderr
+    assert (directory / "notes.txt").read_text(encoding="utf-8") == "cli directory\n"
 
 
 def test_rollback_plan_includes_quarantine_restore_lifecycle(tmp_path: Path) -> None:

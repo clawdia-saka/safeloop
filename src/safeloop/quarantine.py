@@ -1,6 +1,7 @@
 """Reversible local file quarantine for destructive cleanup actions."""
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -15,14 +16,16 @@ from safeloop.agent_watchdog import atomic_json, now, sha_file
 from safeloop.local_anchor import create_local_anchor
 
 ITEM_SCHEMA_VERSION = "quarantine-item.v1"
+DIRECTORY_ITEM_SCHEMA_VERSION = "quarantine-item.v2"
 TOMBSTONE_SCHEMA_VERSION = "quarantine-tombstone.v1"
 RESTORE_SCHEMA_VERSION = "restore-manifest.v1"
 AUDIT_SCHEMA_VERSION = "quarantine-audit-event.v1"
 INDEX_SCHEMA_VERSION = "quarantine-index-entry.v1"
+SUPPORTED_ITEM_SCHEMA_VERSIONS = {ITEM_SCHEMA_VERSION, DIRECTORY_ITEM_SCHEMA_VERSION, TOMBSTONE_SCHEMA_VERSION}
 
 
 class QuarantineError(ValueError):
-    """Raised when a quarantine operation would cross a v0 safety boundary."""
+    """Raised when a quarantine operation would cross a safety boundary."""
 
 
 def _quarantine_root(run_dir: Path) -> Path:
@@ -168,6 +171,105 @@ def _payload_path(run_dir: Path, item_id: str) -> Path:
     return _item_dir(run_dir, item_id) / "payload" / "file"
 
 
+def _directory_payload_root(run_dir: Path, item_id: str) -> Path:
+    return _item_dir(run_dir, item_id) / "payload" / "tree"
+
+
+def _is_relative_to(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+    except ValueError:
+        return False
+    return True
+
+
+def _ensure_not_run_artifact_boundary(path: Path, run_dir: Path, *, operation: str, recursive: bool = False) -> None:
+    resolved_path = path.resolve(strict=False)
+    resolved_run = run_dir.resolve(strict=False)
+    if _is_relative_to(resolved_path, resolved_run):
+        raise QuarantineError(f"SafeLoop run artifacts cannot be {operation}")
+    if recursive and _is_relative_to(resolved_run, resolved_path):
+        raise QuarantineError("directory quarantine cannot capture SafeLoop run artifacts")
+
+
+def _directory_digest(entries: list[dict[str, Any]]) -> str:
+    payload = json.dumps(entries, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    return "sha256:" + hashlib.sha256(payload).hexdigest()
+
+
+def _scan_directory_tree(path: Path) -> list[dict[str, Any]]:
+    entries: list[dict[str, Any]] = []
+    try:
+        candidates = sorted(path.rglob("*"), key=lambda item: item.relative_to(path).as_posix())
+    except OSError as exc:
+        raise QuarantineError(f"could not scan directory: {exc}") from exc
+    for candidate in candidates:
+        rel = candidate.relative_to(path).as_posix()
+        if candidate.is_symlink():
+            raise QuarantineError("symlinks are not supported in recursive quarantine")
+        try:
+            st = candidate.stat()
+        except FileNotFoundError as exc:
+            raise QuarantineError("directory changed during quarantine; retry") from exc
+        if candidate.is_dir():
+            entries.append({"path": rel, "kind": "directory", "permissions": oct(st.st_mode & 0o777)})
+        elif candidate.is_file():
+            entries.append(
+                {
+                    "path": rel,
+                    "kind": "file",
+                    "permissions": oct(st.st_mode & 0o777),
+                    "sha256": sha_file(candidate),
+                    "size_bytes": st.st_size,
+                }
+            )
+        else:
+            raise QuarantineError("only regular files and directories are supported in recursive quarantine")
+    return entries
+
+
+def _copy_directory_payload(source: Path, payload_root: Path, entries: list[dict[str, Any]]) -> None:
+    for entry in entries:
+        rel = Path(str(entry["path"]))
+        destination = payload_root / rel
+        if entry.get("kind") == "directory":
+            destination.mkdir(parents=True, exist_ok=True)
+            destination.chmod(int(str(entry.get("permissions") or "0o700"), 8))
+        elif entry.get("kind") == "file":
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source / rel, destination)
+            if sha_file(destination) != entry.get("sha256"):
+                raise QuarantineError(f"payload copy verification failed: {entry['path']}")
+
+
+def _verify_directory_payload(payload_root: Path, entries: list[dict[str, Any]]) -> list[str]:
+    issues: list[str] = []
+    if not payload_root.exists():
+        return ["missing payload directory"]
+    expected = {str(entry.get("path")): entry for entry in entries}
+    actual: set[str] = set()
+    for candidate in sorted(payload_root.rglob("*"), key=lambda item: item.relative_to(payload_root).as_posix()):
+        rel = candidate.relative_to(payload_root).as_posix()
+        actual.add(rel)
+        expected_entry = expected.get(rel)
+        if candidate.is_symlink():
+            issues.append(f"payload symlink unsupported {rel}")
+            continue
+        if expected_entry is None:
+            issues.append(f"payload unexpected path {rel}")
+            continue
+        if expected_entry.get("kind") == "directory" and not candidate.is_dir():
+            issues.append(f"payload kind mismatch {rel}")
+        elif expected_entry.get("kind") == "file":
+            if not candidate.is_file():
+                issues.append(f"payload kind mismatch {rel}")
+            elif sha_file(candidate) != expected_entry.get("sha256"):
+                issues.append(f"payload sha256 mismatch {rel}")
+    for rel in sorted(set(expected) - actual):
+        issues.append(f"payload missing path {rel}")
+    return issues
+
+
 def _read_item(run_dir: Path, item_id: str) -> dict[str, Any]:
     item = _load_json(_item_json_path(run_dir, item_id))
     if item.get("item_id") != item_id:
@@ -202,6 +304,7 @@ def put_file_in_quarantine(
     actor: str = "unknown",
 ) -> dict[str, Any]:
     """Copy a regular file into quarantine metadata, then unlink the original last."""
+    run_path = Path(run_dir)
     root = _workspace_root(workspace_root)
     raw_target = Path(path)
     lexical_target = raw_target if raw_target.is_absolute() else root / raw_target
@@ -212,14 +315,14 @@ def put_file_in_quarantine(
         raise QuarantineError("symlinks are not supported in quarantine v0")
     if not target.exists():
         raise QuarantineError(f"missing file: {rel}")
+    _ensure_not_run_artifact_boundary(target, run_path, operation="quarantined")
     if target.is_dir():
-        raise QuarantineError("directories are not supported in quarantine v0")
+        raise QuarantineError("directories require --recursive quarantine")
     if not target.is_file():
         raise QuarantineError("only regular files are supported in quarantine v0")
     if _has_symlink_ancestor(target.parent, root):
         raise QuarantineError("quarantine path must not contain symlink ancestors")
 
-    run_path = Path(run_dir)
     item_id = _new_item_id()
     items_root = _items_root(run_path)
     items_root.mkdir(parents=True, exist_ok=True)
@@ -290,6 +393,115 @@ def put_file_in_quarantine(
     return item
 
 
+def put_directory_in_quarantine(
+    path: str | Path,
+    *,
+    run_dir: str | Path,
+    workspace_root: str | Path = ".",
+    reason: str,
+    actor: str = "unknown",
+) -> dict[str, Any]:
+    """Recursively quarantine a local directory under a strict v2 boundary."""
+    run_path = Path(run_dir)
+    root = _workspace_root(workspace_root)
+    raw_target = Path(path)
+    lexical_target = raw_target if raw_target.is_absolute() else root / raw_target
+    if lexical_target.is_symlink():
+        raise QuarantineError("symlinks are not supported in recursive quarantine")
+    target, rel = _relative_target(path, root)
+    if target.is_symlink():
+        raise QuarantineError("symlinks are not supported in recursive quarantine")
+    if not target.exists():
+        raise QuarantineError(f"missing directory: {rel}")
+    if not target.is_dir():
+        raise QuarantineError("recursive quarantine requires a directory")
+    if _has_symlink_ancestor(target.parent, root):
+        raise QuarantineError("quarantine path must not contain symlink ancestors")
+    _ensure_not_run_artifact_boundary(target, run_path, operation="quarantined", recursive=True)
+
+    first_entries = _scan_directory_tree(target)
+    item_id = _new_item_id()
+    items_root = _items_root(run_path)
+    items_root.mkdir(parents=True, exist_ok=True)
+    temp_dir = items_root / f".tmp-{item_id}-{os.getpid()}"
+    final_dir = items_root / item_id
+    if final_dir.exists():
+        raise QuarantineError("quarantine item already exists")
+    if temp_dir.exists():
+        shutil.rmtree(temp_dir)
+    payload_root = temp_dir / "payload" / "tree"
+    payload_root.mkdir(parents=True, exist_ok=True)
+    try:
+        _copy_directory_payload(target, payload_root, first_entries)
+        second_entries = _scan_directory_tree(target)
+        if _directory_digest(first_entries) != _directory_digest(second_entries):
+            raise QuarantineError("directory changed during quarantine; retry")
+    except Exception:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        raise
+
+    st = target.stat()
+    file_entries = [entry for entry in first_entries if entry.get("kind") == "file"]
+    digest = _directory_digest(first_entries)
+    item = {
+        "schema_version": DIRECTORY_ITEM_SCHEMA_VERSION,
+        "item_id": item_id,
+        "status": "retained",
+        "action": "delete_directory",
+        "restore_type": "directory",
+        "original_path": rel,
+        "captured_at": now(),
+        "reason": reason,
+        "actor": actor,
+        "workspace_root": str(root),
+        "mode": oct(st.st_mode & 0o777),
+        "sha256_before": digest,
+        "directory_digest": digest,
+        "directory_file_count": len(file_entries),
+        "directory_entry_count": len(first_entries),
+        "size_bytes": sum(int(entry.get("size_bytes") or 0) for entry in file_entries),
+        "permissions": oct(st.st_mode & 0o777),
+        "restore_supported": True,
+        "purge_allowed_after": None,
+        "boundary_version": "quarantine-boundary.v2",
+    }
+    restore_manifest = {
+        "schema_version": RESTORE_SCHEMA_VERSION,
+        "restore_type": "directory",
+        "original_path": rel,
+        "payload_path": "payload/tree",
+        "directory_digest": digest,
+        "entries": first_entries,
+        "permissions": oct(st.st_mode & 0o777),
+        "overwrite_default": False,
+        "path_policy": {
+            "allow_absolute_paths": False,
+            "allow_path_traversal": False,
+            "require_within_workspace": True,
+            "allow_symlinks": False,
+            "protect_safeloop_run_artifacts": True,
+        },
+    }
+    atomic_json(temp_dir / "item.json", item)
+    atomic_json(temp_dir / "restore-manifest.json", restore_manifest)
+    _append_jsonl(
+        temp_dir / "audit.jsonl",
+        {
+            "schema_version": AUDIT_SCHEMA_VERSION,
+            "event_id": "qevt-0001",
+            "item_id": item_id,
+            "event_type": "captured",
+            "timestamp": now(),
+            "payload": {"actor": actor, "reason": reason, "directory_digest": digest},
+        },
+    )
+    temp_dir.replace(final_dir)
+    shutil.rmtree(target)
+    _append_index(run_path, item)
+    _refresh_local_anchor_if_possible(run_path)
+    return item
+
+
 def verify_quarantine_item(item_id: str, *, run_dir: str | Path) -> dict[str, Any]:
     run_path = Path(run_dir)
     issues: list[str] = []
@@ -304,18 +516,43 @@ def verify_quarantine_item(item_id: str, *, run_dir: str | Path) -> dict[str, An
             "verified_at": now(),
         }
     status = str(item.get("status") or "unknown")
-    if item.get("schema_version") not in {ITEM_SCHEMA_VERSION, TOMBSTONE_SCHEMA_VERSION}:
+    if item.get("schema_version") not in SUPPORTED_ITEM_SCHEMA_VERSIONS:
         issues.append("item schema_version mismatch")
+    manifest: dict[str, Any] = {}
     if not (_restore_manifest_path(run_path, item_id).exists()):
         issues.append("missing restore-manifest.json")
+    else:
+        try:
+            manifest = _load_json(_restore_manifest_path(run_path, item_id))
+        except QuarantineError as exc:
+            issues.append(str(exc))
     if not (_audit_path(run_path, item_id).exists()):
         issues.append("missing audit.jsonl")
-    payload = _payload_path(run_path, item_id)
+    restore_type = str(item.get("restore_type") or manifest.get("restore_type") or "file")
+    payload_root = _item_dir(run_path, item_id) / "payload"
     if status == "purged":
-        if payload.exists():
+        if payload_root.exists():
             issues.append("purged item still has payload")
         result_status = "invalid" if issues else "valid"
+    elif restore_type == "directory":
+        raw_entries = manifest.get("entries")
+        if not isinstance(raw_entries, list) or any(not isinstance(entry, dict) for entry in raw_entries):
+            issues.append("directory restore entries malformed")
+            result_status = "invalid"
+        else:
+            payload_issues = _verify_directory_payload(_directory_payload_root(run_path, item_id), raw_entries)
+            expected_digest = item.get("directory_digest") or item.get("sha256_before")
+            actual_digest = _directory_digest(raw_entries)
+            if actual_digest != expected_digest:
+                payload_issues.append("directory digest mismatch")
+            if payload_issues:
+                issues.extend(payload_issues)
+                _mark_tampered(run_path, item, None)
+                result_status = "tampered"
+            else:
+                result_status = "invalid" if issues else "valid"
     else:
+        payload = _payload_path(run_path, item_id)
         if not payload.exists():
             issues.append("missing payload file")
             result_status = "invalid"
@@ -371,7 +608,51 @@ def restore_quarantine_item(
     manifest = _load_json(_restore_manifest_path(run_path, item_id))
     if manifest.get("schema_version") != RESTORE_SCHEMA_VERSION:
         raise QuarantineError("restore-manifest schema_version mismatch")
+    restore_type = str(manifest.get("restore_type") or item.get("restore_type") or "file")
     destination = _resolve_restore_path(str(manifest.get("original_path") or ""), root)
+    _ensure_not_run_artifact_boundary(destination, run_path, operation="restored", recursive=restore_type == "directory")
+    if restore_type == "directory":
+        if destination.exists():
+            raise QuarantineError("directory restore destination must not exist")
+        raw_entries = manifest.get("entries")
+        if not isinstance(raw_entries, list) or any(not isinstance(entry, dict) for entry in raw_entries):
+            raise QuarantineError("directory restore entries malformed")
+        payload_issues = _verify_directory_payload(_directory_payload_root(run_path, item_id), raw_entries)
+        if payload_issues:
+            _mark_tampered(run_path, item, None)
+            raise QuarantineError("directory quarantine payload verification failed")
+        destination.mkdir(parents=True, exist_ok=False)
+        for entry in sorted(raw_entries, key=lambda value: (str(value.get("path")).count("/"), str(value.get("path")))):
+            rel = Path(str(entry["path"]))
+            target = destination / rel
+            if entry.get("kind") == "directory":
+                target.mkdir(parents=True, exist_ok=True)
+                target.chmod(int(str(entry.get("permissions") or "0o700"), 8))
+        for entry in raw_entries:
+            if entry.get("kind") != "file":
+                continue
+            rel = Path(str(entry["path"]))
+            target = destination / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(_directory_payload_root(run_path, item_id) / rel, target)
+            target.chmod(int(str(entry.get("permissions") or "0o600"), 8))
+        destination.chmod(int(str(manifest.get("permissions") or item.get("permissions") or "0o700"), 8))
+        updated = dict(item)
+        updated["status"] = "restored"
+        updated["restored_at"] = now()
+        updated["restore_supported"] = True
+        _write_item(run_path, updated)
+        _append_audit(run_path, item_id, "restored", {"actor": actor, "overwrite": overwrite, "destination": manifest.get("original_path")})
+        _append_index(run_path, updated)
+        _refresh_local_anchor_if_possible(run_path)
+        return {
+            "schema_version": "quarantine-restore-result.v1",
+            "item_id": item_id,
+            "status": "restored",
+            "restore_type": "directory",
+            "restored_path": str(destination),
+            "overwrite": overwrite,
+        }
     if destination.exists() and not overwrite:
         raise QuarantineError("destination exists; pass --overwrite to restore over it")
     payload = _payload_path(run_path, item_id)
@@ -416,14 +697,18 @@ def purge_quarantine_item(
             "status": "purged",
             "already_purged": True,
         }
-    payload = _payload_path(run_path, item_id)
-    if payload.exists():
-        payload.unlink()
+    payload_root = _item_dir(run_path, item_id) / "payload"
+    if payload_root.exists():
+        if payload_root.is_symlink():
+            payload_root.unlink()
+        else:
+            shutil.rmtree(payload_root)
     tombstone = {
         "schema_version": TOMBSTONE_SCHEMA_VERSION,
         "item_id": item_id,
         "status": "purged",
         "action": item.get("action", "delete_file"),
+        "restore_type": item.get("restore_type", "file"),
         "original_path": item.get("original_path"),
         "captured_at": item.get("captured_at"),
         "reason": item.get("reason"),
@@ -431,6 +716,9 @@ def purge_quarantine_item(
         "workspace_root": item.get("workspace_root"),
         "mode": item.get("mode"),
         "sha256_before": item.get("sha256_before"),
+        "directory_digest": item.get("directory_digest"),
+        "directory_file_count": item.get("directory_file_count"),
+        "directory_entry_count": item.get("directory_entry_count"),
         "size_bytes": item.get("size_bytes"),
         "permissions": item.get("permissions"),
         "restore_supported": False,
@@ -465,10 +753,12 @@ def list_quarantine(run_dir: str | Path) -> dict[str, Any]:
                     "item_id": item.get("item_id"),
                     "status": item.get("status"),
                     "action": item.get("action", "delete_file"),
+                    "restore_type": item.get("restore_type", "file"),
                     "original_path": item.get("original_path"),
                     "captured_at": item.get("captured_at"),
                     "restore_supported": item.get("restore_supported", False),
                     "sha256_before": item.get("sha256_before"),
+                    "directory_file_count": item.get("directory_file_count"),
                 }
             )
     items.sort(key=lambda item: (str(item.get("captured_at") or ""), str(item.get("item_id") or "")))
@@ -637,6 +927,8 @@ def build_quarantine_rollback_summary(run_dir: str | Path) -> dict[str, Any] | N
         record = {
             "item_id": item_id,
             "original_path": original_path,
+            "action": item.get("action", "delete_file"),
+            "restore_type": item.get("restore_type", "file"),
             "status": status,
             "rollback_mode": rollback_mode,
             "rollback_status": rollback_status,

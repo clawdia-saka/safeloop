@@ -47,6 +47,7 @@ from safeloop.operator_packet_manifest import (
 from safeloop.policy_check import PolicyCheckError, build_policy_rollback_suggestion, run_policy_check
 from safeloop.quarantine import (
     QuarantineError,
+    build_quarantine_rollback_summary,
     empty_quarantine,
     list_quarantine,
     purge_quarantine_item,
@@ -98,6 +99,13 @@ def _rollback_artifact(run_dir: Path, checkpoint_id: str, res: dict, *, apply: b
 
 def _load_json(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _attach_quarantine_rollback(run_dir: Path, artifact: dict) -> dict:
+    summary = build_quarantine_rollback_summary(run_dir)
+    if summary is not None:
+        artifact["quarantine"] = summary
+    return artifact
 
 
 def _run_checked(cmd: list[str], *, cwd: Path) -> None:
@@ -572,9 +580,9 @@ def _selected_hunk_rollback(run_dir: Path, run_id: str, selected_hunks: list[str
             blockers.append({"hunk_id": h["hunk_id"], "file": rel, "code": "hunk_context_mismatch", "expected": "selected hunk post-change lines", "actual": "current hunk range differs"}); continue
     artifact = {"schema_version": "rollback-result.v1" if apply else "rollback-plan.v1", "operation": "rollback_selected_hunks", "run_id": run_id, "mode": "apply" if apply else "dry-run", "selected_hunks": selected, "affected_files": affected_files, "source": {"checkpoints": sorted({cp.name for cp, _ in chosen})}, "target": {"type": "current_worktree"}, "rollback_source_hashes": {h["path"]: h.get("after_text_hash") for _, h in chosen}, "status": "blocked" if blockers else ("applied" if apply else "ok"), "review_required": True, "blockers": blockers, "dependency_warnings": [], "external_side_effects": {"classification": "manual_review", "exact_rollback": False, "note": "External side effects are not exact rollback; review side-effects.jsonl for compensation or handoff."}, "preflight": {"status": "blocked" if blockers else "pass"}, "file_counts": {"created": 0, "modified": len(affected_files), "deleted": 0}, "apply_command": f"safeloop rollback apply {run_dir} {run_id} --hunks {' '.join(selected)}"}
     if not apply:
-        atomic_json(run_dir / "rollback-plan.json", artifact); return artifact
+        _attach_quarantine_rollback(run_dir, artifact); atomic_json(run_dir / "rollback-plan.json", artifact); return artifact
     if blockers:
-        artifact["blocked_reason"] = blockers[0]["code"]; atomic_json(run_dir / "rollback-result.json", artifact); return artifact
+        artifact["blocked_reason"] = blockers[0]["code"]; _attach_quarantine_rollback(run_dir, artifact); atomic_json(run_dir / "rollback-result.json", artifact); return artifact
     by_file: dict[str, list[tuple[Path, dict]]] = {}
     for cp, h in chosen:
         by_file.setdefault(h["path"], []).append((cp, h))
@@ -587,8 +595,10 @@ def _selected_hunk_rollback(run_dir: Path, run_id: str, selected_hunks: list[str
             lines[ns - 1 : ns - 1 + nl] = _hunk_context(before_lines, os, ol)
         p.write_text("".join(lines), encoding="utf-8")
     artifact["restored_hunk_count"] = len(selected)
+    _attach_quarantine_rollback(run_dir, artifact)
     atomic_json(run_dir / "rollback-result.json", artifact)
     artifact["verification"] = verify_run(run_dir, check_source_evidence=False)
+    _attach_quarantine_rollback(run_dir, artifact)
     atomic_json(run_dir / "rollback-result.json", artifact)
     return artifact
 
@@ -668,10 +678,12 @@ def _selected_rollback(run_dir: Path, run_id: str, selected_files: list[str], *,
             dependency_warnings.append({"file": f, "code": "later_changes_after_target"})
     artifact = {"schema_version": "rollback-result.v1" if apply else "rollback-plan.v1", "operation": "rollback_selected_files", "run_id": run_id, "mode": "apply" if apply else "dry-run", "selected_files": selected, "target": target, "rollback_source_hashes": {f: source_hashes.get(f) for f in selected}, "status": "blocked" if blockers else ("applied" if apply else "ok"), "review_required": True, "covered_local_file_changes": {"created": created, "modified": modified, "deleted": deleted}, "file_counts": {"created": len(created), "modified": len(modified), "deleted": len(deleted)}, "blockers": blockers, "dependency_warnings": dependency_warnings, "external_side_effects": {"classification": "manual_review", "exact_rollback": False, "note": "External side effects are not exact rollback; review side-effects.jsonl for compensation or handoff."}, "preflight": {"status": "blocked" if blockers else "pass"}, "apply_command": f"safeloop rollback apply {run_dir} {run_id} {'--from-checkpoint ' + checkpoint_id + ' ' if checkpoint_id else ''}--files {' '.join(selected)}"}
     if not apply:
+        _attach_quarantine_rollback(run_dir, artifact)
         atomic_json(run_dir / "rollback-plan.json", artifact)
         return artifact
     if blockers:
         artifact["blocked_reason"] = blockers[0]["code"]
+        _attach_quarantine_rollback(run_dir, artifact)
         atomic_json(run_dir / "rollback-result.json", artifact)
         return artifact
     apply_blockers: list[dict[str, str]] = []
@@ -688,9 +700,11 @@ def _selected_rollback(run_dir: Path, run_id: str, selected_files: list[str], *,
         artifact.update({"status": "blocked", "blockers": apply_blockers, "blocked_reason": apply_blockers[0]["code"], "preflight": {"status": "blocked"}})
     else:
         artifact["restored_file_count"] = len(created) + len(modified) + len(deleted)
+    _attach_quarantine_rollback(run_dir, artifact)
     atomic_json(run_dir / "rollback-result.json", artifact)
     if artifact["status"] == "applied":
         artifact["verification"] = verify_run(run_dir, check_source_evidence=False)
+        _attach_quarantine_rollback(run_dir, artifact)
         atomic_json(run_dir / "rollback-result.json", artifact)
     return artifact
 
@@ -768,6 +782,7 @@ def _action_rollback(run_dir: Path, run_id: str, action_id: str, *, apply: bool)
         artifact["verification"] = verify_run(run_dir, check_source_evidence=False)
     if blockers:
         artifact["blocked_reason"] = blockers[0].get("code")
+    _attach_quarantine_rollback(run_dir, artifact)
     atomic_json(run_dir / ("rollback-result.json" if apply else "rollback-plan.json"), artifact)
     return artifact
 
@@ -1433,6 +1448,7 @@ def main(argv: list[str] | None = None) -> int:
                 ok, reason, plan = _require_matching_action_plan(run_dir, args.run_id, args.action)
                 if not ok:
                     artifact = {"schema_version": "rollback-result.v1", "operation": "rollback_action", "run_id": args.run_id, "mode": "apply", "action_id": args.action, "status": "blocked", "preflight": {"status": "blocked"}, "blocked_reason": reason or "plan mismatch"}
+                    _attach_quarantine_rollback(run_dir, artifact)
                     atomic_json(run_dir / "rollback-result.json", artifact)
                     digests = {"rollback-result.json": sha_file(run_dir / "rollback-result.json")}
                     if plan is not None and (run_dir / "rollback-plan.json").exists():
@@ -1445,6 +1461,7 @@ def main(argv: list[str] | None = None) -> int:
             artifact = _action_rollback(run_dir, args.run_id, args.action, apply=apply_mode)
             if not apply_mode:
                 artifact["compensation"] = compensation_section_for_rollback(run_dir, action_id=args.action, include_compensation=args.include_compensation)
+                _attach_quarantine_rollback(run_dir, artifact)
                 atomic_json(run_dir / "rollback-plan.json", artifact)
             if apply_mode:
                 event_type = "rollback_applied" if artifact["status"] == "applied" else "rollback_blocked"
@@ -1480,6 +1497,7 @@ def main(argv: list[str] | None = None) -> int:
                         mismatch = "selected_hunks mismatch"
                 if mismatch:
                     artifact = {"schema_version": "rollback-result.v1", "operation": "rollback_selected_hunks", "run_id": args.run_id, "mode": "apply", "selected_hunks": selected, "status": "blocked", "preflight": {"status": "blocked"}, "blocked_reason": mismatch}
+                    _attach_quarantine_rollback(run_dir, artifact)
                     atomic_json(run_dir / "rollback-result.json", artifact)
                     digests = {"rollback-result.json": sha_file(run_dir / "rollback-result.json")}
                     if plan_path.exists(): digests["rollback-plan.json"] = sha_file(plan_path)
@@ -1493,6 +1511,7 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"rollback-result.json: {run_dir / 'rollback-result.json'}")
             else:
                 artifact["compensation"] = compensation_section_for_rollback(run_dir, action_id=args.action, include_compensation=args.include_compensation)
+                _attach_quarantine_rollback(run_dir, artifact)
                 atomic_json(run_dir / "rollback-plan.json", artifact)
                 _append_rollback_event(run_dir, "rollback_plan_created", {"operation": "rollback_selected_hunks", "selected_hunks": selected, "artifact_digests": {"rollback-plan.json": sha_file(run_dir / "rollback-plan.json")}})
                 print("Rollback plan: PASS" if artifact["preflight"]["status"] == "pass" else "Rollback plan: BLOCKED")
@@ -1508,6 +1527,7 @@ def main(argv: list[str] | None = None) -> int:
                 plan_path = run_dir / "rollback-plan.json"
                 if not plan_path.exists():
                     artifact = {"schema_version": "rollback-result.v1", "operation": "rollback_selected_files", "run_id": args.run_id, "mode": "apply", "selected_files": selected, "target": _target_from_args(checkpoint_id), "status": "blocked", "preflight": {"status": "blocked"}, "blocked_reason": "missing rollback-plan.json"}
+                    _attach_quarantine_rollback(run_dir, artifact)
                     atomic_json(run_dir / "rollback-result.json", artifact)
                     _append_rollback_event(run_dir, "rollback_blocked", {"operation": "rollback_selected_files", "target": artifact["target"], "reason": artifact["blocked_reason"], "artifact_digests": {"rollback-result.json": sha_file(run_dir / "rollback-result.json")}})
                     print("Rollback apply blocked")
@@ -1531,6 +1551,7 @@ def main(argv: list[str] | None = None) -> int:
                             break
                 if mismatch:
                     artifact = {"schema_version": "rollback-result.v1", "operation": "rollback_selected_files", "run_id": args.run_id, "mode": "apply", "selected_files": selected, "target": expected_target, "status": "blocked", "preflight": {"status": "blocked"}, "blocked_reason": mismatch}
+                    _attach_quarantine_rollback(run_dir, artifact)
                     atomic_json(run_dir / "rollback-result.json", artifact)
                     _append_rollback_event(run_dir, "rollback_blocked", {"operation": "rollback_selected_files", "target": expected_target, "reason": mismatch, "artifact_digests": {"rollback-plan.json": sha_file(plan_path), "rollback-result.json": sha_file(run_dir / "rollback-result.json")}})
                     print("Rollback apply blocked")
@@ -1544,6 +1565,7 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"rollback-result.json: {run_dir / 'rollback-result.json'}")
             else:
                 artifact["compensation"] = compensation_section_for_rollback(run_dir, action_id=args.action, include_compensation=args.include_compensation)
+                _attach_quarantine_rollback(run_dir, artifact)
                 atomic_json(run_dir / "rollback-plan.json", artifact)
                 _append_rollback_event(run_dir, "rollback_plan_created", {"operation": "rollback_selected_files", "target": artifact["target"], "selected_files": selected, "artifact_digests": {"rollback-plan.json": sha_file(run_dir / "rollback-plan.json")}})
                 print("Rollback plan: PASS" if artifact["preflight"]["status"] == "pass" else "Rollback plan: BLOCKED")
@@ -1561,16 +1583,20 @@ def main(argv: list[str] | None = None) -> int:
                 ok, reason, plan = _require_matching_rollback_plan(run_dir, args.run_id, checkpoint_id=None, to_start=True)
                 if not ok:
                     artifact = _block_rollback_apply(run_dir, args.run_id, checkpoint_id=None, to_start=True, reason=reason or "plan mismatch", plan=plan)
+                    _attach_quarantine_rollback(run_dir, artifact)
                     atomic_json(run_dir / "rollback-result.json", artifact)
                     print("Rollback apply blocked")
                     print(f"blocked reason: {artifact['blocked_reason']}")
                     print(f"rollback-result.json: {run_dir / 'rollback-result.json'}")
                     return 1
             artifact = rollback_to_start(run_dir, args.run_id, apply=apply_mode)
+            _attach_quarantine_rollback(run_dir, artifact)
             if apply_mode:
                 if artifact["status"] == "applied":
+                    atomic_json(run_dir / "rollback-result.json", artifact)
                     event_type = "rollback_applied"
                 else:
+                    _attach_quarantine_rollback(run_dir, artifact)
                     atomic_json(run_dir / "rollback-result.json", artifact)
                     event_type = "rollback_blocked"
                 _append_rollback_event(run_dir, event_type, {"operation": "rollback_to_start", "rollback_status": artifact["status"], "target": {"type": "start"}, "artifact_digests": {"rollback-plan.json": sha_file(run_dir / "rollback-plan.json"), "rollback-result.json": sha_file(run_dir / "rollback-result.json")}})
@@ -1578,6 +1604,7 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"rollback-result.json: {run_dir / 'rollback-result.json'}")
             else:
                 artifact["compensation"] = compensation_section_for_rollback(run_dir, action_id=args.action, include_compensation=args.include_compensation)
+                _attach_quarantine_rollback(run_dir, artifact)
                 atomic_json(run_dir / "rollback-plan.json", artifact)
                 _append_rollback_event(run_dir, "rollback_plan_created", {"operation": "rollback_to_start", "target": {"type": "start"}, "artifact_digests": {"rollback-plan.json": sha_file(run_dir / "rollback-plan.json")}})
                 print("Rollback plan: PASS" if artifact["preflight"]["status"] == "pass" else "Rollback plan: BLOCKED")
@@ -1598,6 +1625,7 @@ def main(argv: list[str] | None = None) -> int:
             ok, reason, plan = _require_matching_rollback_plan(run_dir, args.run_id, checkpoint_id=args.checkpoint_id, to_start=False)
             if not ok:
                 artifact = _block_rollback_apply(run_dir, args.run_id, checkpoint_id=args.checkpoint_id, to_start=False, reason=reason or "plan mismatch", plan=plan)
+                _attach_quarantine_rollback(run_dir, artifact)
                 atomic_json(run_dir / "checkpoints" / args.checkpoint_id / "rollback-result.json", artifact)
                 print("Rollback apply blocked")
                 print(f"blocked reason: {artifact['blocked_reason']}")
@@ -1605,7 +1633,9 @@ def main(argv: list[str] | None = None) -> int:
                 return 1
         res = undo(run_dir, args.run_id, args.checkpoint_id, apply=apply_mode)
         artifact = _rollback_artifact(run_dir, args.checkpoint_id, res, apply=apply_mode)
+        _attach_quarantine_rollback(run_dir, artifact)
         if apply_mode:
+            _attach_quarantine_rollback(run_dir, artifact)
             atomic_json(run_dir / "checkpoints" / args.checkpoint_id / "rollback-result.json", artifact)
             event_type = "rollback_applied" if artifact["status"] == "applied" else "rollback_blocked"
             _append_rollback_event(run_dir, event_type, {"operation": "rollback_to_checkpoint", "checkpoint_id": args.checkpoint_id, "rollback_status": artifact["status"], "target": _target_selection(artifact), "artifact_digests": {"rollback-plan.json": sha_file(run_dir / "rollback-plan.json"), "rollback-result.json": sha_file(run_dir / "checkpoints" / args.checkpoint_id / "rollback-result.json")}})
@@ -1613,6 +1643,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"rollback-result.json: {run_dir / 'checkpoints' / args.checkpoint_id / 'rollback-result.json'}")
         else:
             artifact["compensation"] = compensation_section_for_rollback(run_dir, action_id=args.action, include_compensation=args.include_compensation)
+            _attach_quarantine_rollback(run_dir, artifact)
             atomic_json(run_dir / "rollback-plan.json", artifact)
             _append_rollback_event(run_dir, "rollback_plan_created", {"operation": "rollback_to_checkpoint", "target": _target_selection(artifact), "artifact_digests": {"rollback-plan.json": sha_file(run_dir / "rollback-plan.json")}})
             print("Rollback plan: PASS" if artifact["preflight"]["status"] == "pass" else "Rollback plan: BLOCKED")

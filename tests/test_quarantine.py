@@ -13,6 +13,7 @@ from safeloop.operator_packet import write_operator_packet_v2
 from safeloop.operator_packet_manifest import write_operator_packet_manifest, verify_operator_packet_manifest
 from safeloop.quarantine import (
     QuarantineError,
+    build_quarantine_rollback_summary,
     empty_quarantine,
     list_quarantine,
     purge_quarantine_item,
@@ -61,6 +62,32 @@ def run_cli(*args: str, cwd: Path = ROOT) -> subprocess.CompletedProcess[str]:
         timeout=30,
         check=False,
     )
+
+
+def make_watch_run(tmp_path: Path) -> tuple[Path, Path, str]:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "agent.py").write_text(
+        "from pathlib import Path\n"
+        "Path('result.txt').write_text('result\\n')\n",
+        encoding="utf-8",
+    )
+    result = run_cli(
+        "watch-run",
+        "--task-id",
+        "quarantine-rollback",
+        "--repo",
+        str(repo),
+        "--run-root",
+        str(tmp_path / "runs"),
+        "--",
+        sys.executable,
+        "agent.py",
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    run_dir = Path([line.split(":", 1)[1].strip() for line in result.stdout.splitlines() if line.startswith("Run dir:")][0])
+    run_id = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))["run_id"]
+    return repo, run_dir, run_id
 
 
 def item_artifacts(run_dir: Path, item_id: str) -> tuple[Path, Path, Path, Path]:
@@ -186,6 +213,25 @@ def test_purge_removes_payload_but_leaves_tombstone_and_audit(tmp_path: Path) ->
     assert verify_quarantine_item(item["item_id"], run_dir=run_dir)["status"] == "valid"
 
 
+def test_quarantine_rollback_summary_marks_purged_items_irreversible(tmp_path: Path) -> None:
+    workspace = make_workspace(tmp_path)
+    run_dir = make_run_dir(tmp_path)
+    target = workspace / "old.txt"
+    target.write_text("old\n", encoding="utf-8")
+    item = put_file_in_quarantine(target, run_dir=run_dir, workspace_root=workspace, reason="cleanup")
+
+    purge_quarantine_item(item["item_id"], run_dir=run_dir, reason="retention expired", actor="codex")
+    summary = build_quarantine_rollback_summary(run_dir)
+
+    assert summary is not None
+    assert summary["schema_version"] == "quarantine-rollback.v1"
+    assert summary["counts"]["irreversible"] == 1
+    record = summary["items"][0]
+    assert record["rollback_status"] == "irreversible_payload_purged"
+    assert record["exact_rollback"] is False
+    assert "payload purged" in record["blockers"]
+
+
 def test_empty_only_purges_old_retained_items(tmp_path: Path) -> None:
     workspace = make_workspace(tmp_path)
     run_dir = make_run_dir(tmp_path)
@@ -247,6 +293,46 @@ def test_quarantine_cli_put_list_verify_restore(tmp_path: Path) -> None:
     assert target.read_text(encoding="utf-8") == "cli\n"
 
 
+def test_rollback_plan_includes_quarantine_restore_lifecycle(tmp_path: Path) -> None:
+    repo, run_dir, run_id = make_watch_run(tmp_path)
+    target = repo / "scratch.txt"
+    target.write_text("scratch\n", encoding="utf-8")
+    item = put_file_in_quarantine(target, run_dir=run_dir, workspace_root=repo, reason="cleanup generated artifact")
+
+    result = run_cli("rollback", "plan", str(run_dir), run_id, "--to-start")
+    assert result.returncode == 0, result.stdout + result.stderr
+    plan = json.loads((run_dir / "rollback-plan.json").read_text(encoding="utf-8"))
+    quarantine = plan["quarantine"]
+    assert quarantine["schema_version"] == "quarantine-rollback.v1"
+    assert quarantine["counts"]["restore_available"] == 1
+    record = quarantine["items"][0]
+    assert record["item_id"] == item["item_id"]
+    assert record["original_path"] == "scratch.txt"
+    assert record["rollback_mode"] == "quarantine_restore"
+    assert record["rollback_status"] == "available"
+    assert record["exact_rollback"] is True
+    assert "safeloop quarantine restore" in record["restore_command"]
+    assert f"quarantine/items/{item['item_id']}/restore-manifest.json" in record["evidence"]
+
+
+def test_explain_includes_quarantine_lifecycle(tmp_path: Path) -> None:
+    repo, run_dir, _ = make_watch_run(tmp_path)
+    target = repo / "scratch.txt"
+    target.write_text("scratch\n", encoding="utf-8")
+    put_file_in_quarantine(target, run_dir=run_dir, workspace_root=repo, reason="cleanup generated artifact")
+
+    text = run_cli("explain", str(run_dir))
+    json_result = run_cli("explain", str(run_dir), "--json")
+    artifact = json.loads(json_result.stdout)
+
+    assert text.returncode == 0, text.stdout + text.stderr
+    assert "quarantine lifecycle: 1 items" in text.stdout
+    assert "rollback=available exact_rollback=true" in text.stdout
+    assert json_result.returncode == 0, json_result.stdout + json_result.stderr
+    assert artifact["quarantine"]["schema_version"] == "quarantine-rollback.v1"
+    assert artifact["quarantine"]["counts"]["restore_available"] == 1
+
+
 def test_operator_manifest_includes_quarantine_metadata_and_excludes_payload(tmp_path: Path) -> None:
     workspace = make_workspace(tmp_path)
     run_dir = make_run_dir(tmp_path)
@@ -265,6 +351,22 @@ def test_operator_manifest_includes_quarantine_metadata_and_excludes_payload(tmp
     assert f"quarantine/items/{item['item_id']}/audit.jsonl" in paths
     assert f"quarantine/items/{item['item_id']}/payload/file" not in paths
     assert result["verification"]["status"] == "valid"
+
+
+def test_operator_packet_includes_quarantine_rollback_rows(tmp_path: Path) -> None:
+    workspace = make_workspace(tmp_path)
+    run_dir = make_run_dir(tmp_path)
+    target = workspace / "packet.txt"
+    target.write_text("packet\n", encoding="utf-8")
+    item = put_file_in_quarantine(target, run_dir=run_dir, workspace_root=workspace, reason="cleanup")
+    plan = json.loads((run_dir / "rollback-plan.json").read_text(encoding="utf-8"))
+    plan["quarantine"] = build_quarantine_rollback_summary(run_dir)
+    (run_dir / "rollback-plan.json").write_text(json.dumps(plan, indent=2), encoding="utf-8")
+
+    packet = write_operator_packet_v2(run_dir).read_text(encoding="utf-8")
+
+    assert f"| {item['item_id']} | quarantine | packet.txt | available | true |" in packet
+    assert f"| quarantine restore: packet.txt | {item['item_id']} | available | true | none | safeloop quarantine restore" in packet
 
 
 def test_operator_manifest_requires_quarantine_evidence_when_quarantine_exists(tmp_path: Path) -> None:

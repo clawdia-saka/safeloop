@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from safeloop.agent_watchdog import atomic_json, timeline_summary
+from safeloop.quarantine import build_quarantine_rollback_summary
 from safeloop.side_effect_ledger import read_side_effect_events
 
 DOC_EXT = {".md", ".rst", ".txt"}
@@ -167,6 +168,9 @@ def build_rollback_groups(run_dir: Path) -> dict[str, Any]:
         "groups": groups,
         "side_effects": _side_effect_summary(run_dir),
     }
+    quarantine = build_quarantine_rollback_summary(run_dir)
+    if quarantine is not None:
+        artifact["quarantine"] = quarantine
     atomic_json(run_dir / "rollback-groups.json", artifact)
     return artifact
 
@@ -189,6 +193,23 @@ def print_rollback_groups(artifact: dict[str, Any]) -> None:
         f"(support={side_effects.get('support_status', 'manual_review')}, "
         f"exact_rollback={str(side_effects.get('exact_rollback', False)).lower()})"
     )
+    quarantine = artifact.get("quarantine")
+    if quarantine:
+        counts = quarantine.get("counts", {})
+        print(
+            "quarantine lifecycle: "
+            f"{counts.get('total', 0)} items "
+            f"(restore_available={counts.get('restore_available', 0)}, "
+            f"irreversible={counts.get('irreversible', 0)}, "
+            f"manual_review={counts.get('manual_review', 0)})"
+        )
+        for item in quarantine.get("items", []):
+            print(
+                "  quarantine "
+                f"{item.get('item_id')}: {item.get('original_path')} "
+                f"rollback={item.get('rollback_status')} "
+                f"exact_rollback={str(item.get('exact_rollback', False)).lower()}"
+            )
     for g in artifact["groups"]:
         print(f"{g['group_id']} {g['title']}")
         print(f"  files: {', '.join(g['files']) if g['files'] else '-'}")

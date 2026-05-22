@@ -93,6 +93,30 @@ def _file_items_from_plan(plan: dict) -> list[str]:
     return sorted(dict.fromkeys(items))
 
 
+def _quarantine_items_from_plan(plan: dict) -> list[dict]:
+    quarantine = plan.get("quarantine")
+    if not isinstance(quarantine, dict):
+        return []
+    items = quarantine.get("items")
+    if not isinstance(items, list):
+        return []
+    return [item for item in items if isinstance(item, dict)]
+
+
+def _quarantine_evidence(item: dict) -> str:
+    evidence = item.get("evidence")
+    if isinstance(evidence, list) and evidence:
+        return "; ".join(str(value) for value in evidence)
+    return "rollback-plan.json"
+
+
+def _quarantine_blockers(item: dict) -> str:
+    blockers = item.get("blockers")
+    if isinstance(blockers, list) and blockers:
+        return "; ".join(str(value) for value in blockers)
+    return "none"
+
+
 def _external_outbox_items(run_path: Path) -> list[dict]:
     outbox = _load_json(run_path / "external-outbox.json")
     raw_items = outbox.get("items")
@@ -190,6 +214,7 @@ def render_operator_packet_v2(
     evidence_packet_status = "present" if any((run_path / name).exists() for name in ["operator-packet.md", "retrieved_context.json"]) else "not_present"
 
     files = _file_items_from_plan(rollback_plan)
+    quarantine_items = _quarantine_items_from_plan(rollback_plan)
     outbox_items = _external_outbox_items(run_path)
     unsafe_outbox_boundary = _unsafe_outbox_boundary(run, outbox_items)
     external_items = list(external_evidence or [])
@@ -334,6 +359,19 @@ def render_operator_packet_v2(
     for file_path in files or ["covered local files"]:
         lines.append(_row([file_path, "local_file", file_path, "rollback_available", "true", "rollback-plan.json"]))
     lines.append(_row([checkpoint_id, "action_group", checkpoint_id, "rollback_available", "true", "rollback-plan.json"]))
+    for item in quarantine_items:
+        lines.append(
+            _row(
+                [
+                    item.get("item_id"),
+                    "quarantine",
+                    item.get("original_path"),
+                    item.get("rollback_status", "manual_review_required"),
+                    str(item.get("exact_rollback", False)).lower(),
+                    _quarantine_evidence(item),
+                ]
+            )
+        )
     for item in external_items:
         evidence_ref = "external-effects.jsonl" if item in external_effect_by_item else ("side-effects.jsonl" if item in side_effect_ledger_by_item else item)
         effect = external_effect_by_item.get(item)
@@ -383,6 +421,22 @@ def render_operator_packet_v2(
         _row(["selected file rollback", first_file, "available", "true", no_blockers, _suggested_command(run_path, run_id, checkpoint_id, first_file)]),
         _row(["selected hunk rollback", "review hunk manifest before apply", "review_required", "true", "operator must select hunk", "review hunk-manifest.json, then run rollback apply with selected hunks"]),
         _row(["selected action group rollback", checkpoint_id, "available", "true", no_blockers, _suggested_command(run_path, run_id, checkpoint_id)]),
+    ])
+    for item in quarantine_items:
+        command = item.get("restore_command") or "manual review"
+        lines.append(
+            _row(
+                [
+                    f"quarantine restore: {item.get('original_path')}",
+                    item.get("item_id"),
+                    item.get("rollback_status", "manual_review_required"),
+                    str(item.get("exact_rollback", False)).lower(),
+                    _quarantine_blockers(item),
+                    command,
+                ]
+            )
+        )
+    lines.extend([
         "",
         "## 5. External compensation / manual review status",
         f"- external-effects.jsonl: {'invalid' if external_registry_errors else ('present' if external_registry_exists else 'not_present')}",

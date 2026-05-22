@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import shutil
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -11,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from safeloop.agent_watchdog import atomic_json, now, sha_file
+from safeloop.local_anchor import create_local_anchor
 
 ITEM_SCHEMA_VERSION = "quarantine-item.v1"
 TOMBSTONE_SCHEMA_VERSION = "quarantine-tombstone.v1"
@@ -177,6 +179,11 @@ def _write_item(run_dir: Path, item: dict[str, Any]) -> None:
     atomic_json(_item_json_path(run_dir, item["item_id"]), item)
 
 
+def _refresh_local_anchor_if_possible(run_dir: Path) -> None:
+    if (run_dir / "run.json").exists() and (run_dir / "timeline.jsonl").exists():
+        create_local_anchor(run_dir)
+
+
 def _new_item_id() -> str:
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
     return f"q-{stamp}-{uuid.uuid4().hex[:12]}"
@@ -241,6 +248,7 @@ def put_file_in_quarantine(
         "captured_at": now(),
         "reason": reason,
         "actor": actor,
+        "workspace_root": str(root),
         "mode": oct(st.st_mode & 0o777),
         "sha256_before": source_sha,
         "size_bytes": st.st_size,
@@ -278,6 +286,7 @@ def put_file_in_quarantine(
     temp_dir.replace(final_dir)
     target.unlink()
     _append_index(run_path, item)
+    _refresh_local_anchor_if_possible(run_path)
     return item
 
 
@@ -338,6 +347,7 @@ def _mark_tampered(run_dir: Path, item: dict[str, Any], actual_sha: str | None) 
     _write_item(run_dir, updated)
     _append_audit(run_dir, updated["item_id"], "tampered", {"actual_sha256": actual_sha, "expected_sha256": item.get("sha256_before")})
     _append_index(run_dir, updated)
+    _refresh_local_anchor_if_possible(run_dir)
 
 
 def restore_quarantine_item(
@@ -380,6 +390,7 @@ def restore_quarantine_item(
     _write_item(run_path, updated)
     _append_audit(run_path, item_id, "restored", {"actor": actor, "overwrite": overwrite, "destination": manifest.get("original_path")})
     _append_index(run_path, updated)
+    _refresh_local_anchor_if_possible(run_path)
     return {
         "schema_version": "quarantine-restore-result.v1",
         "item_id": item_id,
@@ -417,6 +428,7 @@ def purge_quarantine_item(
         "captured_at": item.get("captured_at"),
         "reason": item.get("reason"),
         "actor": item.get("actor"),
+        "workspace_root": item.get("workspace_root"),
         "mode": item.get("mode"),
         "sha256_before": item.get("sha256_before"),
         "size_bytes": item.get("size_bytes"),
@@ -429,6 +441,7 @@ def purge_quarantine_item(
     _write_item(run_path, tombstone)
     _append_audit(run_path, item_id, "purged", {"actor": actor, "reason": reason})
     _append_index(run_path, tombstone)
+    _refresh_local_anchor_if_possible(run_path)
     return {
         "schema_version": "quarantine-purge-result.v1",
         "item_id": item_id,
@@ -534,3 +547,117 @@ def quarantine_manifest_artifacts(run_dir: str | Path) -> list[str]:
         for name in ("item.json", "restore-manifest.json", "audit.jsonl"):
             paths.append(f"quarantine/items/{item_dir.name}/{name}")
     return paths
+
+
+def build_quarantine_rollback_summary(run_dir: str | Path) -> dict[str, Any] | None:
+    """Summarize quarantine lifecycle state for rollback/operator planning."""
+    run_path = Path(run_dir)
+    listed = list_quarantine(run_path)
+    if not listed["items"]:
+        return None
+
+    items: list[dict[str, Any]] = []
+    counts = {
+        "total": 0,
+        "restore_available": 0,
+        "already_restored": 0,
+        "irreversible": 0,
+        "manual_review": 0,
+    }
+    for listed_item in listed["items"]:
+        item_id = str(listed_item.get("item_id") or "")
+        try:
+            item = _read_item(run_path, item_id)
+        except QuarantineError as exc:
+            counts["total"] += 1
+            counts["manual_review"] += 1
+            items.append(
+                {
+                    "item_id": item_id,
+                    "original_path": listed_item.get("original_path"),
+                    "status": "invalid",
+                    "rollback_mode": "manual_review",
+                    "rollback_status": "manual_review_required",
+                    "exact_rollback": False,
+                    "restore_supported": False,
+                    "blockers": [str(exc)],
+                    "evidence": [f"quarantine/items/{item_id}/item.json"],
+                }
+            )
+            continue
+
+        status = str(item.get("status") or "unknown")
+        original_path = str(item.get("original_path") or "")
+        verification = verify_quarantine_item(item_id, run_dir=run_path)
+        if verification.get("status") == "tampered":
+            status = "tampered"
+        blockers = list(verification.get("issues") or [])
+        exact_rollback = False
+        rollback_mode = "none"
+        rollback_status = "manual_review_required"
+        restore_command = None
+        restore_supported = bool(item.get("restore_supported"))
+
+        if status == "retained" and verification.get("status") == "valid" and restore_supported:
+            exact_rollback = True
+            rollback_mode = "quarantine_restore"
+            rollback_status = "available"
+            workspace_root = item.get("workspace_root") or "<workspace-root>"
+            restore_command = " ".join(
+                [
+                    "safeloop",
+                    "quarantine",
+                    "restore",
+                    shlex.quote(item_id),
+                    "--run-dir",
+                    shlex.quote(str(run_path)),
+                    "--workspace-root",
+                    shlex.quote(str(workspace_root)),
+                ]
+            )
+            counts["restore_available"] += 1
+        elif status == "restored":
+            rollback_status = "already_restored"
+            rollback_mode = "already_restored"
+            counts["already_restored"] += 1
+        elif status == "purged":
+            rollback_status = "irreversible_payload_purged"
+            rollback_mode = "irreversible"
+            blockers.append("payload purged")
+            counts["irreversible"] += 1
+        elif status == "tampered" or verification.get("status") == "tampered":
+            rollback_status = "manual_review_required"
+            rollback_mode = "manual_review"
+            blockers.append("payload tampered")
+            counts["manual_review"] += 1
+        else:
+            counts["manual_review"] += 1
+
+        counts["total"] += 1
+        record = {
+            "item_id": item_id,
+            "original_path": original_path,
+            "status": status,
+            "rollback_mode": rollback_mode,
+            "rollback_status": rollback_status,
+            "exact_rollback": exact_rollback,
+            "restore_supported": restore_supported,
+            "verification_status": verification.get("status"),
+            "blockers": sorted(set(str(blocker) for blocker in blockers)),
+            "evidence": [
+                f"quarantine/items/{item_id}/item.json",
+                f"quarantine/items/{item_id}/restore-manifest.json",
+                f"quarantine/items/{item_id}/audit.jsonl",
+            ],
+        }
+        if restore_command:
+            record["restore_command"] = restore_command
+        items.append(record)
+
+    return {
+        "schema_version": "quarantine-rollback.v1",
+        "status": "review_required" if counts["manual_review"] or counts["irreversible"] else "ok",
+        "counts": counts,
+        "items": items,
+        "note": "Quarantine restore is an explicit local-file rollback path. Purged or tampered payloads are not exact rollback.",
+    }

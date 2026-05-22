@@ -1,8 +1,8 @@
-# SafeLoop Quarantine v0
+# SafeLoop Quarantine v1
 
 SafeLoop quarantine converts destructive local file cleanup into an inspectable lifecycle event before the irreversible boundary.
 
-The v0 scope is intentionally small:
+The core capture scope is intentionally small:
 
 - local single regular file delete only
 - no directory quarantine
@@ -90,6 +90,17 @@ When quarantine exists, `operator-packet-manifest.json` includes metadata eviden
 - `quarantine/items/*/audit.jsonl`
 
 It intentionally excludes `quarantine/items/*/payload/file`. Packet manifests should verify metadata and lifecycle evidence, not copy quarantined payload bytes into operator packets.
+
+## Rollback Integration
+
+When quarantine metadata exists, rollback plans include a `quarantine` section with `schema_version: quarantine-rollback.v1`.
+
+- retained, verified payloads are marked `rollback_mode: quarantine_restore`, `rollback_status: available`, and `exact_rollback: true`
+- restored payloads are marked `already_restored`
+- purged payloads are marked `irreversible_payload_purged`
+- tampered or malformed payloads are marked `manual_review_required`
+
+`safeloop explain` prints the same lifecycle summary for operators, and operator packets add quarantine rows to both the change summary and rollback decision table. SafeLoop does not auto-restore quarantine items during `rollback apply`; the restore command remains an explicit operator action.
 
 ## Boundary
 

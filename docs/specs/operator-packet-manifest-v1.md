@@ -36,6 +36,7 @@ operator-packet-manifest.v1
 - `run.json`
 - `rollback-plan.json`
 - `rollback-result.json` if present
+- `runtime-tool-firewall.jsonl` if present
 - `external-effects.jsonl` if present
 - `compensation-plan.json` if present
 - `compensation-result.json` if present
@@ -69,6 +70,7 @@ The manifest boundary object must include:
   "exact_local_rollback_only": true,
   "external_exact_rollback": false,
   "external_compensation_manual_review_only": true,
+  "runtime_unknown_tool_manual_review": true,
   "tamper_evident_local_only": true
 }
 ```
@@ -78,6 +80,7 @@ Meaning:
 - Exact rollback is only for covered local file changes.
 - External actions remain `exact_rollback=false`.
 - External side effects are compensation/manual-review only.
+- Unknown runtime tool requests route to manual review.
 - Local hashes make packet/source changes visible, but they do not provide tamper-proof guarantees.
 
 ## Verification object

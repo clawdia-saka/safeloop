@@ -34,6 +34,7 @@
 | selected action group rollback | cp-0001 | available | true | none | python -m safeloop.cli rollback apply "$RUN_DIR" "$RUN_ID" "cp-0001" |
 
 ## 5. External compensation / manual review status
+- runtime-tool-firewall.jsonl: not_present
 - external-outbox.json: not_present
 - external-effects.jsonl: not_present
 - side-effects.jsonl: not_present
@@ -61,3 +62,4 @@ recommended next action: compensation_review_required
 - External side effects are manual-review/compensation only.
 - SafeLoop does not claim exact rollback for actions outside the local repo.
 - GitHub, messaging, email, webhooks, hosted systems, and third-party services require compensation/manual review rather than exact rollback.
+- Unknown runtime tool requests require manual review before execution.

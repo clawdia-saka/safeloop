@@ -127,6 +127,18 @@ safeloop quarantine restore ITEM_ID --run-dir "$RUN_DIR"
 
 SafeLoop quarantine v2 covers regular local files and explicitly requested directory quarantine via `--recursive`. It refuses symlinks, protects SafeLoop run artifacts from quarantine/restore mutation, restores without overwrite by default, detects payload tampering, and keeps tombstone/audit evidence after `safeloop quarantine purge`. Rollback plans and `safeloop explain` surface retained quarantine items as explicit `safeloop quarantine restore` paths; purged or tampered items are marked irreversible/manual-review rather than exact rollback. Operator packets include quarantine decision rows, and packet manifests include quarantine metadata evidence while excluding quarantined payload bytes. See [`docs/quarantine.md`](docs/quarantine.md).
 
+## Runtime Tool Firewall
+
+Use the runtime tool firewall when an agent asks to use a tool that may mutate local state or write outside the repo. SafeLoop records the default route in `runtime-tool-firewall.jsonl` and does not execute the tool:
+
+```bash
+safeloop firewall route "$RUN_DIR" --tool rm --action delete --target generated.txt --workspace-root "$PWD" --reason "cleanup generated artifact"
+safeloop firewall route "$RUN_DIR" --tool webhook --action send --target https://example.test/hooks/review --reason "send review webhook"
+safeloop firewall list "$RUN_DIR" --json
+```
+
+Default route: destructive/local mutation goes to quarantine, external write/send/publish goes to `external-outbox.json`, and unknown semantics go to manual review. External dispatch stays `false`, and external actions remain `exact_rollback: false`. See [`docs/specs/runtime-tool-firewall-v1.md`](docs/specs/runtime-tool-firewall-v1.md).
+
 ## Demo commands
 
 The shortest public demo path is:
@@ -306,7 +318,8 @@ SafeLoop is intentionally narrow in this release:
 - not a hosted control plane yet
 - external actions are not blindly reversible
 - gitignored files are out of scope unless configured
-- quarantine is local regular-file only; no recursive directory or symlink quarantine
+- quarantine is local file/directory only; no symlink quarantine
+- runtime tool firewall routing is local evidence only; it does not execute tools or dispatch external actions
 - no hosted HTTP dashboard v2 or SaaS control plane
 - no Slack/GitHub/Vercel external adapter authority
 - no remote transparency log or full rollback-to semantics yet

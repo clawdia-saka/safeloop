@@ -104,6 +104,10 @@ SafeLoop v3 quarantine hardening adds `RUN_DIR/external-outbox.json` for actions
 
 This is still local evidence only. SafeLoop does not perform network calls, does not claim external exact rollback, and keeps compensation in a separate plan/result flow. See `docs/specs/external-outbox-v1.md`.
 
+## Runtime tool firewall default route
+
+SafeLoop v4 adds `RUN_DIR/runtime-tool-firewall.jsonl` as the default route for risky runtime tool requests. The firewall does not execute tools: destructive/local mutation routes to quarantine, external write/send/publish routes to `external-outbox.json`, and unknown semantics route to manual review. See `docs/specs/runtime-tool-firewall-v1.md`.
+
 ## Compensation plan v1
 
 `safeloop compensate RUN_DIR` writes `RUN_DIR/compensation-plan.json` with `schema_version: compensation-plan.v1`. When `RUN_DIR/external-effects.jsonl` is present, the plan is generated from that registry instead of legacy `side-effects.jsonl` records.

@@ -9,7 +9,6 @@ The core capture scope is intentionally small:
 - no symlink quarantine
 - no external side effects
 - no hosted control plane
-- no automatic tool firewall
 - no mutation of SafeLoop run artifacts
 
 Quarantine is not a replacement for review. It preserves evidence and a restore path for covered local files.
@@ -27,6 +26,14 @@ Put a directory into quarantine under the strict v2 boundary:
 ```bash
 safeloop quarantine put generated-dir --recursive --run-dir "$RUN_DIR" --reason "cleanup generated directory"
 ```
+
+Route a destructive tool request through the runtime tool firewall before execution:
+
+```bash
+safeloop firewall route "$RUN_DIR" --tool rm --action delete --target generated.txt --workspace-root "$PWD" --reason "cleanup generated artifact"
+```
+
+The firewall records `runtime-tool-firewall.jsonl`. Destructive/local mutation routes to quarantine, external write/send/publish routes to `external-outbox.json`, and unknown semantics route to manual review.
 
 List items:
 

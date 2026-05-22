@@ -15,6 +15,7 @@ SOURCE_ARTIFACTS: tuple[tuple[str, bool], ...] = (
     ("run.json", True),
     ("rollback-plan.json", True),
     ("rollback-result.json", False),
+    ("runtime-tool-firewall.jsonl", False),
     ("external-outbox.json", False),
     ("external-effects.jsonl", False),
     ("compensation-plan.json", False),
@@ -26,6 +27,7 @@ BOUNDARY = {
     "exact_local_rollback_only": True,
     "external_exact_rollback": False,
     "external_compensation_manual_review_only": True,
+    "runtime_unknown_tool_manual_review": True,
     "tamper_evident_local_only": True,
 }
 

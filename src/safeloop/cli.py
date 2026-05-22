@@ -64,6 +64,11 @@ from safeloop.quarantine import (
     verify_quarantine_item,
 )
 from safeloop.rollback_groups import build_rollback_groups, print_rollback_groups
+from safeloop.runtime_tool_firewall import (
+    RuntimeToolFirewallError,
+    read_runtime_tool_firewall_events,
+    route_tool_action,
+)
 from safeloop.side_effect_ledger import read_side_effect_events
 
 
@@ -149,7 +154,17 @@ def _doctor_report(repo: Path) -> dict:
         "status": "ok" if (repo / ".git").exists() else "warn",
         "message": str(repo) if (repo / ".git").exists() else f"{repo} is not a git checkout",
     }
-    cli_commands = ["demo", "doctor", "init", "watch-run", "operator-packet", "operator-packet-verify", "rollback", "quarantine"]
+    cli_commands = [
+        "demo",
+        "doctor",
+        "init",
+        "watch-run",
+        "operator-packet",
+        "operator-packet-verify",
+        "rollback",
+        "quarantine",
+        "firewall",
+    ]
     checks["cli"] = {"status": "ok", "commands": cli_commands, "message": "required CLI surfaces are installed"}
     ci = repo / ".github" / "workflows" / "ci.yml"
     if ci.exists():
@@ -197,6 +212,8 @@ Use SafeLoop for local evidence packets around long-running or risky agent work.
 - Run `safeloop demo` to produce a local sample run with `operator-packet-v2.md` and `operator-packet-manifest.json`.
 - For real work, wrap commands with `safeloop watch-run --task-id <task> --repo "$PWD" -- <command>`.
 - Use `safeloop quarantine put PATH --run-dir RUN_DIR --reason "..."` before destructive local file cleanup.
+- Use `safeloop firewall route RUN_DIR --tool TOOL --action ACTION --target TARGET --reason "..."`
+  to default-route risky tool requests before execution.
 - Generate review evidence with `safeloop operator-packet RUN_DIR --write-manifest`.
 - Treat actions outside the local repo as compensation/manual-review only; do not claim exact rollback for external systems.
 """
@@ -218,6 +235,7 @@ def _init_agent(repo: Path, *, agent: str, force: bool) -> dict:
             "safeloop doctor",
             "safeloop demo",
             "safeloop quarantine put PATH --run-dir RUN_DIR --reason cleanup",
+            "safeloop firewall route RUN_DIR --tool rm --action delete --target PATH --reason cleanup",
             "safeloop operator-packet RUN_DIR --write-manifest",
         ],
         "boundaries": {
@@ -1051,6 +1069,24 @@ def main(argv: list[str] | None = None) -> int:
     external_outbox_list = external_outbox_sub.add_parser("list", help="List external outbox lifecycle items.")
     external_outbox_list.add_argument("run_dir")
     external_outbox_list.add_argument("--json", action="store_true")
+    firewall = sub.add_parser(
+        "firewall",
+        help="Route runtime tool requests to quarantine, external outbox, or manual review before execution.",
+    )
+    firewall_sub = firewall.add_subparsers(dest="firewall_cmd", required=True)
+    firewall_route = firewall_sub.add_parser("route", help="Default-route one tool request without executing it.")
+    firewall_route.add_argument("run_dir")
+    firewall_route.add_argument("--tool", required=True)
+    firewall_route.add_argument("--action", required=True)
+    firewall_route.add_argument("--target", required=True)
+    firewall_route.add_argument("--workspace-root", default=".")
+    firewall_route.add_argument("--target-kind", default="auto", choices=["auto", "local_file", "local_directory", "external", "unknown"])
+    firewall_route.add_argument("--reason", required=True)
+    firewall_route.add_argument("--actor", default="unknown")
+    firewall_route.add_argument("--json", action="store_true")
+    firewall_list = firewall_sub.add_parser("list", help="List runtime tool firewall route events.")
+    firewall_list.add_argument("run_dir")
+    firewall_list.add_argument("--json", action="store_true")
     op = sub.add_parser("operator-packet", help="Generate a SafeLoop operator packet from a run directory.")
     op.add_argument("run_dir")
     op.add_argument("--v2", action="store_true", help="Generate Operator Packet v2 (default).")
@@ -1404,6 +1440,46 @@ def main(argv: list[str] | None = None) -> int:
             except ExternalOutboxError as exc:
                 print(str(exc), file=sys.stderr)
                 return 2
+    if args.cmd == "firewall":
+        try:
+            if args.firewall_cmd == "route":
+                event = route_tool_action(
+                    Path(args.run_dir),
+                    tool=args.tool,
+                    action=args.action,
+                    target=args.target,
+                    workspace_root=Path(args.workspace_root),
+                    target_kind=args.target_kind,
+                    reason=args.reason,
+                    actor=args.actor,
+                )
+                if args.json:
+                    print(json.dumps(event, indent=2, sort_keys=True))
+                else:
+                    print(f"Runtime tool firewall route: {event['route']}")
+                    print(f"event id: {event['event_id']}")
+                    print(f"reason: {event['route_reason']}")
+                    if event.get("quarantine_item_id"):
+                        print(f"quarantine item: {event['quarantine_item_id']}")
+                    if event.get("outbox_id"):
+                        print(f"outbox item: {event['outbox_id']}")
+                    print(f"manual review required: {str(event['manual_review_required']).lower()}")
+                    print(f"exact rollback: {str(event['exact_rollback']).lower()}")
+                    print("external dispatch allowed: false")
+                return 0
+            if args.firewall_cmd == "list":
+                events = read_runtime_tool_firewall_events(Path(args.run_dir))
+                result = {"schema_version": "runtime-tool-firewall-list.v1", "items": events, "count": len(events)}
+                if args.json:
+                    print(json.dumps(result, indent=2, sort_keys=True))
+                else:
+                    print("SafeLoop runtime tool firewall")
+                    for event in events:
+                        print(f"{event.get('event_id')} {event.get('route')} {event.get('tool')}:{event.get('target')}")
+                return 0
+        except RuntimeToolFirewallError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
     if args.cmd == "operator-packet":
         run_dir = Path(args.run_dir)
         if not (run_dir / "run.json").exists():

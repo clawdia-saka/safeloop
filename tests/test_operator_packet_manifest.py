@@ -154,6 +154,31 @@ def test_manifest_tracks_external_outbox_source_artifact(tmp_path: Path) -> None
     assert outbox["required"] is False
 
 
+def test_manifest_tracks_runtime_tool_firewall_source_artifact(tmp_path: Path) -> None:
+    run_dir = make_run_dir(tmp_path)
+    (run_dir / "runtime-tool-firewall.jsonl").write_text(
+        json.dumps(
+            {
+                "schema_version": "runtime-tool-firewall-route.v1",
+                "event_id": "fw-0001",
+                "run_id": "run-manifest",
+                "route": "manual_review",
+                "manual_review_required": True,
+            },
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    packet = write_operator_packet_v2(run_dir)
+
+    manifest = write_operator_packet_manifest(run_dir, packet)
+
+    firewall = next(item for item in manifest["source_artifacts"] if item["path"] == "runtime-tool-firewall.jsonl")
+    assert firewall["present"] is True
+    assert firewall["required"] is False
+
+
 def test_manifest_boundary_is_local_tamper_evident_not_tamper_proof(tmp_path: Path) -> None:
     run_dir = make_run_dir(tmp_path)
     packet = write_operator_packet_v2(run_dir)
@@ -164,6 +189,7 @@ def test_manifest_boundary_is_local_tamper_evident_not_tamper_proof(tmp_path: Pa
         "exact_local_rollback_only": True,
         "external_exact_rollback": False,
         "external_compensation_manual_review_only": True,
+        "runtime_unknown_tool_manual_review": True,
         "tamper_evident_local_only": True,
     }
     assert "tamper-proof" not in text

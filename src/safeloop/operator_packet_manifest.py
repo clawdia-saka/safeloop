@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from safeloop.agent_watchdog import atomic_json
+from safeloop.quarantine import quarantine_manifest_artifacts
 
 SCHEMA_VERSION = "operator-packet-manifest.v1"
 DEFAULT_MANIFEST_NAME = "operator-packet-manifest.json"
@@ -105,6 +106,11 @@ def _source_artifact_entry(run_path: Path, rel_path: str, required: bool) -> dic
     }
 
 
+def _expected_source_artifacts(run_path: Path) -> tuple[tuple[str, bool], ...]:
+    quarantine_artifacts = tuple((path, True) for path in quarantine_manifest_artifacts(run_path))
+    return SOURCE_ARTIFACTS + quarantine_artifacts
+
+
 def build_operator_packet_manifest(
     run_dir: str | Path,
     packet_path: str | Path | None = None,
@@ -125,7 +131,7 @@ def build_operator_packet_manifest(
         "run_id": _load_run_id(run_path),
         "source_artifacts": [
             _source_artifact_entry(run_path, rel_path, required)
-            for rel_path, required in SOURCE_ARTIFACTS
+            for rel_path, required in _expected_source_artifacts(run_path)
         ],
         "boundary": dict(BOUNDARY),
         "verification": {
@@ -185,8 +191,9 @@ def verify_operator_packet_manifest(
     if not isinstance(entries, list):
         issues.append("source_artifacts must be a list")
         entries = []
+    expected_source_artifacts = _expected_source_artifacts(run_path)
     entries_by_path = {entry.get("path"): entry for entry in entries if isinstance(entry, dict)}
-    for rel_path, required in SOURCE_ARTIFACTS:
+    for rel_path, required in expected_source_artifacts:
         entry = entries_by_path.get(rel_path)
         if entry is None:
             issues.append(f"source artifact entry missing: {rel_path}")
@@ -216,7 +223,7 @@ def verify_operator_packet_manifest(
         rel_path = str(entry.get("path") or "")
         if rel_path == DEFAULT_MANIFEST_NAME:
             issues.append("manifest must not be part of source_artifacts")
-        elif rel_path and rel_path not in {path for path, _ in SOURCE_ARTIFACTS}:
+        elif rel_path and rel_path not in {path for path, _ in expected_source_artifacts}:
             issues.append(f"unexpected source artifact entry: {rel_path}")
 
     verification = {

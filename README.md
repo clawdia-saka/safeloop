@@ -114,6 +114,19 @@ Actions outside the local repo are manual-review/compensation only; SafeLoop nev
 - **Manual handoff:** route evidence to an operator when SafeLoop cannot safely verify or complete recovery automatically.
 - **Action groups:** bundle related files, hunks, checkpoints, and optional action IDs so a person can review one unit of work.
 
+## Quarantine Destructive Cleanup
+
+Use quarantine when an agent wants to delete a local file but you still want an inspectable restore path:
+
+```bash
+safeloop quarantine put generated.txt --run-dir "$RUN_DIR" --reason "cleanup generated artifact"
+safeloop quarantine list --run-dir "$RUN_DIR"
+safeloop quarantine verify ITEM_ID --run-dir "$RUN_DIR"
+safeloop quarantine restore ITEM_ID --run-dir "$RUN_DIR"
+```
+
+SafeLoop quarantine v0 covers single regular local files only. It refuses directories and symlinks, restores without overwrite by default, detects payload tampering, and keeps tombstone/audit evidence after `safeloop quarantine purge`. Operator packet manifests include quarantine metadata evidence but exclude quarantined payload bytes. See [`docs/quarantine.md`](docs/quarantine.md).
+
 ## Demo commands
 
 The shortest public demo path is:
@@ -283,6 +296,7 @@ SafeLoop is intentionally narrow in this release:
 - not a hosted control plane yet
 - external actions are not blindly reversible
 - gitignored files are out of scope unless configured
+- quarantine v0 is local regular-file only; no recursive directory or symlink quarantine
 - no hosted HTTP dashboard v2 or SaaS control plane
 - no Slack/GitHub/Vercel external adapter authority
 - no remote transparency log or full rollback-to semantics yet

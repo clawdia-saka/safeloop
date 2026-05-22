@@ -41,6 +41,15 @@ operator-packet-manifest.v1
 - `compensation-result.json` if present
 - `verification/verify-artifacts-result.json` if present
 - `local-anchor.json` if present
+- quarantine metadata if present:
+  - `quarantine/index.jsonl`
+  - `quarantine/items/*/item.json`
+  - `quarantine/items/*/restore-manifest.json`
+  - `quarantine/items/*/audit.jsonl`
+
+Quarantine payload bytes are intentionally excluded:
+
+- `quarantine/items/*/payload/file`
 
 Each source artifact entry has:
 
@@ -92,6 +101,9 @@ Invalid conditions include:
 - source artifact that was present at generation is now missing
 - source artifact hash mismatch
 - manifest listed as its own source artifact
+- quarantine metadata exists but the manifest is missing its metadata evidence entries
+
+Quarantine payload files are not source artifacts. Verification checks metadata evidence only.
 
 Optional source artifacts that were absent at generation remain valid when still absent.
 

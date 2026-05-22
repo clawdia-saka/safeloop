@@ -9,6 +9,7 @@ TMP_ROOT="${TMPDIR:-/tmp}/safeloop-gbrain-context-demo-$$"
 DEMO_REPO="$TMP_ROOT/repo"
 RUN_ROOT="$TMP_ROOT/runs"
 GBRAIN_MOCK="$TMP_ROOT/gbrain-mock"
+PYTHON_BIN="${PYTHON:-python3}"
 mkdir -p "$DEMO_REPO" "$RUN_ROOT" "$GBRAIN_MOCK"
 
 cleanup() {
@@ -88,13 +89,13 @@ PY
 
 WATCH_OUTPUT="$TMP_ROOT/watch-run.out"
 RETRIEVED_CONTEXT_JSON="$GBRAIN_MOCK/retrieved_context.json" \
-python -m safeloop.cli watch-run \
+"$PYTHON_BIN" -m safeloop.cli watch-run \
   --task-id gbrain-context-demo \
   --repo "$DEMO_REPO" \
   --run-root "$RUN_ROOT" \
-  -- python "$DEMO_REPO/agent.py" | tee "$WATCH_OUTPUT"
+  -- "$PYTHON_BIN" "$DEMO_REPO/agent.py" | tee "$WATCH_OUTPUT"
 
-RUN_DIR="$(python - "$WATCH_OUTPUT" <<'PY'
+RUN_DIR="$("$PYTHON_BIN" - "$WATCH_OUTPUT" <<'PY'
 import sys
 from pathlib import Path
 for line in Path(sys.argv[1]).read_text(encoding="utf-8").splitlines():
@@ -107,13 +108,13 @@ PY
 )"
 printf '%s\n' "$RUN_DIR" > "$TMP_ROOT/run-dir.txt"
 
-RUN_ID="$(python - "$RUN_DIR/run.json" <<'PY'
+RUN_ID="$("$PYTHON_BIN" - "$RUN_DIR/run.json" <<'PY'
 import json, sys
 from pathlib import Path
 print(json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))["run_id"])
 PY
 )"
-CHECKPOINT_ID="$(python - "$RUN_DIR/run.json" <<'PY'
+CHECKPOINT_ID="$("$PYTHON_BIN" - "$RUN_DIR/run.json" <<'PY'
 import json, sys
 from pathlib import Path
 count = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))["checkpoint_count"]
@@ -121,10 +122,10 @@ print(f"cp-{count:04d}")
 PY
 )"
 
-python -m safeloop.cli timeline "$RUN_DIR"
-python -m safeloop.cli verify-artifacts "$RUN_DIR"
-python -m safeloop.cli review "$RUN_DIR"
-python -m safeloop.cli rollback plan "$RUN_DIR" "$RUN_ID" "$CHECKPOINT_ID" --files service.md
+"$PYTHON_BIN" -m safeloop.cli timeline "$RUN_DIR"
+"$PYTHON_BIN" -m safeloop.cli verify-artifacts "$RUN_DIR"
+"$PYTHON_BIN" -m safeloop.cli review "$RUN_DIR"
+"$PYTHON_BIN" -m safeloop.cli rollback plan "$RUN_DIR" "$RUN_ID" "$CHECKPOINT_ID" --files service.md
 
 cat > "$TMP_ROOT/operator-packet.md" <<MD
 # SafeLoop + Gbrain operator packet
@@ -175,7 +176,7 @@ Boundary: exact rollback is limited to covered local repository file changes cap
 Gbrain boundary: the fixture never invokes gbrain, never uses network, and never reads or writes ~/.gbrain.
 MD
 
-python -m safeloop.cli rollback apply "$RUN_DIR" "$RUN_ID" "$CHECKPOINT_ID" --files service.md
+"$PYTHON_BIN" -m safeloop.cli rollback apply "$RUN_DIR" "$RUN_ID" "$CHECKPOINT_ID" --files service.md
 
 # Copy retrieval evidence after core artifact verification and rollback. These
 # files are operator packet attachments, not SafeLoop hash-chain artifacts.

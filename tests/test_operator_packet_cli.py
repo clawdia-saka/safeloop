@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -47,7 +48,7 @@ def make_run_dir(tmp_path: Path) -> Path:
 
 def run_cli(*args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        ["python", "-m", "safeloop.cli", *args],
+        [sys.executable, "-m", "safeloop.cli", *args],
         cwd=ROOT,
         text=True,
         stdout=subprocess.PIPE,

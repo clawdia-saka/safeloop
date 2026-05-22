@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -87,9 +89,11 @@ def test_adapter_contract_examples_include_required_fields_and_no_rollback_claim
 
 
 def test_github_issue_compensation_demo_records_non_exact_compensation() -> None:
+    env = {**os.environ, "PYTHON": sys.executable}
     proc = subprocess.run(
         ["bash", str(ROOT / "examples" / "compensation_github_issue_demo.sh")],
         cwd=ROOT,
+        env=env,
         text=True,
         capture_output=True,
         check=True,
@@ -109,9 +113,11 @@ def test_github_issue_compensation_demo_records_non_exact_compensation() -> None
 
 
 def test_message_compensation_demo_requires_manual_review_and_records_correction() -> None:
+    env = {**os.environ, "PYTHON": sys.executable}
     proc = subprocess.run(
         ["bash", str(ROOT / "examples" / "compensation_message_demo.sh")],
         cwd=ROOT,
+        env=env,
         text=True,
         capture_output=True,
         check=True,

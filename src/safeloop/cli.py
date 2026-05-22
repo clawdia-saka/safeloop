@@ -45,6 +45,15 @@ from safeloop.operator_packet_manifest import (
     write_operator_packet_manifest,
 )
 from safeloop.policy_check import PolicyCheckError, build_policy_rollback_suggestion, run_policy_check
+from safeloop.quarantine import (
+    QuarantineError,
+    empty_quarantine,
+    list_quarantine,
+    purge_quarantine_item,
+    put_file_in_quarantine,
+    restore_quarantine_item,
+    verify_quarantine_item,
+)
 from safeloop.rollback_groups import build_rollback_groups, print_rollback_groups
 from safeloop.side_effect_ledger import read_side_effect_events
 
@@ -124,7 +133,7 @@ def _doctor_report(repo: Path) -> dict:
         "status": "ok" if (repo / ".git").exists() else "warn",
         "message": str(repo) if (repo / ".git").exists() else f"{repo} is not a git checkout",
     }
-    cli_commands = ["demo", "doctor", "init", "watch-run", "operator-packet", "operator-packet-verify", "rollback"]
+    cli_commands = ["demo", "doctor", "init", "watch-run", "operator-packet", "operator-packet-verify", "rollback", "quarantine"]
     checks["cli"] = {"status": "ok", "commands": cli_commands, "message": "required CLI surfaces are installed"}
     ci = repo / ".github" / "workflows" / "ci.yml"
     if ci.exists():
@@ -171,6 +180,7 @@ Use SafeLoop for local evidence packets around long-running or risky agent work.
 - Run `safeloop doctor` before relying on packet upload or local rollback evidence.
 - Run `safeloop demo` to produce a local sample run with `operator-packet-v2.md` and `operator-packet-manifest.json`.
 - For real work, wrap commands with `safeloop watch-run --task-id <task> --repo "$PWD" -- <command>`.
+- Use `safeloop quarantine put PATH --run-dir RUN_DIR --reason "..."` before destructive local file cleanup.
 - Generate review evidence with `safeloop operator-packet RUN_DIR --write-manifest`.
 - Treat actions outside the local repo as compensation/manual-review only; do not claim exact rollback for external systems.
 """
@@ -191,6 +201,7 @@ def _init_agent(repo: Path, *, agent: str, force: bool) -> dict:
         "recommended_commands": [
             "safeloop doctor",
             "safeloop demo",
+            "safeloop quarantine put PATH --run-dir RUN_DIR --reason cleanup",
             "safeloop operator-packet RUN_DIR --write-manifest",
         ],
         "boundaries": {
@@ -1028,6 +1039,43 @@ def main(argv: list[str] | None = None) -> int:
     rb_apply.add_argument("--files", nargs="+", default=[])
     rb_apply.add_argument("--hunks", nargs="+", default=[])
     rb_apply.add_argument("--action")
+    quarantine = sub.add_parser(
+        "quarantine",
+        help="Quarantine destructive local file cleanup actions before irreversible deletion.",
+    )
+    quarantine_sub = quarantine.add_subparsers(dest="quarantine_cmd", required=True)
+    quarantine_put = quarantine_sub.add_parser("put", help="Move a regular file into run-local quarantine.")
+    quarantine_put.add_argument("path")
+    quarantine_put.add_argument("--run-dir", required=True)
+    quarantine_put.add_argument("--reason", required=True)
+    quarantine_put.add_argument("--actor", default="unknown")
+    quarantine_put.add_argument("--workspace-root", default=".")
+    quarantine_list = quarantine_sub.add_parser("list", help="List quarantine item lifecycle status.")
+    quarantine_list.add_argument("--run-dir", required=True)
+    quarantine_list.add_argument("--json", action="store_true")
+    quarantine_restore = quarantine_sub.add_parser("restore", help="Restore a quarantined file.")
+    quarantine_restore.add_argument("item_id")
+    quarantine_restore.add_argument("--run-dir", required=True)
+    quarantine_restore.add_argument("--workspace-root", default=".")
+    quarantine_restore.add_argument("--overwrite", action="store_true")
+    quarantine_restore.add_argument("--actor", default="unknown")
+    quarantine_verify = quarantine_sub.add_parser("verify", help="Verify quarantined file metadata and payload digest.")
+    quarantine_verify.add_argument("item_id")
+    quarantine_verify.add_argument("--run-dir", required=True)
+    quarantine_verify.add_argument("--json", action="store_true")
+    quarantine_purge = quarantine_sub.add_parser(
+        "purge",
+        help="Irreversibly purge a retained payload while keeping tombstone audit evidence.",
+    )
+    quarantine_purge.add_argument("item_id")
+    quarantine_purge.add_argument("--run-dir", required=True)
+    quarantine_purge.add_argument("--reason", default="manual purge")
+    quarantine_purge.add_argument("--actor", default="unknown")
+    quarantine_empty = quarantine_sub.add_parser("empty", help="Purge old retained quarantine payloads.")
+    quarantine_empty.add_argument("--run-dir", required=True)
+    quarantine_empty.add_argument("--older-than", required=True)
+    quarantine_empty.add_argument("--reason", default="retention expired")
+    quarantine_empty.add_argument("--actor", default="unknown")
     args = parser.parse_args(argv)
 
     if args.cmd == "demo":
@@ -1282,6 +1330,79 @@ def main(argv: list[str] | None = None) -> int:
         for issue in verification.get("issues", []):
             print(f"issue: {issue}")
         return 0 if verification["status"] == "valid" else 1
+    if args.cmd == "quarantine":
+        try:
+            if args.quarantine_cmd == "put":
+                item = put_file_in_quarantine(
+                    args.path,
+                    run_dir=Path(args.run_dir),
+                    workspace_root=Path(args.workspace_root),
+                    reason=args.reason,
+                    actor=args.actor,
+                )
+                print(f"Quarantined file: {item['item_id']}")
+                print(f"status: {item['status']}")
+                print(f"original path: {item['original_path']}")
+                print("restore supported: true")
+                return 0
+            if args.quarantine_cmd == "list":
+                result = list_quarantine(Path(args.run_dir))
+                if args.json:
+                    print(json.dumps(result, indent=2, sort_keys=True))
+                else:
+                    print("SafeLoop quarantine")
+                    for item in result["items"]:
+                        print(f"{item['item_id']} {item['status']} {item['original_path']}")
+                return 0
+            if args.quarantine_cmd == "restore":
+                result = restore_quarantine_item(
+                    args.item_id,
+                    run_dir=Path(args.run_dir),
+                    workspace_root=Path(args.workspace_root),
+                    overwrite=args.overwrite,
+                    actor=args.actor,
+                )
+                print("Quarantine restore complete")
+                print(f"item id: {result['item_id']}")
+                print(f"status: {result['status']}")
+                print(f"restored path: {result['restored_path']}")
+                return 0
+            if args.quarantine_cmd == "verify":
+                result = verify_quarantine_item(args.item_id, run_dir=Path(args.run_dir))
+                if args.json:
+                    print(json.dumps(result, indent=2, sort_keys=True))
+                else:
+                    print(f"quarantine verify: {result['status']}")
+                    print(f"item id: {result['item_id']}")
+                    if result["issues"]:
+                        print(f"issues: {len(result['issues'])}")
+                return 0 if result["status"] == "valid" else 1
+            if args.quarantine_cmd == "purge":
+                result = purge_quarantine_item(
+                    args.item_id,
+                    run_dir=Path(args.run_dir),
+                    reason=args.reason,
+                    actor=args.actor,
+                )
+                print("Quarantine purge complete")
+                print(f"item id: {result['item_id']}")
+                print(f"status: {result['status']}")
+                print("restore supported: false")
+                return 0
+            if args.quarantine_cmd == "empty":
+                result = empty_quarantine(
+                    run_dir=Path(args.run_dir),
+                    older_than=args.older_than,
+                    actor=args.actor,
+                    reason=args.reason,
+                )
+                print("Quarantine empty complete")
+                print(f"purged: {len(result['purged'])}")
+                print(f"skipped: {len(result['skipped'])}")
+                return 0
+        except QuarantineError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
     if args.cmd == "html-report":
         output = write_readiness_html(Path(args.run_dir), Path(args.output) if args.output else None)
         print(f"SafeLoop HTML readiness report: {output}")

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -75,7 +76,7 @@ def test_gbrain_context_demo_runs_offline_and_preserves_real_gbrain_home(tmp_pat
     sentinel.write_text("do not touch\n", encoding="utf-8")
 
     env = os.environ.copy()
-    env.update({"HOME": str(fake_home), "TMPDIR": str(tmp_path), "NO_NETWORK": "1"})
+    env.update({"HOME": str(fake_home), "TMPDIR": str(tmp_path), "NO_NETWORK": "1", "PYTHON": sys.executable})
     result = subprocess.run(
         ["bash", str(SCRIPT)],
         cwd=ROOT,

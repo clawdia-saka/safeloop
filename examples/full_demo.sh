@@ -11,6 +11,7 @@ RUN_ROOT="$TMP_ROOT/runs"
 EXTERNAL_LOG="$TMP_ROOT/fake-external-service.log"
 WATCH_OUTPUT="$TMP_ROOT/watch-run.out"
 OPERATOR_PACKET="$TMP_ROOT/operator-packet.md"
+PYTHON_BIN="${PYTHON:-python3}"
 
 rm -rf "$TMP_ROOT"
 mkdir -p "$DEMO_REPO" "$RUN_ROOT"
@@ -46,13 +47,13 @@ Path(os.environ["EXTERNAL_LOG"]).write_text(
 print("agent changed service.md and simulated an external ticket")
 PY
 
-python -m safeloop.cli watch-run \
+EXTERNAL_LOG="$EXTERNAL_LOG" "$PYTHON_BIN" -m safeloop.cli watch-run \
   --task-id full-demo \
   --repo "$DEMO_REPO" \
   --run-root "$RUN_ROOT" \
-  -- bash -c "cd '$DEMO_REPO' && EXTERNAL_LOG='$EXTERNAL_LOG' python agent.py" | tee "$WATCH_OUTPUT"
+  -- "$PYTHON_BIN" agent.py | tee "$WATCH_OUTPUT"
 
-RUN_DIR="$(python - "$WATCH_OUTPUT" <<'PY'
+RUN_DIR="$("$PYTHON_BIN" - "$WATCH_OUTPUT" <<'PY'
 import sys
 from pathlib import Path
 for line in Path(sys.argv[1]).read_text(encoding="utf-8").splitlines():
@@ -63,13 +64,13 @@ else:
     raise SystemExit("Run dir not found in watch-run output")
 PY
 )"
-RUN_ID="$(python - "$RUN_DIR/run.json" <<'PY'
+RUN_ID="$("$PYTHON_BIN" - "$RUN_DIR/run.json" <<'PY'
 import json, sys
 from pathlib import Path
 print(json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))["run_id"])
 PY
 )"
-CHECKPOINT_ID="$(python - "$RUN_DIR/run.json" <<'PY'
+CHECKPOINT_ID="$("$PYTHON_BIN" - "$RUN_DIR/run.json" <<'PY'
 import json, sys
 from pathlib import Path
 count = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))["checkpoint_count"]
@@ -77,10 +78,10 @@ print(f"cp-{count:04d}")
 PY
 )"
 
-python -m safeloop.cli timeline "$RUN_DIR"
-python -m safeloop.cli verify-artifacts "$RUN_DIR"
-python -m safeloop.cli review "$RUN_DIR"
-python -m safeloop.cli rollback plan "$RUN_DIR" "$RUN_ID" "$CHECKPOINT_ID" --files service.md
+"$PYTHON_BIN" -m safeloop.cli timeline "$RUN_DIR"
+"$PYTHON_BIN" -m safeloop.cli verify-artifacts "$RUN_DIR"
+"$PYTHON_BIN" -m safeloop.cli review "$RUN_DIR"
+"$PYTHON_BIN" -m safeloop.cli rollback plan "$RUN_DIR" "$RUN_ID" "$CHECKPOINT_ID" --files service.md
 
 cat > "$OPERATOR_PACKET" <<MD
 # SafeLoop full demo operator packet
@@ -100,8 +101,8 @@ Decision boundary:
 Rollback command:
 python -m safeloop.cli rollback apply "$RUN_DIR" "$RUN_ID" "$CHECKPOINT_ID" --files service.md
 MD
-python -m safeloop.cli rollback apply "$RUN_DIR" "$RUN_ID" "$CHECKPOINT_ID" --files service.md
-python - <<PY
+"$PYTHON_BIN" -m safeloop.cli rollback apply "$RUN_DIR" "$RUN_ID" "$CHECKPOINT_ID" --files service.md
+"$PYTHON_BIN" - <<PY
 from pathlib import Path
 from safeloop.operator_packet import write_operator_packet_v2
 write_operator_packet_v2(
@@ -115,7 +116,7 @@ PY
 # hash-chain artifact bound by verify-artifacts. The v2 packet is generated from
 # local run artifacts and the simulated outside-action evidence.
 cp "$OPERATOR_PACKET" "$RUN_DIR/operator-packet.md"
-python scripts/public_readiness.py --check
+"$PYTHON_BIN" scripts/public_readiness.py --check
 
 printf '\nLocal file after rollback:\n'
 cat "$DEMO_REPO/service.md"

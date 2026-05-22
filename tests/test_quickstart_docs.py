@@ -16,4 +16,6 @@ def test_readme_has_public_one_line_install_and_e2e_quickstart() -> None:
     assert 'safeloop demo' in readme
     assert 'safeloop doctor' in readme
     assert 'safeloop init --agent codex' in readme
+    assert 'safeloop quarantine put generated.txt' in readme
+    assert 'docs/quarantine.md' in readme
     assert 'External side effects are manual-review/compensation only' in readme

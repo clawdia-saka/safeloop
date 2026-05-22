@@ -4,6 +4,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -38,6 +39,7 @@ def run_full_demo(tmp_path: Path) -> tuple[Path, Path, str, str]:
     tmp_root = tmp_path / "full-demo"
     env = os.environ.copy()
     env["SAFELOOP_FULL_DEMO_ROOT"] = str(tmp_root)
+    env["PYTHON"] = sys.executable
     result = subprocess.run(
         ["bash", str(FULL_DEMO)],
         cwd=ROOT,
@@ -83,7 +85,7 @@ def test_normalized_operator_packet_v2_matches_golden_expectations(tmp_path: Pat
 def test_v1_operator_packet_and_explain_output_match_golden(tmp_path: Path) -> None:
     tmp_root, run_dir, run_id, _ = run_full_demo(tmp_path)
     explain = subprocess.run(
-        ["python", "-m", "safeloop.cli", "explain", str(run_dir)],
+        [sys.executable, "-m", "safeloop.cli", "explain", str(run_dir)],
         cwd=ROOT,
         text=True,
         stdout=subprocess.PIPE,
@@ -134,7 +136,7 @@ def test_verification_result_matches_golden_and_boundary_summary_is_present(tmp_
 
 def test_public_readiness_script_still_detects_full_demo_flow() -> None:
     result = subprocess.run(
-        ["python", "scripts/public_readiness.py", "--check"],
+        [sys.executable, "scripts/public_readiness.py", "--check"],
         cwd=ROOT,
         text=True,
         stdout=subprocess.PIPE,

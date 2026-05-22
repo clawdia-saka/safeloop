@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
+import sys
 from pathlib import Path
 
 from safeloop.operator_packet import render_operator_packet_v2, write_operator_packet_v2
@@ -708,8 +710,9 @@ def test_packet_v2_spec_and_example_document_required_boundaries() -> None:
 
 
 def test_full_demo_produces_operator_packet_v2(tmp_path: Path) -> None:
-    env = {**dict(), **__import__("os").environ}
+    env = os.environ.copy()
     env["SAFELOOP_FULL_DEMO_ROOT"] = str(tmp_path / "full-demo")
+    env["PYTHON"] = sys.executable
     result = subprocess.run(
         ["bash", str(FULL_DEMO)],
         cwd=ROOT,

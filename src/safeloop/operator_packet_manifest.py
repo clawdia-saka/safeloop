@@ -15,6 +15,7 @@ SOURCE_ARTIFACTS: tuple[tuple[str, bool], ...] = (
     ("run.json", True),
     ("rollback-plan.json", True),
     ("rollback-result.json", False),
+    ("external-outbox.json", False),
     ("external-effects.jsonl", False),
     ("compensation-plan.json", False),
     ("compensation-result.json", False),

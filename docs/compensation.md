@@ -92,6 +92,18 @@ The demo writes only local artifacts:
 
 SafeLoop v0.2 tracks actions outside the local repo in `RUN_DIR/external-effects.jsonl` using `external-side-effect.v1` records. These records are for compensation/manual review only: every external effect keeps `exact_rollback: false`, requires evidence with a path or URL plus `quote_or_field`, and must not store raw sensitive payloads. See `docs/specs/external-side-effect-v1.md`.
 
+## External outbox lifecycle
+
+SafeLoop v3 quarantine hardening adds `RUN_DIR/external-outbox.json` for actions that may leave the local repo but have not necessarily happened yet. The outbox separates:
+
+- `pending`: intent recorded, no dispatch allowed.
+- `prepared`: approval or waiver evidence is bound, dispatch may proceed once.
+- `committed`: the external action happened and a matching `external-effects.jsonl` record exists.
+- `compensated`: compensation result/receipt evidence exists.
+- `manual_review`: blocked or operator judgment required.
+
+This is still local evidence only. SafeLoop does not perform network calls, does not claim external exact rollback, and keeps compensation in a separate plan/result flow. See `docs/specs/external-outbox-v1.md`.
+
 ## Compensation plan v1
 
 `safeloop compensate RUN_DIR` writes `RUN_DIR/compensation-plan.json` with `schema_version: compensation-plan.v1`. When `RUN_DIR/external-effects.jsonl` is present, the plan is generated from that registry instead of legacy `side-effects.jsonl` records.

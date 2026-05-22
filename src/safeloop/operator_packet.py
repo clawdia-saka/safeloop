@@ -131,6 +131,39 @@ def _outbox_item_id(item: dict, index: int) -> str:
     return str(item.get("id") or item.get("outbox_id") or f"external-outbox[{index}]")
 
 
+def _outbox_item_ref(item: dict) -> str:
+    payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+    kind = str(item.get("kind") or payload.get("kind") or "external")
+    target = str(item.get("target") or payload.get("target") or payload.get("url") or item.get("external_ref") or "unknown")
+    return f"{kind}:{target}"
+
+
+def _outbox_item_phase(item: dict) -> str:
+    return str(item.get("phase") or item.get("status") or "pending")
+
+
+def _outbox_item_evidence(item: dict) -> str:
+    evidence = ["external-outbox.json"]
+    if item.get("external_effect_id"):
+        evidence.append("external-effects.jsonl")
+    if item.get("compensation_result_ref"):
+        evidence.append("compensation-result.json")
+    return "; ".join(evidence)
+
+
+def _outbox_required_action(item: dict) -> str:
+    phase = _outbox_item_phase(item)
+    if phase == "pending":
+        return "prepare with approval/waiver binding before any external dispatch"
+    if phase == "prepared":
+        return "dispatch only once, then record commit evidence into external-effects.jsonl"
+    if phase == "committed":
+        return "review evidence and execute compensation/manual handoff if needed"
+    if phase == "compensated":
+        return "verify compensation receipt; do not claim exact rollback"
+    return "manual review required before external dispatch or compensation"
+
+
 def _side_effect_ledger_item_ref(event: dict, index: int) -> str:
     return f"side-effects:{event.get('event_id') or event.get('side_effect_id') or index}"
 
@@ -226,6 +259,7 @@ def render_operator_packet_v2(
         external_registry_errors.append(str(exc))
     external_registry_exists = (run_path / "external-effects.jsonl").exists()
     external_effect_by_item: dict[str, dict] = {}
+    external_outbox_by_item: dict[str, dict] = {}
     side_effect_ledger_by_item: dict[str, dict] = {}
     side_effect_ledger_errors: list[str] = []
     for effect in external_effect_records:
@@ -271,7 +305,9 @@ def render_operator_packet_v2(
             if effect_id and record_errors:
                 compensation_result_errors_by_effect_id.setdefault(effect_id, []).extend(record_errors)
     for index, item in enumerate(outbox_items):
-        external_items.append(_outbox_item_id(item, index))
+        item_id = _outbox_item_id(item, index)
+        external_items.append(item_id)
+        external_outbox_by_item[item_id] = item
 
     completed_result_statuses = {"compensation_completed", "completed", "verified"}
     completed_effect_ids = {
@@ -307,10 +343,13 @@ def render_operator_packet_v2(
     )
 
     next_action = "verify_only"
+    outbox_review_required = any(_outbox_item_phase(item) in {"pending", "prepared", "manual_review"} for item in outbox_items)
     if unsafe_outbox_boundary:
         next_action = "pending_unbound_external_outbox"
     elif external_registry_compensation_complete:
         next_action = "compensation_complete_verify_receipt"
+    elif outbox_review_required:
+        next_action = "external_outbox_review_required"
     elif external_items:
         next_action = "compensation_review_required"
     elif files:
@@ -373,6 +412,21 @@ def render_operator_packet_v2(
             )
         )
     for item in external_items:
+        if item in external_outbox_by_item:
+            outbox_item = external_outbox_by_item[item]
+            lines.append(
+                _row(
+                    [
+                        _outbox_item_id(outbox_item, 0),
+                        "external_outbox",
+                        _outbox_item_ref(outbox_item),
+                        _outbox_item_phase(outbox_item),
+                        "false",
+                        _outbox_item_evidence(outbox_item),
+                    ]
+                )
+            )
+            continue
         evidence_ref = "external-effects.jsonl" if item in external_effect_by_item else ("side-effects.jsonl" if item in side_effect_ledger_by_item else item)
         effect = external_effect_by_item.get(item)
         ledger_display = _side_effect_ledger_display(side_effect_ledger_by_item[item], 0) if item in side_effect_ledger_by_item else None
@@ -439,6 +493,7 @@ def render_operator_packet_v2(
     lines.extend([
         "",
         "## 5. External compensation / manual review status",
+        f"- external-outbox.json: {'present' if outbox_items else 'not_present'}",
         f"- external-effects.jsonl: {'invalid' if external_registry_errors else ('present' if external_registry_exists else 'not_present')}",
         f"- side-effects.jsonl: {'invalid' if side_effect_ledger_errors else ('present' if side_effect_ledger_by_item else 'not_present')}",
         f"- legacy side-effect ledger compatibility: {'manual_review_required for side-effect-ledger.v1 external entries' if side_effect_ledger_by_item else 'not_applicable'}",
@@ -453,6 +508,21 @@ def render_operator_packet_v2(
     ])
     if external_items:
         for item in external_items:
+            if item in external_outbox_by_item:
+                outbox_item = external_outbox_by_item[item]
+                lines.append(
+                    _row(
+                        [
+                            item,
+                            "external_outbox",
+                            outbox_item.get("compensation_capability", "manual"),
+                            "false",
+                            _outbox_required_action(outbox_item),
+                            _outbox_item_evidence(outbox_item),
+                        ]
+                    )
+                )
+                continue
             effect = external_effect_by_item.get(item, {})
             ledger_display = _side_effect_ledger_display(side_effect_ledger_by_item[item], 0) if item in side_effect_ledger_by_item else None
             effect_id = str(effect.get("effect_id") or "") if effect else (_effect_id_for_external_item(item) if ledger_display else "")
@@ -503,6 +573,8 @@ def render_operator_packet_v2(
     if external_items:
         for item in external_items:
             action = "review evidence and execute compensation/manual handoff if needed"
+            if item in external_outbox_by_item:
+                action = _outbox_required_action(external_outbox_by_item[item])
             if unsafe_outbox_boundary:
                 action = "Do not approve, resume, or dispatch external side effects from this outbox item; pending shadow review only"
             lines.append(_row([item, "action outside the local repo", "local rollback cannot prove the external action was undone", action]))

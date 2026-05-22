@@ -4,6 +4,8 @@ Schema: `external-side-effect.v1`
 
 SafeLoop uses this registry for actions outside the local repo. These actions are tracked for compensation and manual review only. They are never represented as covered local file rollback and never receive an exact rollback claim.
 
+For actions that have not happened yet, use `external-outbox.v1` first. `external-effects.jsonl` is the committed-effect registry; `external-outbox.json` separates `pending` and `prepared` intent from `committed` effects.
+
 ## Artifact
 
 Each run may include:
@@ -108,3 +110,5 @@ status: manual_review_required
 ```
 
 The command appends to `RUN_DIR/external-effects.jsonl`.
+
+For pre-dispatch lifecycle, see [`external-outbox-v1.md`](external-outbox-v1.md).

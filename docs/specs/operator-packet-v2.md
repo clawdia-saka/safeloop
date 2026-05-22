@@ -61,6 +61,8 @@ Types:
 When present, the packet surfaces these file-backed external artifacts without importing compensation APIs:
 
 - `external-effects.jsonl`: external registry; status is present/not_present.
+- `external-outbox.json`: pre-dispatch external lifecycle; status is present/not_present.
+- `side-effects.jsonl`: legacy side-effect ledger fallback when no external registry exists.
 - `compensation-plan.json`: planned compensation artifact; status is read from its top-level `status` when present.
 - `compensation-result.json`: compensation result/receipt artifact; status is read from its top-level `status` when present.
 
@@ -86,7 +88,9 @@ One of:
 
 - verify_only
 - rollback_available
+- external_outbox_review_required
 - compensation_review_required
+- pending_unbound_external_outbox
 - manual_review_required
 - blocked
 

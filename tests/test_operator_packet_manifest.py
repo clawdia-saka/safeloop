@@ -123,6 +123,37 @@ def test_missing_artifact_present_at_generation_invalidates_manifest(tmp_path: P
     assert any("source artifact missing: compensation-result.json" in issue for issue in result["verification"]["issues"])
 
 
+def test_manifest_tracks_external_outbox_source_artifact(tmp_path: Path) -> None:
+    run_dir = make_run_dir(tmp_path)
+    (run_dir / "external-outbox.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "external-outbox.v1",
+                "run_id": "run-manifest",
+                "items": [
+                    {
+                        "schema_version": "external-outbox-item.v1",
+                        "outbox_id": "outbox-0001",
+                        "phase": "pending",
+                        "status": "pending",
+                        "exact_rollback": False,
+                        "dispatch_allowed": False,
+                    }
+                ],
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    packet = write_operator_packet_v2(run_dir)
+
+    manifest = write_operator_packet_manifest(run_dir, packet)
+
+    outbox = next(item for item in manifest["source_artifacts"] if item["path"] == "external-outbox.json")
+    assert outbox["present"] is True
+    assert outbox["required"] is False
+
+
 def test_manifest_boundary_is_local_tamper_evident_not_tamper_proof(tmp_path: Path) -> None:
     run_dir = make_run_dir(tmp_path)
     packet = write_operator_packet_v2(run_dir)

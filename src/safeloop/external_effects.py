@@ -128,6 +128,8 @@ def record_external_effect(
     status: str | None = None,
     exact_rollback: bool = False,
     created_at: str | None = None,
+    outbox_id: str | None = None,
+    lifecycle_phase: str | None = None,
 ) -> dict[str, Any]:
     """Append one external side-effect record to RUN_DIR/external-effects.jsonl.
 
@@ -187,6 +189,10 @@ def record_external_effect(
         "evidence": evidence,
         "status": final_status,
     }
+    if outbox_id:
+        effect["outbox_id"] = str(outbox_id)
+    if lifecycle_phase:
+        effect["lifecycle_phase"] = str(lifecycle_phase)
 
     path = _registry_path(run_path)
     with path.open("a", encoding="utf-8") as fh:

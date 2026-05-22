@@ -36,6 +36,13 @@ from safeloop.compensation import (
 )
 from safeloop.control_plane.anchor_audit import audit_control_plane_anchors
 from safeloop.external_effects import ExternalEffectValidationError, record_external_effect
+from safeloop.external_outbox import (
+    ExternalOutboxError,
+    commit_external_outbox_item,
+    enqueue_external_outbox_item,
+    prepare_external_outbox_item,
+    read_external_outbox,
+)
 from safeloop.html_artifacts import write_docs_packet_html, write_markdown_doc_html, write_readiness_html
 from safeloop.local_anchor import create_local_anchor, verify_local_anchor
 from safeloop.operator_packet import write_operator_packet_v2
@@ -1014,6 +1021,36 @@ def main(argv: list[str] | None = None) -> int:
     external_record.add_argument("--evidence", required=True)
     external_record.add_argument("--quote-or-field", required=True)
     external_record.add_argument("--capability", default="manual")
+    external_outbox = external_sub.add_parser("outbox", help="Manage external outbox lifecycle items.")
+    external_outbox_sub = external_outbox.add_subparsers(dest="outbox_cmd", required=True)
+    external_outbox_enqueue = external_outbox_sub.add_parser("enqueue", help="Record a pending external outbox intent.")
+    external_outbox_enqueue.add_argument("run_dir")
+    external_outbox_enqueue.add_argument("--kind", required=True)
+    external_outbox_enqueue.add_argument("--target", required=True)
+    external_outbox_enqueue.add_argument("--action", required=True)
+    external_outbox_enqueue.add_argument("--evidence", required=True)
+    external_outbox_enqueue.add_argument("--quote-or-field", required=True)
+    external_outbox_enqueue.add_argument("--reason", required=True)
+    external_outbox_enqueue.add_argument("--capability", default="manual")
+    external_outbox_enqueue.add_argument("--actor", default="unknown")
+    external_outbox_prepare = external_outbox_sub.add_parser("prepare", help="Bind a pending outbox item to approval/waiver evidence.")
+    external_outbox_prepare.add_argument("run_dir")
+    external_outbox_prepare.add_argument("outbox_id")
+    external_outbox_prepare.add_argument("--approval-request-digest", required=True)
+    external_outbox_prepare.add_argument("--approval-status", required=True)
+    external_outbox_prepare.add_argument("--decision-id")
+    external_outbox_prepare.add_argument("--waiver-id")
+    external_outbox_prepare.add_argument("--actor", default="unknown")
+    external_outbox_commit = external_outbox_sub.add_parser("commit", help="Record a prepared outbox item as externally committed.")
+    external_outbox_commit.add_argument("run_dir")
+    external_outbox_commit.add_argument("outbox_id")
+    external_outbox_commit.add_argument("--external-ref", required=True)
+    external_outbox_commit.add_argument("--evidence", required=True)
+    external_outbox_commit.add_argument("--quote-or-field", required=True)
+    external_outbox_commit.add_argument("--actor", default="unknown")
+    external_outbox_list = external_outbox_sub.add_parser("list", help="List external outbox lifecycle items.")
+    external_outbox_list.add_argument("run_dir")
+    external_outbox_list.add_argument("--json", action="store_true")
     op = sub.add_parser("operator-packet", help="Generate a SafeLoop operator packet from a run directory.")
     op.add_argument("run_dir")
     op.add_argument("--v2", action="store_true", help="Generate Operator Packet v2 (default).")
@@ -1301,6 +1338,72 @@ def main(argv: list[str] | None = None) -> int:
             print("exact rollback: false")
             print(f"status: {effect['status']}")
             return 0
+        if args.external_cmd == "outbox":
+            try:
+                if args.outbox_cmd == "enqueue":
+                    item = enqueue_external_outbox_item(
+                        Path(args.run_dir),
+                        kind=args.kind,
+                        target=args.target,
+                        action=args.action,
+                        evidence_path_or_url=args.evidence,
+                        quote_or_field=args.quote_or_field,
+                        compensation_capability=args.capability,
+                        reason=args.reason,
+                        actor=args.actor,
+                    )
+                    print(f"External outbox item enqueued: {item['outbox_id']}")
+                    print(f"phase: {item['phase']}")
+                    print("exact rollback: false")
+                    print("dispatch allowed: false")
+                    return 0
+                if args.outbox_cmd == "prepare":
+                    item = prepare_external_outbox_item(
+                        Path(args.run_dir),
+                        args.outbox_id,
+                        approval_request_digest=args.approval_request_digest,
+                        approval_status=args.approval_status,
+                        decision_id=args.decision_id,
+                        waiver_id=args.waiver_id,
+                        actor=args.actor,
+                    )
+                    print(f"External outbox item prepared: {item['outbox_id']}")
+                    print(f"phase: {item['phase']}")
+                    print("dispatch allowed: true")
+                    print("exact rollback: false")
+                    return 0
+                if args.outbox_cmd == "commit":
+                    result = commit_external_outbox_item(
+                        Path(args.run_dir),
+                        args.outbox_id,
+                        external_ref=args.external_ref,
+                        evidence_path_or_url=args.evidence,
+                        quote_or_field=args.quote_or_field,
+                        actor=args.actor,
+                    )
+                    item = result["item"]
+                    effect = result["external_effect"]
+                    print(f"External outbox item committed: {item['outbox_id']}")
+                    print(f"phase: {item['phase']}")
+                    print(f"external effect: {effect['effect_id']}")
+                    print("exact rollback: false")
+                    print(f"compensation status: {item['compensation_status']}")
+                    return 0
+                if args.outbox_cmd == "list":
+                    outbox = read_external_outbox(Path(args.run_dir))
+                    if args.json:
+                        print(json.dumps(outbox, indent=2, sort_keys=True))
+                    else:
+                        print("SafeLoop external outbox")
+                        for item in outbox["items"]:
+                            print(
+                                f"{item['outbox_id']}: {item['phase']} "
+                                f"{item['kind']}:{item['target']} exact_rollback=false"
+                            )
+                    return 0
+            except ExternalOutboxError as exc:
+                print(str(exc), file=sys.stderr)
+                return 2
     if args.cmd == "operator-packet":
         run_dir = Path(args.run_dir)
         if not (run_dir / "run.json").exists():

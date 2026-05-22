@@ -220,6 +220,16 @@ bash examples/compensation_message_demo.sh
 
 They show that covered local rollback and compensation for actions outside the local repo are separate: the compensation plan records a concrete cleanup/correction action, keeps `exact_rollback: false`, and preserves manual review when GitHub, messaging, email, or webhook state must be verified.
 
+For actions that may leave the local repo but have not happened yet, use the `external-outbox.json` lifecycle. It records `pending` intent, binds approval/waiver evidence as `prepared`, and only writes `external-effects.jsonl` after a `committed` effect:
+
+```bash
+safeloop external outbox enqueue RUN_DIR --kind webhook --target URL --action send --evidence outbox/webhook-intent.json --quote-or-field payload_hash=sha256:intent --reason "send review webhook"
+safeloop external outbox prepare RUN_DIR outbox-0001 --approval-request-digest sha256:approval --approval-status approved --decision-id decision-1
+safeloop external outbox commit RUN_DIR outbox-0001 --external-ref delivery_id=abc123 --evidence logs/webhook-delivery.log --quote-or-field delivery_id=abc123
+```
+
+The outbox is local evidence only; SafeLoop still does not perform network calls or claim exact rollback for external systems. See [`docs/specs/external-outbox-v1.md`](docs/specs/external-outbox-v1.md).
+
 For realistic local-only agent run examples, see [`docs/real-world-agent-runs.md`](docs/real-world-agent-runs.md):
 
 ```bash

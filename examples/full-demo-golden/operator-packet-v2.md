@@ -34,6 +34,7 @@
 | selected action group rollback | cp-0001 | available | true | none | python -m safeloop.cli rollback apply "$RUN_DIR" "$RUN_ID" "cp-0001" |
 
 ## 5. External compensation / manual review status
+- external-outbox.json: not_present
 - external-effects.jsonl: not_present
 - side-effects.jsonl: not_present
 - legacy side-effect ledger compatibility: not_applicable

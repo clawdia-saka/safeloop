@@ -22,13 +22,18 @@ RUN_DIR/runtime-tool-firewall.jsonl
 Important fields:
 
 - `event_id`: run-local route event ID such as `fw-0001`
+- `prev_event_hash`: previous firewall route hash, or `null` for the first event
+- `event_hash`: SHA-256 hash over the canonical route event without `event_hash`
 - `tool`, `action`, `target`, `target_kind`: narrow references for the requested tool intent
 - `route`: `allow_read_only`, `quarantine`, `external_outbox`, or `manual_review`
 - `route_reason`: why the default route was selected
+- `dry_run`: `false` for persisted route events
 - `manual_review_required`: `true` for unknown or unroutable requests
 - `exact_rollback`: `true` only when a local quarantine item was retained
 - `external_dispatch_allowed`: always `false` from firewall routing
 - `quarantine_item_id` or `outbox_id` when the route created a downstream artifact
+
+Route events are appended under an inter-process file lock. Readers verify the hash chain and fail closed when an existing `runtime-tool-firewall.jsonl` line is malformed, has a mismatched `prev_event_hash`, or has a mismatched `event_hash`.
 
 ## CLI
 
@@ -53,6 +58,21 @@ safeloop firewall route RUN_DIR \
   --reason "send review webhook"
 ```
 
+Classify without writing quarantine, outbox, or firewall artifacts:
+
+```bash
+safeloop firewall route RUN_DIR \
+  --tool mystery \
+  --action transmogrify \
+  --target opaque-ref \
+  --reason "agent requested an unknown capability" \
+  --dry-run \
+  --strict \
+  --json
+```
+
+`--strict` exits non-zero when the selected route is `manual_review`. With `--dry-run`, it still writes no artifacts.
+
 List route events:
 
 ```bash
@@ -74,3 +94,4 @@ safeloop firewall list RUN_DIR --json
 - The firewall does not store raw secrets or sensitive payloads.
 - Unknown tool semantics never default to execution.
 - External actions never become exact rollback.
+- Dry-run classification never creates quarantine, outbox, or firewall artifacts.

@@ -33,7 +33,7 @@ Route a destructive tool request through the runtime tool firewall before execut
 safeloop firewall route "$RUN_DIR" --tool rm --action delete --target generated.txt --workspace-root "$PWD" --reason "cleanup generated artifact"
 ```
 
-The firewall records `runtime-tool-firewall.jsonl`. Destructive/local mutation routes to quarantine, external write/send/publish routes to `external-outbox.json`, and unknown semantics route to manual review.
+The firewall records `runtime-tool-firewall.jsonl` as a hash-chained log under a file lock. Destructive/local mutation routes to quarantine, external write/send/publish routes to `external-outbox.json`, and unknown semantics route to manual review. Use `--dry-run --strict` to classify a request without writing artifacts and fail the command when the request would require manual review.
 
 List items:
 

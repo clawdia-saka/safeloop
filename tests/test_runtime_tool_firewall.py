@@ -4,13 +4,16 @@ import json
 import os
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+
+import pytest
 
 from safeloop.external_outbox import read_external_outbox
 from safeloop.operator_packet import render_operator_packet_v2
 from safeloop.operator_packet_manifest import write_operator_packet_manifest
 from safeloop.quarantine import list_quarantine
-from safeloop.runtime_tool_firewall import read_runtime_tool_firewall_events, route_tool_action
+from safeloop.runtime_tool_firewall import RuntimeToolFirewallError, read_runtime_tool_firewall_events, route_tool_action
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -92,7 +95,11 @@ def test_destructive_local_file_routes_to_quarantine(tmp_path: Path) -> None:
     assert event["quarantine_item_id"].startswith("q-")
     assert not target.exists()
     assert list_quarantine(run_dir)["items"][0]["item_id"] == event["quarantine_item_id"]
-    assert read_runtime_tool_firewall_events(run_dir)[0]["event_id"] == "fw-0001"
+    persisted = read_runtime_tool_firewall_events(run_dir)[0]
+    assert persisted["event_id"] == "fw-0001"
+    assert persisted["prev_event_hash"] is None
+    assert persisted["event_hash"].startswith("sha256:")
+    assert persisted["dry_run"] is False
 
 
 def test_destructive_local_directory_routes_to_recursive_quarantine(tmp_path: Path) -> None:
@@ -160,6 +167,48 @@ def test_unknown_tool_routes_to_manual_review_without_side_effect(tmp_path: Path
     assert list_quarantine(run_dir)["items"] == []
 
 
+def test_firewall_log_is_hash_chained_and_locked_for_parallel_manual_review(tmp_path: Path) -> None:
+    run_dir = make_run_dir(tmp_path)
+
+    def route(index: int) -> dict:
+        return route_tool_action(
+            run_dir,
+            tool="mystery",
+            action=f"transmogrify-{index}",
+            target=f"opaque-ref-{index}",
+            reason="agent requested an unknown capability",
+        )
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        list(executor.map(route, range(8)))
+
+    events = read_runtime_tool_firewall_events(run_dir)
+
+    assert [event["event_id"] for event in events] == [f"fw-{index:04d}" for index in range(1, 9)]
+    assert events[0]["prev_event_hash"] is None
+    for previous, current in zip(events, events[1:]):
+        assert current["prev_event_hash"] == previous["event_hash"]
+        assert current["event_hash"].startswith("sha256:")
+
+
+def test_firewall_log_hash_mismatch_fails_closed(tmp_path: Path) -> None:
+    run_dir = make_run_dir(tmp_path)
+    route_tool_action(
+        run_dir,
+        tool="mystery",
+        action="transmogrify",
+        target="opaque-ref",
+        reason="agent requested an unknown capability",
+    )
+    path = run_dir / "runtime-tool-firewall.jsonl"
+    event = json.loads(path.read_text(encoding="utf-8"))
+    event["route"] = "allow_read_only"
+    path.write_text(json.dumps(event, sort_keys=True) + "\n", encoding="utf-8")
+
+    with pytest.raises(RuntimeToolFirewallError, match="event_hash mismatch"):
+        read_runtime_tool_firewall_events(run_dir)
+
+
 def test_read_only_tool_routes_to_allow_read_only(tmp_path: Path) -> None:
     run_dir = make_run_dir(tmp_path)
 
@@ -175,6 +224,31 @@ def test_read_only_tool_routes_to_allow_read_only(tmp_path: Path) -> None:
     assert event["manual_review_required"] is False
     assert event["external_dispatch_allowed"] is False
     assert not (run_dir / "external-outbox.json").exists()
+
+
+def test_dry_run_classifies_without_writing_firewall_or_downstream_artifacts(tmp_path: Path) -> None:
+    workspace = make_workspace(tmp_path)
+    run_dir = make_run_dir(tmp_path)
+    target = workspace / "scratch.txt"
+    target.write_text("temporary\n", encoding="utf-8")
+
+    event = route_tool_action(
+        run_dir,
+        tool="rm",
+        action="delete",
+        target="scratch.txt",
+        workspace_root=workspace,
+        reason="cleanup generated scratch file",
+        dry_run=True,
+    )
+
+    assert event["route"] == "quarantine"
+    assert event["dry_run"] is True
+    assert event["exact_rollback"] is False
+    assert event["would_create_artifacts"] == ["quarantine"]
+    assert target.exists()
+    assert not (run_dir / "runtime-tool-firewall.jsonl").exists()
+    assert list_quarantine(run_dir)["items"] == []
 
 
 def test_firewall_cli_route_outputs_json(tmp_path: Path) -> None:
@@ -199,6 +273,34 @@ def test_firewall_cli_route_outputs_json(tmp_path: Path) -> None:
     event = json.loads(result.stdout)
     assert event["route"] == "external_outbox"
     assert event["outbox_id"] == "outbox-0001"
+
+
+def test_firewall_cli_dry_run_strict_manual_review_returns_nonzero_without_writing(tmp_path: Path) -> None:
+    run_dir = make_run_dir(tmp_path)
+
+    result = run_cli(
+        "firewall",
+        "route",
+        str(run_dir),
+        "--tool",
+        "mystery",
+        "--action",
+        "transmogrify",
+        "--target",
+        "opaque-ref",
+        "--reason",
+        "agent requested an unknown capability",
+        "--dry-run",
+        "--strict",
+        "--json",
+    )
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    event = json.loads(result.stdout)
+    assert event["route"] == "manual_review"
+    assert event["dry_run"] is True
+    assert not (run_dir / "runtime-tool-firewall.jsonl").exists()
+    assert not (run_dir / "external-outbox.json").exists()
 
 
 def test_operator_packet_and_manifest_surface_firewall_artifact(tmp_path: Path) -> None:

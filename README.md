@@ -134,10 +134,11 @@ Use the runtime tool firewall when an agent asks to use a tool that may mutate l
 ```bash
 safeloop firewall route "$RUN_DIR" --tool rm --action delete --target generated.txt --workspace-root "$PWD" --reason "cleanup generated artifact"
 safeloop firewall route "$RUN_DIR" --tool webhook --action send --target https://example.test/hooks/review --reason "send review webhook"
+safeloop firewall route "$RUN_DIR" --tool mystery --action transmogrify --target opaque-ref --reason "unknown tool" --dry-run --strict --json
 safeloop firewall list "$RUN_DIR" --json
 ```
 
-Default route: destructive/local mutation goes to quarantine, external write/send/publish goes to `external-outbox.json`, and unknown semantics go to manual review. External dispatch stays `false`, and external actions remain `exact_rollback: false`. See [`docs/specs/runtime-tool-firewall-v1.md`](docs/specs/runtime-tool-firewall-v1.md).
+Default route: destructive/local mutation goes to quarantine, external write/send/publish goes to `external-outbox.json`, and unknown semantics go to manual review. The firewall log is hash-chained under a file lock. `--dry-run` classifies without writing artifacts, and `--strict` exits non-zero for manual review. External dispatch stays `false`, and external actions remain `exact_rollback: false`. See [`docs/specs/runtime-tool-firewall-v1.md`](docs/specs/runtime-tool-firewall-v1.md).
 
 ## Demo commands
 

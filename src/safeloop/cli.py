@@ -1083,6 +1083,8 @@ def main(argv: list[str] | None = None) -> int:
     firewall_route.add_argument("--target-kind", default="auto", choices=["auto", "local_file", "local_directory", "external", "unknown"])
     firewall_route.add_argument("--reason", required=True)
     firewall_route.add_argument("--actor", default="unknown")
+    firewall_route.add_argument("--dry-run", action="store_true", help="Classify the route without writing quarantine, outbox, or firewall artifacts.")
+    firewall_route.add_argument("--strict", action="store_true", help="Exit non-zero when the selected route requires manual review.")
     firewall_route.add_argument("--json", action="store_true")
     firewall_list = firewall_sub.add_parser("list", help="List runtime tool firewall route events.")
     firewall_list.add_argument("run_dir")
@@ -1452,21 +1454,23 @@ def main(argv: list[str] | None = None) -> int:
                     target_kind=args.target_kind,
                     reason=args.reason,
                     actor=args.actor,
+                    dry_run=args.dry_run,
                 )
                 if args.json:
                     print(json.dumps(event, indent=2, sort_keys=True))
                 else:
                     print(f"Runtime tool firewall route: {event['route']}")
-                    print(f"event id: {event['event_id']}")
+                    print(f"event id: {event.get('event_id') or 'dry-run'}")
                     print(f"reason: {event['route_reason']}")
                     if event.get("quarantine_item_id"):
                         print(f"quarantine item: {event['quarantine_item_id']}")
                     if event.get("outbox_id"):
                         print(f"outbox item: {event['outbox_id']}")
+                    print(f"dry run: {str(event.get('dry_run', False)).lower()}")
                     print(f"manual review required: {str(event['manual_review_required']).lower()}")
                     print(f"exact rollback: {str(event['exact_rollback']).lower()}")
                     print("external dispatch allowed: false")
-                return 0
+                return 1 if args.strict and event["route"] == "manual_review" else 0
             if args.firewall_cmd == "list":
                 events = read_runtime_tool_firewall_events(Path(args.run_dir))
                 result = {"schema_version": "runtime-tool-firewall-list.v1", "items": events, "count": len(events)}

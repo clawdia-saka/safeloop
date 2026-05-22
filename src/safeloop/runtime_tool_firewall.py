@@ -6,6 +6,7 @@ to the external outbox, and unknown intents become manual-review items.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from datetime import datetime, timezone
@@ -15,6 +16,7 @@ from typing import Any, Literal
 from safeloop.external_effects import ALLOWED_KINDS
 from safeloop.external_outbox import ExternalOutboxError, enqueue_external_outbox_item
 from safeloop.quarantine import QuarantineError, put_directory_in_quarantine, put_file_in_quarantine
+from safeloop.storage import exclusive_lock
 
 FIREWALL_LOG = "runtime-tool-firewall.jsonl"
 SCHEMA_VERSION = "runtime-tool-firewall-route.v1"
@@ -121,6 +123,17 @@ def _tokens(tool: str, action: str) -> set[str]:
     return {part for part in re.split(r"[^a-z0-9_+-]+", raw) if part}
 
 
+def _event_hash(record: dict[str, Any]) -> str:
+    payload = dict(record)
+    payload.pop("event_hash", None)
+    data = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return "sha256:" + hashlib.sha256(data).hexdigest()
+
+
+def _is_sha(value: Any) -> bool:
+    return isinstance(value, str) and value.startswith("sha256:") and len(value) == 71
+
+
 def _looks_external_target(target: str) -> bool:
     value = target.strip()
     return bool(_URL_RE.match(value) or value.startswith("mailto:") or _EMAIL_RE.match(value))
@@ -166,22 +179,47 @@ def _classify_route(tool: str, action: str, target: str, target_kind: TargetKind
     return "manual_review", "unrecognized tool semantics"
 
 
-def _next_event_id(path: Path) -> str:
-    count = 0
-    if path.exists():
-        with path.open(encoding="utf-8") as handle:
-            count = sum(1 for line in handle if line.strip())
-    return f"fw-{count + 1:04d}"
+def _read_events(path: Path) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    events: list[dict[str, Any]] = []
+    previous_hash: str | None = None
+    with path.open(encoding="utf-8") as handle:
+        for line_no, line in enumerate(handle, start=1):
+            if not line.strip():
+                continue
+            try:
+                item = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise RuntimeToolFirewallError(f"invalid {FIREWALL_LOG} line {line_no}") from exc
+            if not isinstance(item, dict):
+                raise RuntimeToolFirewallError(f"{FIREWALL_LOG} line {line_no}: record must be an object")
+            event_hash = item.get("event_hash")
+            if item.get("prev_event_hash") != previous_hash:
+                raise RuntimeToolFirewallError(f"{FIREWALL_LOG} line {line_no}: prev_event_hash mismatch")
+            if not _is_sha(event_hash):
+                raise RuntimeToolFirewallError(f"{FIREWALL_LOG} line {line_no}: malformed event_hash")
+            if _event_hash(item) != event_hash:
+                raise RuntimeToolFirewallError(f"{FIREWALL_LOG} line {line_no}: event_hash mismatch")
+            previous_hash = event_hash
+            events.append(item)
+    return events
 
 
 def _append_firewall_event(run_path: Path, record: dict[str, Any]) -> dict[str, Any]:
     path = run_path / FIREWALL_LOG
-    record = dict(record)
-    record["event_id"] = _next_event_id(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(record, sort_keys=True) + "\n")
-    return record
+    lock_path = path.with_suffix(path.suffix + ".lock")
+    with lock_path.open("a+", encoding="utf-8") as lock_handle:
+        with exclusive_lock(lock_handle):
+            events = _read_events(path)
+            record = dict(record)
+            record["event_id"] = f"fw-{len(events) + 1:04d}"
+            record["prev_event_hash"] = events[-1]["event_hash"] if events else None
+            record["event_hash"] = _event_hash(record)
+            with path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(record, sort_keys=True) + "\n")
+            return record
 
 
 def _base_record(
@@ -210,6 +248,7 @@ def _base_record(
         "route": route,
         "route_reason": route_reason,
         "default_route": True,
+        "dry_run": False,
         "manual_review_required": manual_review_required,
         "exact_rollback": route == "quarantine",
         "external_dispatch_allowed": False,
@@ -299,6 +338,7 @@ def route_tool_action(
     reason: str,
     actor: str = "unknown",
     target_kind: TargetKind = "auto",
+    dry_run: bool = False,
 ) -> dict[str, Any]:
     """Route a tool request to quarantine, external outbox, or manual review.
 
@@ -338,6 +378,19 @@ def route_tool_action(
         route=route,
         route_reason=route_reason,
     )
+    if dry_run:
+        record["dry_run"] = True
+        record["exact_rollback"] = False
+        record["artifacts"] = []
+        if route == "quarantine":
+            record["would_create_artifacts"] = ["quarantine"]
+        elif route == "external_outbox":
+            record["would_create_artifacts"] = ["external-outbox.json"]
+        elif route == "manual_review":
+            record["would_create_artifacts"] = [FIREWALL_LOG]
+        else:
+            record["would_create_artifacts"] = []
+        return record
 
     if route == "quarantine":
         try:
@@ -387,16 +440,7 @@ def read_runtime_tool_firewall_events(run_dir: str | Path) -> list[dict[str, Any
     path = Path(run_dir) / FIREWALL_LOG
     if not path.exists():
         return []
-    events: list[dict[str, Any]] = []
-    with path.open(encoding="utf-8") as handle:
-        for line_no, line in enumerate(handle, start=1):
-            if not line.strip():
-                continue
-            try:
-                item = json.loads(line)
-            except json.JSONDecodeError as exc:
-                raise RuntimeToolFirewallError(f"invalid {FIREWALL_LOG} line {line_no}") from exc
-            if not isinstance(item, dict):
-                raise RuntimeToolFirewallError(f"{FIREWALL_LOG} line {line_no}: record must be an object")
-            events.append(item)
-    return events
+    lock_path = path.with_suffix(path.suffix + ".lock")
+    with lock_path.open("a+", encoding="utf-8") as lock_handle:
+        with exclusive_lock(lock_handle):
+            return _read_events(path)

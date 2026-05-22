@@ -106,7 +106,7 @@ This is still local evidence only. SafeLoop does not perform network calls, does
 
 ## Runtime tool firewall default route
 
-SafeLoop v4 adds `RUN_DIR/runtime-tool-firewall.jsonl` as the default route for risky runtime tool requests. The firewall does not execute tools: destructive/local mutation routes to quarantine, external write/send/publish routes to `external-outbox.json`, and unknown semantics route to manual review. See `docs/specs/runtime-tool-firewall-v1.md`.
+SafeLoop v4 adds `RUN_DIR/runtime-tool-firewall.jsonl` as the default route for risky runtime tool requests. The firewall does not execute tools: destructive/local mutation routes to quarantine, external write/send/publish routes to `external-outbox.json`, and unknown semantics route to manual review. Firewall events are hash-chained under a file lock, and `--dry-run --strict` can classify without writing artifacts while failing on manual-review routes. See `docs/specs/runtime-tool-firewall-v1.md`.
 
 ## Compensation plan v1
 

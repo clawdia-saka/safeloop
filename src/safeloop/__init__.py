@@ -9,6 +9,7 @@ from safeloop.hooks import (
     CompensationHookRegistry,
 )
 from safeloop.runtime import ResumableExecution, RunRecord, Runtime
+from safeloop.runtime_tool_exec import RuntimeToolExecError, execute_tool_request
 from safeloop.runtime_tool_firewall import RuntimeToolFirewallError, firewall_preflight
 from safeloop.scorecard import summarize_scores
 from safeloop.storage import JournalStorageError, LocalJournalStorage
@@ -43,10 +44,12 @@ __all__ = [
     "ResumableExecution",
     "RunRecord",
     "Runtime",
+    "RuntimeToolExecError",
     "RuntimeToolFirewallError",
     "RunViewer",
     "ScenarioDedupeGuard",
     "firewall_preflight",
+    "execute_tool_request",
     "semantic_fingerprint",
     "summarize_scores",
 ]

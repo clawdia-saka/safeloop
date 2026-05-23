@@ -16,6 +16,7 @@ SOURCE_ARTIFACTS: tuple[tuple[str, bool], ...] = (
     ("rollback-plan.json", True),
     ("rollback-result.json", False),
     ("runtime-tool-firewall.jsonl", False),
+    ("runtime-tool-exec.jsonl", False),
     ("external-outbox.json", False),
     ("external-effects.jsonl", False),
     ("compensation-plan.json", False),
@@ -111,7 +112,12 @@ def _source_artifact_entry(run_path: Path, rel_path: str, required: bool) -> dic
 
 def _expected_source_artifacts(run_path: Path) -> tuple[tuple[str, bool], ...]:
     quarantine_artifacts = tuple((path, True) for path in quarantine_manifest_artifacts(run_path))
-    return SOURCE_ARTIFACTS + quarantine_artifacts
+    exec_artifacts = tuple(
+        (path.relative_to(run_path).as_posix(), True)
+        for path in sorted((run_path / "runtime-tool-exec").glob("*/*.txt"))
+        if path.is_file()
+    )
+    return SOURCE_ARTIFACTS + quarantine_artifacts + exec_artifacts
 
 
 def build_operator_packet_manifest(

@@ -135,6 +135,7 @@ Use the runtime tool firewall when an agent asks to use a tool that may mutate l
 safeloop firewall route "$RUN_DIR" --tool rm --action delete --target generated.txt --workspace-root "$PWD" --reason "cleanup generated artifact"
 safeloop firewall route "$RUN_DIR" --tool webhook --action send --target https://example.test/hooks/review --reason "send review webhook"
 safeloop firewall route "$RUN_DIR" --tool mystery --action transmogrify --target opaque-ref --reason "unknown tool" --dry-run --strict --json
+safeloop firewall exec "$RUN_DIR" --tool cat --action read --target README.md --workspace-root "$PWD" --reason "inspect docs" -- cat README.md
 safeloop firewall list "$RUN_DIR" --json
 ```
 
@@ -147,7 +148,7 @@ with action_span("inspect_docs", intent="read docs"):
     firewall_preflight(tool="rg", action="search", target="README.md", reason="inspect docs")
 ```
 
-Default route: destructive/local mutation goes to quarantine, external write/send/publish goes to `external-outbox.json`, and unknown semantics go to manual review. The firewall log is hash-chained under a file lock. `--dry-run` classifies without writing artifacts, and `--strict` exits non-zero for manual review. External dispatch stays `false`, and external actions remain `exact_rollback: false`. See [`docs/specs/runtime-tool-firewall-v1.md`](docs/specs/runtime-tool-firewall-v1.md).
+`safeloop firewall exec` is the actual guarded subprocess wrapper. It never uses `shell=True`; only allowlisted read-only commands execute after a successful firewall route, and every execution or block is recorded in `runtime-tool-exec.jsonl` with stdout/stderr artifact paths. Destructive/local mutation still routes to quarantine, external write/send/publish goes to `external-outbox.json`, and unknown semantics go to manual review. The firewall and exec logs are hash-chained under file locks. `--dry-run` classifies without writing artifacts, and `--strict` exits non-zero for manual review. External dispatch stays `false`, and external actions remain `exact_rollback: false`. See [`docs/specs/runtime-tool-firewall-v1.md`](docs/specs/runtime-tool-firewall-v1.md).
 
 ## Demo commands
 

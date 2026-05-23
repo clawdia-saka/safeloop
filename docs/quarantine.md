@@ -37,6 +37,8 @@ The firewall records `runtime-tool-firewall.jsonl` as a hash-chained log under a
 
 Agent/runtime code can call `firewall_preflight()` before a tool call. Under `action_span()`, SafeLoop records the span's `action_id` on the firewall event so operator packets can link `runtime-tool-firewall.jsonl` back to `action-events.jsonl`.
 
+Use `safeloop firewall exec` when SafeLoop should actually run a command. The exec wrapper only runs allowlisted read-only argv commands after firewall routing. Destructive commands still route to quarantine and are not executed; external commands route to the outbox and are not dispatched; unknown commands remain manual review. Each execution or block is recorded in `runtime-tool-exec.jsonl`.
+
 List items:
 
 ```bash

@@ -6,6 +6,7 @@ from typing import Iterable
 
 from safeloop.compensation import compensation_result_receipt_ref, validate_compensation_result_record
 from safeloop.external_effects import ExternalEffectValidationError, read_external_effects
+from safeloop.runtime_tool_exec import RuntimeToolExecError, read_runtime_tool_exec_events
 from safeloop.runtime_tool_firewall import RuntimeToolFirewallError, read_runtime_tool_firewall_events
 from safeloop.side_effect_ledger import read_side_effect_events
 
@@ -15,6 +16,7 @@ BOUNDARY_LINES = [
     "SafeLoop does not claim exact rollback for actions outside the local repo.",
     "GitHub, messaging, email, webhooks, hosted systems, and third-party services require compensation/manual review rather than exact rollback.",
     "Unknown runtime tool requests require manual review before execution.",
+    "Guarded runtime tool execution only runs allowlisted read-only commands after firewall routing.",
 ]
 
 
@@ -133,6 +135,13 @@ def _runtime_tool_firewall_items(run_path: Path) -> tuple[list[dict], list[str]]
     try:
         return read_runtime_tool_firewall_events(run_path), []
     except RuntimeToolFirewallError as exc:
+        return [], [str(exc)]
+
+
+def _runtime_tool_exec_items(run_path: Path) -> tuple[list[dict], list[str]]:
+    try:
+        return read_runtime_tool_exec_events(run_path), []
+    except RuntimeToolExecError as exc:
         return [], [str(exc)]
 
 
@@ -259,8 +268,12 @@ def render_operator_packet_v2(
     quarantine_items = _quarantine_items_from_plan(rollback_plan)
     outbox_items = _external_outbox_items(run_path)
     firewall_items, firewall_errors = _runtime_tool_firewall_items(run_path)
+    exec_items, exec_errors = _runtime_tool_exec_items(run_path)
     firewall_manual_review_items = [
         item for item in firewall_items if str(item.get("route") or "") == "manual_review"
+    ]
+    exec_blocked_items = [
+        item for item in exec_items if str(item.get("status") or "") in {"blocked", "execution_error", "timed_out"}
     ]
     unsafe_outbox_boundary = _unsafe_outbox_boundary(run, outbox_items)
     external_items = list(external_evidence or [])
@@ -365,11 +378,13 @@ def render_operator_packet_v2(
         next_action = "external_outbox_review_required"
     elif external_items:
         next_action = "compensation_review_required"
+    elif exec_blocked_items:
+        next_action = "runtime_tool_exec_manual_review_required"
     elif firewall_manual_review_items:
         next_action = "runtime_tool_firewall_manual_review_required"
     elif files:
         next_action = "rollback_available"
-    if issues or external_registry_errors or compensation_result_errors or side_effect_ledger_errors or firewall_errors:
+    if issues or external_registry_errors or compensation_result_errors or side_effect_ledger_errors or firewall_errors or exec_errors:
         next_action = "blocked"
 
     lines: list[str] = [
@@ -390,7 +405,7 @@ def render_operator_packet_v2(
         f"- evidence packet status: {evidence_packet_status}",
         "- issues / warnings:",
     ]
-    if issues or warnings or external_registry_errors or compensation_result_errors or side_effect_ledger_errors or firewall_errors:
+    if issues or warnings or external_registry_errors or compensation_result_errors or side_effect_ledger_errors or firewall_errors or exec_errors:
         for issue in issues:
             lines.append(f"  - issue: {_cell(issue)}")
         for warning in warnings:
@@ -403,6 +418,8 @@ def render_operator_packet_v2(
             lines.append(f"  - issue: invalid_compensation_result: {_cell(error)}")
         for error in firewall_errors:
             lines.append(f"  - issue: invalid_runtime_tool_firewall: {_cell(error)}")
+        for error in exec_errors:
+            lines.append(f"  - issue: invalid_runtime_tool_exec: {_cell(error)}")
     else:
         lines.append("  - none")
 
@@ -444,6 +461,24 @@ def render_operator_packet_v2(
                     item.get("target"),
                     item.get("route"),
                     str(item.get("exact_rollback", False)).lower(),
+                    "; ".join(evidence),
+                ]
+            )
+        )
+    for item in exec_items:
+        evidence = ["runtime-tool-exec.jsonl", "runtime-tool-firewall.jsonl"]
+        if item.get("stdout_path"):
+            evidence.append(str(item["stdout_path"]))
+        if item.get("stderr_path"):
+            evidence.append(str(item["stderr_path"]))
+        lines.append(
+            _row(
+                [
+                    item.get("exec_id"),
+                    "runtime_tool_exec",
+                    item.get("target"),
+                    item.get("status"),
+                    "false",
                     "; ".join(evidence),
                 ]
             )
@@ -531,6 +566,7 @@ def render_operator_packet_v2(
         "",
         "## 5. External compensation / manual review status",
         f"- runtime-tool-firewall.jsonl: {'invalid' if firewall_errors else ('present' if firewall_items else 'not_present')}",
+        f"- runtime-tool-exec.jsonl: {'invalid' if exec_errors else ('present' if exec_items else 'not_present')}",
         f"- external-outbox.json: {'present' if outbox_items else 'not_present'}",
         f"- external-effects.jsonl: {'invalid' if external_registry_errors else ('present' if external_registry_exists else 'not_present')}",
         f"- side-effects.jsonl: {'invalid' if side_effect_ledger_errors else ('present' if side_effect_ledger_by_item else 'not_present')}",
@@ -608,7 +644,7 @@ def render_operator_packet_v2(
         _row(["Item", "Reason", "Risk", "Recommended operator action"]),
         _row(["---", "---", "---", "---"]),
     ])
-    if external_items or firewall_manual_review_items:
+    if external_items or firewall_manual_review_items or exec_blocked_items:
         for item in external_items:
             action = "review evidence and execute compensation/manual handoff if needed"
             if item in external_outbox_by_item:
@@ -627,6 +663,20 @@ def render_operator_packet_v2(
                         route_reason,
                         f"tool request held before execution: {target}",
                         "review the tool intent, then re-run with explicit target kind or use quarantine/outbox",
+                    ]
+                )
+            )
+        for item in exec_blocked_items:
+            exec_id = str(item.get("exec_id") or "runtime-tool-exec")
+            target = str(item.get("target") or "unknown")
+            block_reason = str(item.get("block_reason") or item.get("status") or "execution did not complete")
+            lines.append(
+                _row(
+                    [
+                        exec_id,
+                        block_reason,
+                        f"tool execution held or failed: {target}",
+                        "review the command and firewall route before retrying execution",
                     ]
                 )
             )

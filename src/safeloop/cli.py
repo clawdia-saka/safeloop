@@ -64,6 +64,7 @@ from safeloop.quarantine import (
     verify_quarantine_item,
 )
 from safeloop.rollback_groups import build_rollback_groups, print_rollback_groups
+from safeloop.runtime_tool_exec import RuntimeToolExecError, execute_tool_request, read_runtime_tool_exec_events
 from safeloop.runtime_tool_firewall import (
     RuntimeToolFirewallError,
     read_runtime_tool_firewall_events,
@@ -936,6 +937,12 @@ def _print_review(summary: dict) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    raw_argv = list(sys.argv[1:] if argv is None else argv)
+    firewall_exec_command: list[str] | None = None
+    if len(raw_argv) >= 2 and raw_argv[0] == "firewall" and raw_argv[1] == "exec" and "--" in raw_argv:
+        separator = raw_argv.index("--")
+        firewall_exec_command = raw_argv[separator + 1 :]
+        raw_argv = raw_argv[:separator]
     parser = argparse.ArgumentParser(
         prog="safeloop",
         description="SafeLoop: local watchdog, tamper-evident run timeline, and covered local-file rollback.",
@@ -1086,6 +1093,21 @@ def main(argv: list[str] | None = None) -> int:
     firewall_route.add_argument("--dry-run", action="store_true", help="Classify the route without writing quarantine, outbox, or firewall artifacts.")
     firewall_route.add_argument("--strict", action="store_true", help="Exit non-zero when the selected route requires manual review.")
     firewall_route.add_argument("--json", action="store_true")
+    firewall_exec = firewall_sub.add_parser("exec", help="Preflight and execute an allowlisted read-only command.")
+    firewall_exec.add_argument("run_dir")
+    firewall_exec.add_argument("--tool", required=True)
+    firewall_exec.add_argument("--action", required=True)
+    firewall_exec.add_argument("--target", required=True)
+    firewall_exec.add_argument("--workspace-root", default=".")
+    firewall_exec.add_argument("--cwd", help="Working directory for the command. Defaults to --workspace-root.")
+    firewall_exec.add_argument("--target-kind", default="auto", choices=["auto", "local_file", "local_directory", "external", "unknown"])
+    firewall_exec.add_argument("--reason", required=True)
+    firewall_exec.add_argument("--actor", default="unknown")
+    firewall_exec.add_argument("--timeout-seconds", type=float, default=30.0)
+    firewall_exec.add_argument("--json", action="store_true")
+    firewall_exec_list = firewall_sub.add_parser("exec-list", help="List guarded runtime tool execution events.")
+    firewall_exec_list.add_argument("run_dir")
+    firewall_exec_list.add_argument("--json", action="store_true")
     firewall_list = firewall_sub.add_parser("list", help="List runtime tool firewall route events.")
     firewall_list.add_argument("run_dir")
     firewall_list.add_argument("--json", action="store_true")
@@ -1168,7 +1190,9 @@ def main(argv: list[str] | None = None) -> int:
     quarantine_empty.add_argument("--older-than", required=True)
     quarantine_empty.add_argument("--reason", default="retention expired")
     quarantine_empty.add_argument("--actor", default="unknown")
-    args = parser.parse_args(argv)
+    args = parser.parse_args(raw_argv)
+    if args.cmd == "firewall" and getattr(args, "firewall_cmd", None) == "exec":
+        args.command = firewall_exec_command or []
 
     if args.cmd == "demo":
         try:
@@ -1472,6 +1496,50 @@ def main(argv: list[str] | None = None) -> int:
                     print(f"exact rollback: {str(event['exact_rollback']).lower()}")
                     print("external dispatch allowed: false")
                 return 1 if args.strict and event["route"] == "manual_review" else 0
+            if args.firewall_cmd == "exec":
+                command = list(args.command)
+                if command and command[0] == "--":
+                    command = command[1:]
+                result = execute_tool_request(
+                    Path(args.run_dir),
+                    tool=args.tool,
+                    action=args.action,
+                    target=args.target,
+                    command=command,
+                    workspace_root=Path(args.workspace_root),
+                    cwd=Path(args.cwd) if args.cwd else None,
+                    target_kind=args.target_kind,
+                    reason=args.reason,
+                    actor=args.actor,
+                    timeout_seconds=args.timeout_seconds,
+                )
+                if args.json:
+                    print(json.dumps(result, indent=2, sort_keys=True))
+                else:
+                    exec_event = result["exec_event"]
+                    print(f"Runtime tool exec status: {result['status']}")
+                    print(f"exec id: {exec_event.get('exec_id')}")
+                    print(f"firewall route: {exec_event.get('firewall_route')}")
+                    print(f"executed: {str(result.get('executed', False)).lower()}")
+                    if exec_event.get("block_reason"):
+                        print(f"block reason: {exec_event['block_reason']}")
+                    if exec_event.get("stdout_path"):
+                        print(f"stdout: {exec_event['stdout_path']}")
+                    if exec_event.get("stderr_path"):
+                        print(f"stderr: {exec_event['stderr_path']}")
+                if result["status"] == "blocked":
+                    return 1
+                return int(result.get("exit_code") or 0)
+            if args.firewall_cmd == "exec-list":
+                events = read_runtime_tool_exec_events(Path(args.run_dir))
+                result = {"schema_version": "runtime-tool-exec-list.v1", "items": events, "count": len(events)}
+                if args.json:
+                    print(json.dumps(result, indent=2, sort_keys=True))
+                else:
+                    print("SafeLoop runtime tool executions")
+                    for event in events:
+                        print(f"{event.get('exec_id')} {event.get('status')} {event.get('tool')}:{event.get('target')}")
+                return 0
             if args.firewall_cmd == "list":
                 events = read_runtime_tool_firewall_events(Path(args.run_dir))
                 result = {"schema_version": "runtime-tool-firewall-list.v1", "items": events, "count": len(events)}
@@ -1482,7 +1550,7 @@ def main(argv: list[str] | None = None) -> int:
                     for event in events:
                         print(f"{event.get('event_id')} {event.get('route')} {event.get('tool')}:{event.get('target')}")
                 return 0
-        except RuntimeToolFirewallError as exc:
+        except (RuntimeToolFirewallError, RuntimeToolExecError) as exc:
             print(str(exc), file=sys.stderr)
             return 2
     if args.cmd == "operator-packet":

@@ -37,6 +37,8 @@ operator-packet-manifest.v1
 - `rollback-plan.json`
 - `rollback-result.json` if present
 - `runtime-tool-firewall.jsonl` if present
+- `runtime-tool-exec.jsonl` if present
+- `runtime-tool-exec/*/stdout.txt` and `stderr.txt` if present
 - `external-effects.jsonl` if present
 - `compensation-plan.json` if present
 - `compensation-result.json` if present

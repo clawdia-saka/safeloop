@@ -478,6 +478,7 @@ def firewall_preflight(
     dry_run: bool = False,
     strict: bool = False,
     action_id: str | None = None,
+    source: str = "runtime_helper",
 ) -> dict[str, Any]:
     """Classify and record a runtime tool request before execution.
 
@@ -502,7 +503,7 @@ def firewall_preflight(
         actor=actor,
         target_kind=target_kind,
         dry_run=dry_run,
-        source="runtime_helper",
+        source=source,
         action_id=effective_action_id,
     )
     if strict and event.get("route") == "manual_review":

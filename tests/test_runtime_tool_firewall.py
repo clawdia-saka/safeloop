@@ -13,6 +13,7 @@ from safeloop.external_outbox import read_external_outbox
 from safeloop.operator_packet import render_operator_packet_v2
 from safeloop.operator_packet_manifest import write_operator_packet_manifest
 from safeloop.quarantine import list_quarantine
+from safeloop.runtime_tool_exec import execute_tool_request, read_runtime_tool_exec_events
 from safeloop.runtime_tool_firewall import RuntimeToolFirewallError, firewall_preflight, read_runtime_tool_firewall_events, route_tool_action
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -298,6 +299,104 @@ def test_dry_run_classifies_without_writing_firewall_or_downstream_artifacts(tmp
     assert list_quarantine(run_dir)["items"] == []
 
 
+def test_firewall_exec_runs_allowlisted_read_only_command_and_records_output(tmp_path: Path) -> None:
+    workspace = make_workspace(tmp_path)
+    run_dir = make_run_dir(tmp_path)
+    (workspace / "note.txt").write_text("safe read\n", encoding="utf-8")
+
+    result = execute_tool_request(
+        run_dir,
+        tool="cat",
+        action="read",
+        target="note.txt",
+        command=["cat", "note.txt"],
+        workspace_root=workspace,
+        reason="inspect note",
+        actor="codex",
+    )
+
+    assert result["status"] == "executed"
+    assert result["executed"] is True
+    assert result["exit_code"] == 0
+    firewall = read_runtime_tool_firewall_events(run_dir)[0]
+    assert firewall["route"] == "allow_read_only"
+    assert firewall["source"] == "exec_wrapper"
+    exec_event = read_runtime_tool_exec_events(run_dir)[0]
+    assert exec_event["status"] == "executed"
+    assert exec_event["firewall_event_id"] == firewall["event_id"]
+    assert exec_event["command"] == ["cat", "note.txt"]
+    assert (run_dir / exec_event["stdout_path"]).read_text(encoding="utf-8") == "safe read\n"
+    assert (run_dir / exec_event["stderr_path"]).read_text(encoding="utf-8") == ""
+
+
+def test_firewall_exec_routes_destructive_command_to_quarantine_without_running_shell_command(tmp_path: Path) -> None:
+    workspace = make_workspace(tmp_path)
+    run_dir = make_run_dir(tmp_path)
+    target = workspace / "scratch.txt"
+    target.write_text("temporary\n", encoding="utf-8")
+
+    result = execute_tool_request(
+        run_dir,
+        tool="rm",
+        action="delete",
+        target="scratch.txt",
+        command=["rm", "scratch.txt"],
+        workspace_root=workspace,
+        reason="cleanup generated scratch file",
+    )
+
+    assert result["status"] == "blocked"
+    assert result["executed"] is False
+    assert not target.exists()
+    firewall = read_runtime_tool_firewall_events(run_dir)[0]
+    assert firewall["route"] == "quarantine"
+    exec_event = read_runtime_tool_exec_events(run_dir)[0]
+    assert exec_event["block_reason"] == "firewall route quarantine does not permit execution"
+    assert list_quarantine(run_dir)["items"][0]["item_id"] == firewall["quarantine_item_id"]
+
+
+def test_firewall_exec_routes_external_command_to_outbox_without_dispatch(tmp_path: Path) -> None:
+    run_dir = make_run_dir(tmp_path)
+
+    result = execute_tool_request(
+        run_dir,
+        tool="curl",
+        action="post",
+        target="https://example.test/hooks/review",
+        command=["curl", "https://example.test/hooks/review"],
+        reason="send review webhook after operator approval",
+    )
+
+    assert result["status"] == "blocked"
+    assert result["executed"] is False
+    assert read_runtime_tool_firewall_events(run_dir)[0]["route"] == "external_outbox"
+    assert read_runtime_tool_exec_events(run_dir)[0]["block_reason"] == "firewall route external_outbox does not permit execution"
+    assert read_external_outbox(run_dir)["counts"]["pending"] == 1
+
+
+def test_firewall_exec_blocks_command_mismatch_even_when_route_is_read_only(tmp_path: Path) -> None:
+    workspace = make_workspace(tmp_path)
+    run_dir = make_run_dir(tmp_path)
+    (workspace / "note.txt").write_text("safe read\n", encoding="utf-8")
+    marker = workspace / "marker.txt"
+
+    result = execute_tool_request(
+        run_dir,
+        tool="cat",
+        action="read",
+        target="note.txt",
+        command=[sys.executable, "-c", "from pathlib import Path; Path('marker.txt').write_text('ran')"],
+        workspace_root=workspace,
+        reason="inspect note",
+    )
+
+    assert result["status"] == "blocked"
+    assert result["executed"] is False
+    assert not marker.exists()
+    assert read_runtime_tool_firewall_events(run_dir)[0]["route"] == "allow_read_only"
+    assert "does not match tool" in read_runtime_tool_exec_events(run_dir)[0]["block_reason"]
+
+
 def test_firewall_cli_route_outputs_json(tmp_path: Path) -> None:
     run_dir = make_run_dir(tmp_path)
 
@@ -321,6 +420,39 @@ def test_firewall_cli_route_outputs_json(tmp_path: Path) -> None:
     assert event["route"] == "external_outbox"
     assert event["outbox_id"] == "outbox-0001"
     assert event["source"] == "cli"
+
+
+def test_firewall_cli_exec_outputs_json_and_records_exec_artifact(tmp_path: Path) -> None:
+    workspace = make_workspace(tmp_path)
+    run_dir = make_run_dir(tmp_path)
+    (workspace / "note.txt").write_text("safe read\n", encoding="utf-8")
+
+    result = run_cli(
+        "firewall",
+        "exec",
+        str(run_dir),
+        "--tool",
+        "cat",
+        "--action",
+        "read",
+        "--target",
+        "note.txt",
+        "--workspace-root",
+        str(workspace),
+        "--reason",
+        "inspect note",
+        "--json",
+        "--",
+        "cat",
+        "note.txt",
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["status"] == "executed"
+    exec_event = payload["exec_event"]
+    assert exec_event["status"] == "executed"
+    assert (run_dir / exec_event["stdout_path"]).read_text(encoding="utf-8") == "safe read\n"
 
 
 def test_firewall_cli_dry_run_strict_manual_review_returns_nonzero_without_writing(tmp_path: Path) -> None:
@@ -389,6 +521,33 @@ def test_operator_packet_surfaces_action_event_evidence_for_correlated_firewall_
     assert "| fw-0001 | runtime_tool_firewall | opaque-ref | manual_review | false | runtime-tool-firewall.jsonl; action-events.jsonl |" in packet
 
 
+def test_operator_packet_and_manifest_surface_runtime_exec_artifact(tmp_path: Path) -> None:
+    workspace = make_workspace(tmp_path)
+    run_dir = make_run_dir(tmp_path)
+    (workspace / "note.txt").write_text("safe read\n", encoding="utf-8")
+    execute_tool_request(
+        run_dir,
+        tool="cat",
+        action="read",
+        target="note.txt",
+        command=["cat", "note.txt"],
+        workspace_root=workspace,
+        reason="inspect note",
+    )
+
+    packet = render_operator_packet_v2(run_dir)
+    manifest = write_operator_packet_manifest(run_dir)
+
+    assert "runtime-tool-exec.jsonl: present" in packet
+    assert "| runtime_tool_exec | note.txt | executed | false | runtime-tool-exec.jsonl; runtime-tool-firewall.jsonl;" in packet
+    exec_artifact = next(item for item in manifest["source_artifacts"] if item["path"] == "runtime-tool-exec.jsonl")
+    assert exec_artifact["present"] is True
+    assert exec_artifact["required"] is False
+    stdout_artifact = next(item for item in manifest["source_artifacts"] if item["path"].endswith("/stdout.txt"))
+    assert stdout_artifact["present"] is True
+    assert stdout_artifact["required"] is True
+
+
 def test_runtime_tool_firewall_docs_pin_default_routes() -> None:
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     spec = (ROOT / "docs" / "specs" / "runtime-tool-firewall-v1.md").read_text(encoding="utf-8")
@@ -401,3 +560,5 @@ def test_runtime_tool_firewall_docs_pin_default_routes() -> None:
         assert "manual review" in text
     assert "firewall_preflight" in readme
     assert "firewall_preflight" in spec
+    assert "firewall exec" in readme
+    assert "runtime-tool-exec.jsonl" in spec

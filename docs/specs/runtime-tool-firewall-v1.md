@@ -24,7 +24,7 @@ Important fields:
 - `event_id`: run-local route event ID such as `fw-0001`
 - `prev_event_hash`: previous firewall route hash, or `null` for the first event
 - `event_hash`: SHA-256 hash over the canonical route event without `event_hash`
-- `source`: `cli`, `api`, or `runtime_helper`
+- `source`: `cli`, `api`, `runtime_helper`, or `exec_wrapper`
 - `action_id`: optional `action-events.jsonl` action ID when the request is made inside an `action_span()`
 - `tool`, `action`, `target`, `target_kind`: narrow references for the requested tool intent
 - `route`: `allow_read_only`, `quarantine`, `external_outbox`, or `manual_review`
@@ -36,6 +36,24 @@ Important fields:
 - `quarantine_item_id` or `outbox_id` when the route created a downstream artifact
 
 Route events are appended under an inter-process file lock. Readers verify the hash chain and fail closed when an existing `runtime-tool-firewall.jsonl` line is malformed, has a mismatched `prev_event_hash`, or has a mismatched `event_hash`.
+
+Guarded command execution appends one record to:
+
+```text
+RUN_DIR/runtime-tool-exec.jsonl
+```
+
+Important execution fields:
+
+- `exec_id`: run-local guarded execution ID such as `texec-...`
+- `firewall_event_id` and `firewall_route`: the firewall decision that preceded execution
+- `status`: `executed`, `blocked`, `execution_error`, or `timed_out`
+- `executed`: `true` only when SafeLoop started the subprocess
+- `command`, `cwd`, `workspace_root`: the argv-form command and workspace boundary
+- `stdout_path`, `stderr_path`, and stream digests when execution starts
+- `block_reason` when SafeLoop refuses to execute
+
+Execution events are also hash-chained under a file lock.
 
 ## CLI
 
@@ -79,6 +97,26 @@ List route events:
 
 ```bash
 safeloop firewall list RUN_DIR --json
+```
+
+Execute an allowlisted read-only command after firewall routing:
+
+```bash
+safeloop firewall exec RUN_DIR \
+  --tool cat \
+  --action read \
+  --target README.md \
+  --workspace-root "$PWD" \
+  --reason "inspect docs" \
+  -- cat README.md
+```
+
+The exec wrapper uses argv-form subprocess execution and never uses `shell=True`. It only executes commands whose firewall route is `allow_read_only`, whose executable matches the declared `--tool`, and whose tool is in the read-only execution allowlist. Destructive/local mutation, external write/send/publish, and unknown requests are recorded but not executed. Read targets, `cwd`, and path-like command arguments must stay inside `--workspace-root`.
+
+List execution events:
+
+```bash
+safeloop firewall exec-list RUN_DIR --json
 ```
 
 ## Runtime Helper

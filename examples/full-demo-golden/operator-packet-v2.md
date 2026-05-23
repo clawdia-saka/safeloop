@@ -35,6 +35,7 @@
 
 ## 5. External compensation / manual review status
 - runtime-tool-firewall.jsonl: not_present
+- runtime-tool-exec.jsonl: not_present
 - external-outbox.json: not_present
 - external-effects.jsonl: not_present
 - side-effects.jsonl: not_present
@@ -63,3 +64,4 @@ recommended next action: compensation_review_required
 - SafeLoop does not claim exact rollback for actions outside the local repo.
 - GitHub, messaging, email, webhooks, hosted systems, and third-party services require compensation/manual review rather than exact rollback.
 - Unknown runtime tool requests require manual review before execution.
+- Guarded runtime tool execution only runs allowlisted read-only commands after firewall routing.

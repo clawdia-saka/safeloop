@@ -263,6 +263,13 @@ def render_operator_packet_v2(
     warnings = verification.get("warnings") or []
     local_anchor_status = "present" if (run_path / "local-anchor.json").exists() else "not_present"
     evidence_packet_status = "present" if any((run_path / name).exists() for name in ["operator-packet.md", "retrieved_context.json"]) else "not_present"
+    tool_shims = run.get("tool_shims") if isinstance(run.get("tool_shims"), dict) else {}
+    tool_shims_enabled = bool(run.get("tool_shims_enabled") or tool_shims.get("enabled"))
+    tool_shims_status = "enabled" if tool_shims_enabled else "disabled"
+    tool_shims_caveat = str(
+        tool_shims.get("bypass_caveat")
+        or "PATH shims are disabled; only explicit SafeLoop wrappers and direct firewall calls apply."
+    )
 
     files = _file_items_from_plan(rollback_plan)
     quarantine_items = _quarantine_items_from_plan(rollback_plan)
@@ -398,6 +405,8 @@ def render_operator_packet_v2(
         f"- ended_at: {ended_at}",
         f"- latest event hash: {latest_hash}",
         f"- verification status: {verification_status}",
+        f"- tool-shims: {tool_shims_status}",
+        f"- tool-shims bypass caveat: {_cell(tool_shims_caveat)}",
         "",
         "## 2. Artifact verification",
         f"- verify-artifacts status: {verification_status}",

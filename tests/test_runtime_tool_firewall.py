@@ -548,6 +548,25 @@ def test_operator_packet_and_manifest_surface_runtime_exec_artifact(tmp_path: Pa
     assert stdout_artifact["required"] is True
 
 
+def test_operator_packet_surfaces_tool_shim_status_and_caveat(tmp_path: Path) -> None:
+    run_dir = make_run_dir(tmp_path)
+    run_path = run_dir / "run.json"
+    run = json.loads(run_path.read_text(encoding="utf-8"))
+    run["tool_shims_enabled"] = True
+    run["tool_shims"] = {
+        "enabled": True,
+        "bin_dir": str(run_dir / "tool-shims" / "bin"),
+        "tools": ["rm", "mv"],
+        "bypass_caveat": "PATH shims intercept command-name lookups only.",
+    }
+    run_path.write_text(json.dumps(run, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+    packet = render_operator_packet_v2(run_dir)
+
+    assert "- tool-shims: enabled" in packet
+    assert "- tool-shims bypass caveat: PATH shims intercept command-name lookups only." in packet
+
+
 def test_runtime_tool_firewall_docs_pin_default_routes() -> None:
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     spec = (ROOT / "docs" / "specs" / "runtime-tool-firewall-v1.md").read_text(encoding="utf-8")
@@ -562,3 +581,5 @@ def test_runtime_tool_firewall_docs_pin_default_routes() -> None:
     assert "firewall_preflight" in spec
     assert "firewall exec" in readme
     assert "runtime-tool-exec.jsonl" in spec
+    assert "tool-shims" in readme
+    assert "tool-shims" in spec

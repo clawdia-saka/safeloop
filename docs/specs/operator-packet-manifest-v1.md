@@ -39,6 +39,8 @@ operator-packet-manifest.v1
 - `runtime-tool-firewall.jsonl` if present
 - `runtime-tool-exec.jsonl` if present
 - `runtime-tool-exec/*/stdout.txt` and `stderr.txt` if present
+- `tool-shims/tool-shims.json` if present
+- `tool-shims/bin/*` when run-local shims were generated
 - `external-effects.jsonl` if present
 - `compensation-plan.json` if present
 - `compensation-result.json` if present

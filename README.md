@@ -150,6 +150,12 @@ with action_span("inspect_docs", intent="read docs"):
 
 `safeloop firewall exec` is the actual guarded subprocess wrapper. It never uses `shell=True`; only allowlisted read-only commands execute after a successful firewall route, and every execution or block is recorded in `runtime-tool-exec.jsonl` with stdout/stderr artifact paths. Destructive/local mutation still routes to quarantine, external write/send/publish goes to `external-outbox.json`, and unknown semantics go to manual review. The firewall and exec logs are hash-chained under file locks. `--dry-run` classifies without writing artifacts, and `--strict` exits non-zero for manual review. External dispatch stays `false`, and external actions remain `exact_rollback: false`. See [`docs/specs/runtime-tool-firewall-v1.md`](docs/specs/runtime-tool-firewall-v1.md).
 
+`safeloop watch-run --tool-shims` adds a run-local PATH fence around common risky tools. SafeLoop writes shims to `RUN_DIR/tool-shims/bin/`, prepends that directory to the watched command's `PATH`, and routes command-name lookups for `rm`, `mv`, `curl`, `gh`, `git`, `python`, and `sh` through `safeloop firewall exec`. Only allowlisted read-only commands can execute; destructive local requests are quarantined, external write/send/publish requests go to the outbox, and unknown semantics require manual review. The operator packet reports whether tool shims were enabled. Caveat: PATH shims intercept command-name lookups only; absolute executable paths and already-running processes can bypass them.
+
+```bash
+safeloop watch-run --tool-shims --task-id demo --repo "$PWD" -- python agent.py
+```
+
 ## Demo commands
 
 The shortest public demo path is:

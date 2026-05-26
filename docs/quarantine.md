@@ -39,6 +39,8 @@ Agent/runtime code can call `firewall_preflight()` before a tool call. Under `ac
 
 Use `safeloop firewall exec` when SafeLoop should actually run a command. The exec wrapper only runs allowlisted read-only argv commands after firewall routing. Destructive commands still route to quarantine and are not executed; external commands route to the outbox and are not dispatched; unknown commands remain manual review. Each execution or block is recorded in `runtime-tool-exec.jsonl`.
 
+Use `safeloop watch-run --tool-shims` when the watched process may call risky command names through `PATH`. SafeLoop creates `RUN_DIR/tool-shims/bin/` and routes shims such as `rm` through the same firewall exec layer, so `rm file` becomes quarantine evidence rather than a real delete.
+
 List items:
 
 ```bash

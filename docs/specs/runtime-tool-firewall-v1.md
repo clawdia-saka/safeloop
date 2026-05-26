@@ -119,6 +119,35 @@ List execution events:
 safeloop firewall exec-list RUN_DIR --json
 ```
 
+## Watch-run Tool Shims
+
+`safeloop watch-run --tool-shims` creates a run-local PATH shim directory:
+
+```text
+RUN_DIR/tool-shims/bin/
+RUN_DIR/tool-shims/tool-shims.json
+```
+
+SafeLoop prepends `RUN_DIR/tool-shims/bin/` to the watched command's `PATH` and writes shims for:
+
+- `rm`
+- `mv`
+- `curl`
+- `gh`
+- `git`
+- `python`
+- `sh`
+
+Each shim infers a narrow `tool`, `action`, `target`, and `target_kind`, then calls `safeloop firewall exec`. The exec wrapper still enforces the normal read-only execution allowlist. Requests outside that allowlist are not executed:
+
+- destructive local requests route to quarantine
+- external write/send/publish requests route to `external-outbox.json`
+- unknown semantics route to manual review
+
+The shim metadata is recorded in `tool-shims/tool-shims.json`, and operator packets surface `tool-shims: enabled` or `disabled` plus the bypass caveat.
+
+Caveat: PATH shims intercept command-name lookups only. Absolute executable paths and already-running processes can bypass them, so shims are a runtime fence around common entry points rather than a kernel sandbox.
+
 ## Runtime Helper
 
 Use `firewall_preflight()` in agent/runtime code before a tool call. The helper only classifies and records the route; it does not call the tool.

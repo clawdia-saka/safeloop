@@ -8,6 +8,8 @@
 - ended_at: $TIMESTAMP
 - latest event hash: sha256:$HASH
 - verification status: valid
+- tool-shims: disabled
+- tool-shims bypass caveat: PATH shims are disabled; only explicit SafeLoop wrappers and direct firewall calls apply.
 
 ## 2. Artifact verification
 - verify-artifacts status: valid

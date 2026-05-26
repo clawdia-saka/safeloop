@@ -107,6 +107,7 @@ def test_operator_packet_cli_generated_packet_contains_required_sections_and_bou
     for required in [
         "## 1. Run summary",
         "## 2. Artifact verification",
+        "tool-shims: disabled",
         "## 4. Rollback decision table",
         "## 5. Compensation decision table",
         "## 6. Manual review queue",

@@ -971,6 +971,7 @@ def main(argv: list[str] | None = None) -> int:
     w.add_argument("--run-root")
     w.add_argument("--debounce-ms", type=int, default=750)
     w.add_argument("--max-interval-sec", type=int, default=0)
+    w.add_argument("--tool-shims", action="store_true", help="Prepend run-local SafeLoop PATH shims for common risky tools.")
     w.add_argument("command", nargs=argparse.REMAINDER)
     watch = sub.add_parser("watch")
     watch.add_argument("--loop", action="store_true", help="Run local watchdog loop (0.0.4 alias for watch-run)")
@@ -979,6 +980,7 @@ def main(argv: list[str] | None = None) -> int:
     watch.add_argument("--run-root")
     watch.add_argument("--debounce-ms", type=int, default=750)
     watch.add_argument("--max-interval-sec", type=int, default=0)
+    watch.add_argument("--tool-shims", action="store_true", help="Prepend run-local SafeLoop PATH shims for common risky tools.")
     watch.add_argument("command", nargs=argparse.REMAINDER)
     v = sub.add_parser("verify-artifacts")
     v.add_argument("run_dir")
@@ -1249,6 +1251,7 @@ def main(argv: list[str] | None = None) -> int:
             Path(args.run_root) if args.run_root else None,
             args.debounce_ms,
             args.max_interval_sec,
+            args.tool_shims,
         )
         run_json = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
         print(f"Run id: {run_json['run_id']}")

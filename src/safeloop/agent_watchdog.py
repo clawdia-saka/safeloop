@@ -7,6 +7,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 import time
 import uuid
 from datetime import datetime, timezone
@@ -17,6 +18,7 @@ from typing import Any, TextIO
 from safeloop.action_span import verify_action_events
 from safeloop.local_anchor import create_local_anchor, verify_local_anchor
 from safeloop.storage import exclusive_lock
+from safeloop.tool_shims import create_tool_shims
 from safeloop.watchdog_files import discover_repo_files
 
 
@@ -519,6 +521,7 @@ def watch_run(
     run_root: Path | None = None,
     debounce_ms: int = 750,
     max_interval_sec: int = 0,
+    tool_shims: bool = False,
 ) -> tuple[int, Path]:
     del max_interval_sec  # Reserved for post-RC interval checkpoints.
     repo = repo.resolve()
@@ -547,6 +550,8 @@ def watch_run(
         "latest_event_hash": None,
         "final_event_hash": None,
         "capture_status": "running",
+        "tool_shims_enabled": bool(tool_shims),
+        "tool_shims": {"enabled": False},
     }
     atomic_json(run_dir / "run.json", run)
 
@@ -563,6 +568,21 @@ def watch_run(
     child_env = os.environ.copy()
     child_env["SAFELOOP_RUN_DIR"] = str(run_dir)
     child_env["SAFELOOP_RUN_ID"] = run_id
+    if tool_shims:
+        original_path = child_env.get("PATH", "")
+        shim_metadata = create_tool_shims(
+            run_dir,
+            workspace_root=repo,
+            original_path=original_path,
+            python_executable=sys.executable,
+        )
+        child_env["SAFELOOP_TOOL_SHIM_WORKSPACE_ROOT"] = str(repo)
+        child_env["SAFELOOP_TOOL_SHIM_ORIGINAL_PATH"] = original_path
+        child_env["SAFELOOP_TOOL_SHIM_PYTHON"] = sys.executable
+        child_env["SAFELOOP_TOOL_SHIM_PYTHONPATH"] = str(Path(__file__).resolve().parents[1])
+        child_env["PATH"] = str(run_dir / "tool-shims" / "bin") + os.pathsep + original_path
+        run["tool_shims"] = shim_metadata
+        atomic_json(run_dir / "run.json", run)
     proc = subprocess.Popen(
         command,
         cwd=repo,

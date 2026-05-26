@@ -179,6 +179,27 @@ def test_manifest_tracks_runtime_tool_firewall_source_artifact(tmp_path: Path) -
     assert firewall["required"] is False
 
 
+def test_manifest_tracks_tool_shim_source_artifacts(tmp_path: Path) -> None:
+    run_dir = make_run_dir(tmp_path)
+    shim_bin = run_dir / "tool-shims" / "bin"
+    shim_bin.mkdir(parents=True)
+    (run_dir / "tool-shims" / "tool-shims.json").write_text(
+        json.dumps({"schema_version": "tool-shims.v1", "enabled": True}, indent=2),
+        encoding="utf-8",
+    )
+    (shim_bin / "rm").write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+    packet = write_operator_packet_v2(run_dir)
+
+    manifest = write_operator_packet_manifest(run_dir, packet)
+
+    metadata = next(item for item in manifest["source_artifacts"] if item["path"] == "tool-shims/tool-shims.json")
+    shim = next(item for item in manifest["source_artifacts"] if item["path"] == "tool-shims/bin/rm")
+    assert metadata["present"] is True
+    assert metadata["required"] is False
+    assert shim["present"] is True
+    assert shim["required"] is True
+
+
 def test_manifest_boundary_is_local_tamper_evident_not_tamper_proof(tmp_path: Path) -> None:
     run_dir = make_run_dir(tmp_path)
     packet = write_operator_packet_v2(run_dir)

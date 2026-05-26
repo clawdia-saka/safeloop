@@ -80,6 +80,8 @@ def test_packet_v2_includes_required_decision_sections(tmp_path: Path) -> None:
         "run_id: run-demo",
         "task_id: operator-packet-v2-demo",
         "verification status: valid",
+        "tool-shims: disabled",
+        "tool-shims bypass caveat:",
         "## 2. Artifact verification",
         "verify-artifacts status: valid",
         "local anchor status:",

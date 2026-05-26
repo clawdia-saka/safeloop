@@ -20,6 +20,8 @@ Required fields:
 - started_at / ended_at
 - latest event hash
 - verification status
+- tool-shims status: `enabled` or `disabled`
+- tool-shims bypass caveat
 
 ## 2. Artifact verification
 
@@ -60,6 +62,8 @@ Types:
 
 When present, the packet surfaces these file-backed external artifacts without importing compensation APIs:
 
+- `runtime-tool-firewall.jsonl`: runtime tool route decisions; status is present/not_present.
+- `runtime-tool-exec.jsonl`: guarded runtime tool execution/block records; status is present/not_present.
 - `external-effects.jsonl`: external registry; status is present/not_present.
 - `external-outbox.json`: pre-dispatch external lifecycle; status is present/not_present.
 - `side-effects.jsonl`: legacy side-effect ledger fallback when no external registry exists.

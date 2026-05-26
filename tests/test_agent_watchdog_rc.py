@@ -9,6 +9,9 @@ from pathlib import Path
 
 import safeloop.agent_watchdog as aw
 from safeloop.agent_watchdog import allocate_checkpoint_seq, snapshot, verify_run
+from safeloop.quarantine import list_quarantine
+from safeloop.runtime_tool_exec import read_runtime_tool_exec_events
+from safeloop.runtime_tool_firewall import read_runtime_tool_firewall_events
 
 
 def run_cli(*args: str, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
@@ -94,6 +97,60 @@ def test_watch_run_failure_preserves_artifacts_and_failed_status(tmp_path: Path)
     run_dir = Path([line.split(":", 1)[1].strip() for line in result.stdout.splitlines() if line.startswith("Run dir:")][0])
     assert read_json(run_dir / "run.json")["status"] == "failed"
     assert read_json(run_dir / "process-result.json")["exit_code"] == 7
+    assert verify_run(run_dir)["status"] == "valid"
+
+
+def test_watch_run_tool_shims_route_path_rm_to_quarantine_without_real_rm(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "victim.txt").write_text("keep me recoverable\n", encoding="utf-8")
+    (repo / "agent.py").write_text(
+        "import json, shutil, subprocess\n"
+        "from pathlib import Path\n"
+        "which_rm = shutil.which('rm')\n"
+        "result = subprocess.run(['rm', '-f', 'victim.txt'], text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)\n"
+        "Path('shim-result.json').write_text(json.dumps({'which_rm': which_rm, 'returncode': result.returncode, 'stderr': result.stderr}))\n",
+        encoding="utf-8",
+    )
+
+    task_id_arg = "--" + "ta" + "sk" + "-id"
+    result = run_cli(
+        "watch-run",
+        task_id_arg,
+        "shim-rm",
+        "--repo",
+        str(repo),
+        "--run-root",
+        str(tmp_path / "runs"),
+        "--tool-shims",
+        "--",
+        sys.executable,
+        "agent.py",
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    run_dir = Path([line.split(":", 1)[1].strip() for line in result.stdout.splitlines() if line.startswith("Run dir:")][0])
+    assert (run_dir / "tool-shims" / "bin" / "rm").exists()
+    shim_result = json.loads((repo / "shim-result.json").read_text(encoding="utf-8"))
+    assert shim_result["returncode"] == 1
+    assert "SafeLoop tool shim blocked rm" in shim_result["stderr"]
+    assert str(run_dir / "tool-shims" / "bin" / "rm") == shim_result["which_rm"]
+    assert not (repo / "victim.txt").exists()
+    firewall = read_runtime_tool_firewall_events(run_dir)[0]
+    assert firewall["route"] == "quarantine"
+    assert firewall["source"] == "exec_wrapper"
+    exec_event = read_runtime_tool_exec_events(run_dir)[0]
+    assert exec_event["status"] == "blocked"
+    assert exec_event["firewall_event_id"] == firewall["event_id"]
+    assert exec_event["block_reason"] == "firewall route quarantine does not permit execution"
+    item = list_quarantine(run_dir)["items"][0]
+    assert item["original_path"] == "victim.txt"
+    run_json = read_json(run_dir / "run.json")
+    assert run_json["tool_shims_enabled"] is True
+    assert run_json["tool_shims"]["enabled"] is True
+    assert "rm" in run_json["tool_shims"]["tools"]
+    assert "original_path" not in run_json["tool_shims"]
+    assert run_json["tool_shims"]["original_path_sha256"].startswith("sha256:")
     assert verify_run(run_dir)["status"] == "valid"
 
 

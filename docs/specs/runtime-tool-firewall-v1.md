@@ -11,6 +11,8 @@ Default routes:
 - unknown tool semantics route to `manual_review`
 - recognized read-only requests route to `allow_read_only`
 
+These defaults match the `strict-local` policy profile. The named profile contract is documented in [`runtime-tool-firewall-policy-profiles-v1.md`](runtime-tool-firewall-policy-profiles-v1.md) and reserves `strict-local`, `agent-dev`, and `ci-readonly` for profile-aware runs.
+
 ## Artifact
 
 Each route appends one record to:
@@ -128,15 +130,11 @@ RUN_DIR/tool-shims/bin/
 RUN_DIR/tool-shims/tool-shims.json
 ```
 
-SafeLoop prepends `RUN_DIR/tool-shims/bin/` to the watched command's `PATH` and writes shims for:
+SafeLoop prepends `RUN_DIR/tool-shims/bin/` to the watched command's `PATH` and writes shim coverage v2 entries for:
 
-- `rm`
-- `mv`
-- `curl`
-- `gh`
-- `git`
-- `python`
-- `sh`
+- local mutation commands: `rm`, `mv`, `cp`, `mkdir`, `rmdir`, `touch`, `chmod`, `chown`
+- external or hosted-service commands: `curl`, `wget`, `gh`, `git`
+- command runners: `python`, `python3`, `node`, `npm`, `npx`, `pnpm`, `yarn`, `bun`, `sh`, `bash`, `zsh`
 
 Each shim infers a narrow `tool`, `action`, `target`, and `target_kind`, then calls `safeloop firewall exec`. The exec wrapper still enforces the normal read-only execution allowlist. Requests outside that allowlist are not executed:
 
@@ -144,9 +142,11 @@ Each shim infers a narrow `tool`, `action`, `target`, and `target_kind`, then ca
 - external write/send/publish requests route to `external-outbox.json`
 - unknown semantics route to manual review
 
-The shim metadata is recorded in `tool-shims/tool-shims.json`, and operator packets surface `tool-shims: enabled` or `disabled` plus the bypass caveat.
+The shim metadata is recorded in `tool-shims/tool-shims.json`, and operator packets surface `tool-shims: enabled` or `disabled`, `tool-shim coverage`, and the bypass caveat.
 
 Caveat: PATH shims intercept command-name lookups only. Absolute executable paths and already-running processes can bypass them, so shims are a runtime fence around common entry points rather than a kernel sandbox.
+
+Profile-aware runs use the companion policy profile spec to describe shim coverage v2. Operator packets should surface the active firewall policy profile, the shim coverage version, partial or missing coverage, and the same PATH bypass caveat so a reviewer can tell whether the run used `strict-local`, `agent-dev`, or `ci-readonly` posture.
 
 ## Runtime Helper
 

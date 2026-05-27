@@ -8,7 +8,9 @@
 - ended_at: 2026-05-13T00:00:02+00:00
 - latest event hash: sha256:abc123
 - verification status: valid
+- firewall policy profile: strict-local
 - tool-shims: disabled
+- tool-shim coverage: disabled
 - tool-shims bypass caveat: PATH shims are disabled; only explicit SafeLoop wrappers and direct firewall calls apply.
 
 ## 2. Artifact verification

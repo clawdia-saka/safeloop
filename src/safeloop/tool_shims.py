@@ -11,8 +11,33 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-SHIMMED_TOOLS = ("rm", "mv", "curl", "gh", "git", "python", "sh")
-SHIM_SCHEMA_VERSION = "tool-shims.v1"
+SHIMMED_TOOLS = (
+    "rm",
+    "mv",
+    "cp",
+    "mkdir",
+    "rmdir",
+    "touch",
+    "chmod",
+    "chown",
+    "curl",
+    "wget",
+    "gh",
+    "git",
+    "python",
+    "python3",
+    "node",
+    "npm",
+    "npx",
+    "pnpm",
+    "yarn",
+    "bun",
+    "sh",
+    "bash",
+    "zsh",
+)
+SHIM_SCHEMA_VERSION = "tool-shims.v2"
+SHIM_COVERAGE_VERSION = "v2"
 
 
 def _utc_now() -> str:
@@ -61,25 +86,94 @@ def _first_url(args):
     return None
 
 
+def _option_value_flags(tool):
+    if tool == "git":
+        return {{"-C", "-c", "--git-dir", "--work-tree"}}
+    if tool == "curl":
+        return {{"-X", "--request", "-d", "--data", "--data-raw", "-H", "--header"}}
+    return set()
+
+
+def _first_path_arg(tool, args, *, start=0):
+    skip_next = False
+    value_flags = _option_value_flags(tool)
+    for arg in args[start:]:
+        if skip_next:
+            skip_next = False
+            continue
+        if arg == "--":
+            continue
+        if arg in value_flags:
+            skip_next = True
+            continue
+        if arg.startswith("-"):
+            continue
+        return arg
+    return None
+
+
+def _subcommand_arg(tool, args):
+    skip_next = False
+    value_flags = _option_value_flags(tool)
+    for index, arg in enumerate(args):
+        if skip_next:
+            skip_next = False
+            continue
+        if arg in value_flags:
+            skip_next = True
+            continue
+        if arg == "--" or arg.startswith("-"):
+            continue
+        return index, arg
+    return None, None
+
+
 def _infer(tool, args):
     target = _first_non_option(args) or f"{{tool}} request"
     target_kind = "auto"
-    if tool == "rm":
-        return "delete", target, target_kind
-    if tool == "mv":
-        return "move", target, target_kind
-    if tool == "curl":
+    local_mutation_actions = {{
+        "rm": "delete",
+        "mv": "move",
+        "cp": "copy",
+        "mkdir": "mkdir",
+        "rmdir": "rmdir",
+        "touch": "touch",
+        "chmod": "chmod",
+        "chown": "chown",
+    }}
+    if tool in local_mutation_actions:
+        return local_mutation_actions[tool], target, target_kind
+    if tool in {{"curl", "wget"}}:
         url = _first_url(args) or target
         upper_args = {{arg.upper() for arg in args}}
-        action = "post" if "POST" in upper_args or any(arg.startswith("-d") for arg in args) else "send"
+        action = "post" if tool == "curl" and ("POST" in upper_args or any(arg.startswith("-d") for arg in args)) else "send"
         return action, url, "external" if "://" in url or url.startswith("mailto:") else "unknown"
     if tool == "gh":
         action = "github " + " ".join(args[:2]) if args else "github"
         return action, "gh " + " ".join(args), "external"
     if tool == "git":
-        action = args[0] if args else "git"
-        return action, "git " + " ".join(args), "external" if action in {{"push", "pull", "fetch", "clone"}} else "unknown"
-    if tool in {{"python", "sh"}}:
+        action_index, action = _subcommand_arg(tool, args)
+        action = action or "git"
+        if action in {{"status", "log", "diff", "show"}}:
+            return action, _first_path_arg(tool, args, start=(action_index or 0) + 1) or ".", "auto"
+        if action in {{"push", "pull", "fetch", "clone"}}:
+            return action, "git " + " ".join(args), "external"
+        return action, "git " + " ".join(args), "unknown"
+    if tool in {{"python", "python3"}}:
+        if args[:1] in (["--version"], ["-V"]):
+            return "version", f"{{tool}} version", "auto"
+        if args[:1] in (["--help"], ["-h"]):
+            return "help", f"{{tool}} help", "auto"
+        return "execute", target, "unknown"
+    if tool in {{"sh", "bash", "zsh"}}:
+        if args[:1] == ["-n"]:
+            return "syntax_check", _first_path_arg(tool, args, start=1) or f"{{tool}} syntax check", "auto"
+        return "execute", target, "unknown"
+    if tool in {{"node", "npm", "npx", "pnpm", "yarn", "bun"}}:
+        if args[:1] in (["--version"], ["-v"]):
+            return "version", f"{{tool}} version", "auto"
+        if args[:1] in (["--help"], ["-h"]):
+            return "help", f"{{tool}} help", "auto"
         return "execute", target, "unknown"
     return tool, target, "unknown"
 
@@ -96,6 +190,7 @@ def main():
     run_dir = os.environ.get("SAFELOOP_RUN_DIR")
     workspace_root = os.environ.get("SAFELOOP_TOOL_SHIM_WORKSPACE_ROOT") or os.environ.get("PWD") or "."
     safeloop_python = os.environ.get("SAFELOOP_TOOL_SHIM_PYTHON") or sys.executable
+    policy_profile = os.environ.get("SAFELOOP_POLICY_PROFILE") or "strict-local"
     if not run_dir:
         print(f"SafeLoop tool shim {{TOOL}} blocked: SAFELOOP_RUN_DIR is not set", file=sys.stderr)
         return 127
@@ -123,6 +218,8 @@ def main():
         f"tool shim intercepted {{TOOL}}",
         "--actor",
         "tool-shim",
+        "--policy-profile",
+        policy_profile,
         "--json",
         "--",
         real_executable,
@@ -171,6 +268,7 @@ def create_tool_shims(
     workspace_root: str | Path,
     original_path: str,
     python_executable: str | None = None,
+    policy_profile: str = "strict-local",
 ) -> dict[str, Any]:
     """Create run-local PATH shims and return metadata for run.json."""
 
@@ -187,8 +285,10 @@ def create_tool_shims(
         "schema_version": SHIM_SCHEMA_VERSION,
         "enabled": True,
         "created_at": _utc_now(),
+        "coverage_version": SHIM_COVERAGE_VERSION,
         "bin_dir": str(bin_dir),
         "workspace_root": str(Path(workspace_root).resolve()),
+        "policy_profile": policy_profile,
         "tools": list(SHIMMED_TOOLS),
         "original_path_sha256": _sha_text(original_path),
         "original_path_entry_count": len([part for part in original_path.split(os.pathsep) if part]),

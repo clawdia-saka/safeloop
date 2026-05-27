@@ -20,7 +20,9 @@ Required fields:
 - started_at / ended_at
 - latest event hash
 - verification status
+- firewall policy profile
 - tool-shims status: `enabled` or `disabled`
+- tool-shim coverage
 - tool-shims bypass caveat
 
 ## 2. Artifact verification

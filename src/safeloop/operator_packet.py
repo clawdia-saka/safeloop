@@ -42,6 +42,20 @@ def _status(value: object, default: str = "unknown") -> str:
     return str(value or default)
 
 
+def _tool_shim_coverage(tool_shims: dict, *, enabled: bool) -> str:
+    if not enabled:
+        return "disabled"
+    coverage = str(tool_shims.get("coverage_version") or "").strip()
+    if coverage:
+        return coverage
+    schema_version = str(tool_shims.get("schema_version") or "").strip()
+    if schema_version == "tool-shims.v2":
+        return "v2"
+    if schema_version == "tool-shims.v1":
+        return "v1"
+    return "partial"
+
+
 def _artifact_status(run_path: Path, name: str, data: dict) -> str:
     if not (run_path / name).exists():
         return f"{name}: not_present"
@@ -263,9 +277,11 @@ def render_operator_packet_v2(
     warnings = verification.get("warnings") or []
     local_anchor_status = "present" if (run_path / "local-anchor.json").exists() else "not_present"
     evidence_packet_status = "present" if any((run_path / name).exists() for name in ["operator-packet.md", "retrieved_context.json"]) else "not_present"
+    policy_profile = str(run.get("policy_profile") or "strict-local")
     tool_shims = run.get("tool_shims") if isinstance(run.get("tool_shims"), dict) else {}
     tool_shims_enabled = bool(run.get("tool_shims_enabled") or tool_shims.get("enabled"))
     tool_shims_status = "enabled" if tool_shims_enabled else "disabled"
+    tool_shim_coverage = _tool_shim_coverage(tool_shims, enabled=tool_shims_enabled)
     tool_shims_caveat = str(
         tool_shims.get("bypass_caveat")
         or "PATH shims are disabled; only explicit SafeLoop wrappers and direct firewall calls apply."
@@ -405,7 +421,9 @@ def render_operator_packet_v2(
         f"- ended_at: {ended_at}",
         f"- latest event hash: {latest_hash}",
         f"- verification status: {verification_status}",
+        f"- firewall policy profile: {_cell(policy_profile)}",
         f"- tool-shims: {tool_shims_status}",
+        f"- tool-shim coverage: {_cell(tool_shim_coverage)}",
         f"- tool-shims bypass caveat: {_cell(tool_shims_caveat)}",
         "",
         "## 2. Artifact verification",

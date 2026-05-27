@@ -227,6 +227,89 @@ def test_read_only_tool_routes_to_allow_read_only(tmp_path: Path) -> None:
     assert not (run_dir / "external-outbox.json").exists()
 
 
+def test_strict_local_policy_allows_git_status_as_read_only(tmp_path: Path) -> None:
+    run_dir = make_run_dir(tmp_path)
+
+    event = route_tool_action(
+        run_dir,
+        tool="git",
+        action="status",
+        target=".",
+        reason="inspect repo state",
+        policy_profile="strict-local",
+    )
+
+    assert event["route"] == "allow_read_only"
+    assert event["policy_profile"] == "strict-local"
+    assert event["route_reason"] == "strict-local policy allows read-only tool/action"
+
+
+def test_ci_readonly_policy_manual_reviews_non_readonly_without_side_effects(tmp_path: Path) -> None:
+    workspace = make_workspace(tmp_path)
+    run_dir = make_run_dir(tmp_path)
+    target = workspace / "scratch.txt"
+    target.write_text("temporary\n", encoding="utf-8")
+
+    event = route_tool_action(
+        run_dir,
+        tool="rm",
+        action="delete",
+        target="scratch.txt",
+        workspace_root=workspace,
+        reason="cleanup generated scratch file",
+        policy_profile="ci-readonly",
+    )
+
+    assert event["route"] == "manual_review"
+    assert event["policy_profile"] == "ci-readonly"
+    assert event["manual_review_required"] is True
+    assert target.exists()
+    assert list_quarantine(run_dir)["items"] == []
+
+
+def test_ci_readonly_policy_manual_reviews_external_without_outbox(tmp_path: Path) -> None:
+    run_dir = make_run_dir(tmp_path)
+
+    event = route_tool_action(
+        run_dir,
+        tool="curl",
+        action="post",
+        target="https://example.test/hooks/review",
+        reason="send review webhook",
+        policy_profile="ci-readonly",
+    )
+
+    assert event["route"] == "manual_review"
+    assert event["policy_profile"] == "ci-readonly"
+    assert not (run_dir / "external-outbox.json").exists()
+
+
+def test_agent_dev_policy_allows_safe_dev_probe_but_not_python_script(tmp_path: Path) -> None:
+    run_dir = make_run_dir(tmp_path)
+
+    version = route_tool_action(
+        run_dir,
+        tool="python",
+        action="version",
+        target="python version",
+        reason="inspect python version",
+        policy_profile="agent-dev",
+    )
+    script = route_tool_action(
+        run_dir,
+        tool="python",
+        action="execute",
+        target="agent.py",
+        reason="run local script",
+        policy_profile="agent-dev",
+    )
+
+    assert version["route"] == "allow_read_only"
+    assert version["policy_profile"] == "agent-dev"
+    assert script["route"] == "manual_review"
+    assert script["policy_profile"] == "agent-dev"
+
+
 def test_firewall_preflight_uses_safeloop_run_env_and_action_id(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     run_dir = make_run_dir(tmp_path)
     monkeypatch.setenv("SAFELOOP_RUN_DIR", str(run_dir))
@@ -327,6 +410,31 @@ def test_firewall_exec_runs_allowlisted_read_only_command_and_records_output(tmp
     assert exec_event["command"] == ["cat", "note.txt"]
     assert (run_dir / exec_event["stdout_path"]).read_text(encoding="utf-8") == "safe read\n"
     assert (run_dir / exec_event["stderr_path"]).read_text(encoding="utf-8") == ""
+
+
+def test_firewall_exec_runs_profile_allowed_git_status(tmp_path: Path) -> None:
+    workspace = make_workspace(tmp_path)
+    run_dir = make_run_dir(tmp_path)
+
+    result = execute_tool_request(
+        run_dir,
+        tool="git",
+        action="status",
+        target=".",
+        command=["git", "status", "--short"],
+        workspace_root=workspace,
+        reason="inspect repo state",
+        actor="codex",
+        policy_profile="ci-readonly",
+    )
+
+    assert result["status"] == "executed"
+    assert result["executed"] is True
+    firewall = read_runtime_tool_firewall_events(run_dir)[0]
+    exec_event = read_runtime_tool_exec_events(run_dir)[0]
+    assert firewall["route"] == "allow_read_only"
+    assert firewall["policy_profile"] == "ci-readonly"
+    assert exec_event["policy_profile"] == "ci-readonly"
 
 
 def test_firewall_exec_routes_destructive_command_to_quarantine_without_running_shell_command(tmp_path: Path) -> None:
@@ -552,9 +660,12 @@ def test_operator_packet_surfaces_tool_shim_status_and_caveat(tmp_path: Path) ->
     run_dir = make_run_dir(tmp_path)
     run_path = run_dir / "run.json"
     run = json.loads(run_path.read_text(encoding="utf-8"))
+    run["policy_profile"] = "ci-readonly"
     run["tool_shims_enabled"] = True
     run["tool_shims"] = {
         "enabled": True,
+        "schema_version": "tool-shims.v2",
+        "coverage_version": "v2",
         "bin_dir": str(run_dir / "tool-shims" / "bin"),
         "tools": ["rm", "mv"],
         "bypass_caveat": "PATH shims intercept command-name lookups only.",
@@ -563,6 +674,8 @@ def test_operator_packet_surfaces_tool_shim_status_and_caveat(tmp_path: Path) ->
 
     packet = render_operator_packet_v2(run_dir)
 
+    assert "- firewall policy profile: ci-readonly" in packet
+    assert "- tool-shim coverage: v2" in packet
     assert "- tool-shims: enabled" in packet
     assert "- tool-shims bypass caveat: PATH shims intercept command-name lookups only." in packet
 
@@ -570,6 +683,7 @@ def test_operator_packet_surfaces_tool_shim_status_and_caveat(tmp_path: Path) ->
 def test_runtime_tool_firewall_docs_pin_default_routes() -> None:
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     spec = (ROOT / "docs" / "specs" / "runtime-tool-firewall-v1.md").read_text(encoding="utf-8")
+    profiles = (ROOT / "docs" / "specs" / "runtime-tool-firewall-policy-profiles-v1.md").read_text(encoding="utf-8")
     quarantine = (ROOT / "docs" / "quarantine.md").read_text(encoding="utf-8")
 
     for text in [readme, spec, quarantine]:
@@ -583,3 +697,30 @@ def test_runtime_tool_firewall_docs_pin_default_routes() -> None:
     assert "runtime-tool-exec.jsonl" in spec
     assert "tool-shims" in readme
     assert "tool-shims" in spec
+    assert "runtime-tool-firewall-policy-profiles-v1.md" in readme
+    assert "runtime-tool-firewall-policy-profiles-v1.md" in spec
+    assert "runtime-tool-firewall-policy-profiles.v1" in profiles
+
+
+def test_runtime_tool_firewall_policy_profile_docs_pin_packet_surface() -> None:
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    spec = (ROOT / "docs" / "specs" / "runtime-tool-firewall-v1.md").read_text(encoding="utf-8")
+    profiles = (ROOT / "docs" / "specs" / "runtime-tool-firewall-policy-profiles-v1.md").read_text(encoding="utf-8")
+
+    for profile in ["strict-local", "agent-dev", "ci-readonly"]:
+        assert profile in readme
+        assert profile in spec
+        assert profile in profiles
+
+    for marker in [
+        "shim coverage v2",
+        "tool-shims.v2",
+        "operator packet",
+        "firewall policy profile",
+        "partial or missing coverage",
+        "PATH shims intercept command-name lookups only",
+    ]:
+        assert marker in profiles
+
+    assert "active firewall policy profile" in readme
+    assert "active firewall policy profile" in spec

@@ -17,6 +17,7 @@ from typing import Any, Literal
 from safeloop.external_effects import ALLOWED_KINDS
 from safeloop.external_outbox import ExternalOutboxError, enqueue_external_outbox_item
 from safeloop.quarantine import QuarantineError, put_directory_in_quarantine, put_file_in_quarantine
+from safeloop.runtime_tool_policy import DEFAULT_POLICY_PROFILE, RuntimeToolPolicyError, resolve_policy_route
 from safeloop.storage import exclusive_lock
 
 FIREWALL_LOG = "runtime-tool-firewall.jsonl"
@@ -51,8 +52,11 @@ _LOCAL_MUTATION_TERMS = {
     "append",
     "chmod",
     "chown",
+    "copy",
+    "cp",
     "delete",
     "edit",
+    "mkdir",
     "move",
     "mv",
     "patch",
@@ -61,6 +65,7 @@ _LOCAL_MUTATION_TERMS = {
     "rm",
     "rmdir",
     "shred",
+    "touch",
     "truncate",
     "unlink",
     "write",
@@ -235,6 +240,7 @@ def _base_record(
     route: Route,
     route_reason: str,
     source: str,
+    policy_profile: str,
     action_id: str | None = None,
 ) -> dict[str, Any]:
     manual_review_required = route == "manual_review"
@@ -251,6 +257,7 @@ def _base_record(
         "reason": reason,
         "route": route,
         "route_reason": route_reason,
+        "policy_profile": policy_profile,
         "default_route": True,
         "dry_run": False,
         "manual_review_required": manual_review_required,
@@ -348,6 +355,7 @@ def route_tool_action(
     dry_run: bool = False,
     source: str = "api",
     action_id: str | None = None,
+    policy_profile: str | None = DEFAULT_POLICY_PROFILE,
 ) -> dict[str, Any]:
     """Route a tool request to quarantine, external outbox, or manual review.
 
@@ -377,7 +385,17 @@ def route_tool_action(
     _require_safe_references(tool_value, action_value, target_value, reason_value)
 
     run_id = _load_run_id(run_path)
-    route, route_reason = _classify_route(tool_value, action_value, target_value, kind_value)  # type: ignore[arg-type]
+    try:
+        default_route, default_reason = _classify_route(tool_value, action_value, target_value, kind_value)  # type: ignore[arg-type]
+        route, route_reason, profile_value = resolve_policy_route(
+            policy_profile=policy_profile,
+            tool=tool_value,
+            action=action_value,
+            default_route=default_route,
+            default_reason=default_reason,
+        )
+    except RuntimeToolPolicyError as exc:
+        raise RuntimeToolFirewallError(str(exc)) from exc
     record = _base_record(
         run_id=run_id,
         tool=tool_value,
@@ -389,6 +407,7 @@ def route_tool_action(
         route=route,
         route_reason=route_reason,
         source=source_value,
+        policy_profile=profile_value,
         action_id=action_id_value,
     )
     if dry_run:
@@ -479,6 +498,7 @@ def firewall_preflight(
     strict: bool = False,
     action_id: str | None = None,
     source: str = "runtime_helper",
+    policy_profile: str | None = None,
 ) -> dict[str, Any]:
     """Classify and record a runtime tool request before execution.
 
@@ -493,6 +513,7 @@ def firewall_preflight(
     if run_dir is None:
         _validate_env_run_binding(run_path)
     effective_action_id = (action_id or "").strip() or os.environ.get("SAFELOOP_ACTION_ID") or None
+    effective_policy_profile = (policy_profile or "").strip() or os.environ.get("SAFELOOP_POLICY_PROFILE") or DEFAULT_POLICY_PROFILE
     event = route_tool_action(
         run_path,
         tool=tool,
@@ -505,6 +526,7 @@ def firewall_preflight(
         dry_run=dry_run,
         source=source,
         action_id=effective_action_id,
+        policy_profile=effective_policy_profile,
     )
     if strict and event.get("route") == "manual_review":
         route_reason = event.get("route_reason") or "manual_review"

@@ -13,25 +13,18 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from safeloop.runtime_tool_firewall import FIREWALL_LOG, firewall_preflight
+from safeloop.runtime_tool_policy import (
+    DEFAULT_POLICY_PROFILE,
+    RuntimeToolPolicyError,
+    execution_policy_block_reason,
+    normalize_policy_profile,
+)
 from safeloop.storage import exclusive_lock
 
 EXEC_LOG = "runtime-tool-exec.jsonl"
 EXEC_OUTPUT_DIR = "runtime-tool-exec"
 SCHEMA_VERSION = "runtime-tool-exec.v1"
 RESULT_SCHEMA_VERSION = "runtime-tool-exec-result.v1"
-ALLOWED_READ_ONLY_EXECUTABLES = {
-    "cat",
-    "diff",
-    "grep",
-    "head",
-    "ls",
-    "pwd",
-    "rg",
-    "stat",
-    "tail",
-    "wc",
-}
-
 _SENSITIVE_RE = re.compile(r"(?i)(authorization|bearer\s+[a-z0-9._~+/=-]+|api[_-]?key|secret|token|password)[:= ]")
 
 
@@ -136,13 +129,24 @@ def _validate_command_paths(command: Sequence[str], *, workspace_root: Path, cwd
     return None
 
 
-def _command_block_reason(tool: str, command: Sequence[str], *, workspace_root: Path, cwd: Path, target: str) -> str | None:
-    executable = Path(command[0]).name
-    tool_value = tool.strip()
-    if tool_value not in ALLOWED_READ_ONLY_EXECUTABLES:
-        return f"tool {tool_value!r} is not in the read-only execution allowlist"
-    if executable != tool_value:
-        return f"command executable {executable!r} does not match tool {tool_value!r}"
+def _command_block_reason(
+    tool: str,
+    action: str,
+    command: Sequence[str],
+    *,
+    policy_profile: str,
+    workspace_root: Path,
+    cwd: Path,
+    target: str,
+) -> str | None:
+    policy_reason = execution_policy_block_reason(
+        policy_profile=policy_profile,
+        tool=tool,
+        action=action,
+        command=command,
+    )
+    if policy_reason:
+        return policy_reason
     target_reason = _validate_read_target(target, workspace_root)
     if target_reason:
         return target_reason
@@ -219,6 +223,7 @@ def _base_exec_record(
     actor: str,
     reason: str,
     command: Sequence[str],
+    policy_profile: str,
     workspace_root: Path,
     cwd: Path,
 ) -> dict[str, Any]:
@@ -234,6 +239,7 @@ def _base_exec_record(
         "target": target,
         "actor": actor or "unknown",
         "reason": reason,
+        "policy_profile": policy_profile,
         "command": list(command),
         "workspace_root": str(workspace_root),
         "cwd": str(cwd),
@@ -255,6 +261,7 @@ def execute_tool_request(
     target_kind: str = "auto",
     timeout_seconds: float = 30,
     action_id: str | None = None,
+    policy_profile: str | None = DEFAULT_POLICY_PROFILE,
 ) -> dict[str, Any]:
     """Preflight a tool request and execute only allowlisted read-only commands."""
 
@@ -264,6 +271,10 @@ def execute_tool_request(
     timeout_value = float(timeout_seconds)
     if timeout_value <= 0:
         raise RuntimeToolExecError("timeout_seconds must be greater than zero")
+    try:
+        profile_value = normalize_policy_profile(policy_profile)
+    except RuntimeToolPolicyError as exc:
+        raise RuntimeToolExecError(str(exc)) from exc
 
     firewall_event = firewall_preflight(
         run_dir=run_path,
@@ -276,6 +287,7 @@ def execute_tool_request(
         target_kind=target_kind,  # type: ignore[arg-type]
         action_id=action_id,
         source="exec_wrapper",
+        policy_profile=profile_value,
     )
     run_id = _load_run_id(run_path)
     exec_id = "texec-" + uuid.uuid4().hex
@@ -289,6 +301,7 @@ def execute_tool_request(
         actor=actor,
         reason=reason,
         command=command_values,
+        policy_profile=profile_value,
         workspace_root=root,
         cwd=effective_cwd,
     )
@@ -306,7 +319,15 @@ def execute_tool_request(
         exec_event = _append_exec_event(run_path, record)
         return {"schema_version": RESULT_SCHEMA_VERSION, "status": "blocked", "executed": False, "firewall_event": firewall_event, "exec_event": exec_event}
 
-    block_reason = _command_block_reason(tool, command_values, workspace_root=root, cwd=effective_cwd, target=target)
+    block_reason = _command_block_reason(
+        tool,
+        action,
+        command_values,
+        policy_profile=profile_value,
+        workspace_root=root,
+        cwd=effective_cwd,
+        target=target,
+    )
     if block_reason:
         record.update({"status": "blocked", "executed": False, "exit_code": None, "block_reason": block_reason})
         exec_event = _append_exec_event(run_path, record)

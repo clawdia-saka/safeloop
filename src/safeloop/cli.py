@@ -70,6 +70,7 @@ from safeloop.runtime_tool_firewall import (
     read_runtime_tool_firewall_events,
     route_tool_action,
 )
+from safeloop.runtime_tool_policy import DEFAULT_POLICY_PROFILE, policy_profile_choices
 from safeloop.side_effect_ledger import read_side_effect_events
 
 
@@ -972,6 +973,7 @@ def main(argv: list[str] | None = None) -> int:
     w.add_argument("--debounce-ms", type=int, default=750)
     w.add_argument("--max-interval-sec", type=int, default=0)
     w.add_argument("--tool-shims", action="store_true", help="Prepend run-local SafeLoop PATH shims for common risky tools.")
+    w.add_argument("--policy-profile", default=DEFAULT_POLICY_PROFILE, choices=policy_profile_choices(), help="Runtime tool firewall policy profile.")
     w.add_argument("command", nargs=argparse.REMAINDER)
     watch = sub.add_parser("watch")
     watch.add_argument("--loop", action="store_true", help="Run local watchdog loop (0.0.4 alias for watch-run)")
@@ -981,6 +983,7 @@ def main(argv: list[str] | None = None) -> int:
     watch.add_argument("--debounce-ms", type=int, default=750)
     watch.add_argument("--max-interval-sec", type=int, default=0)
     watch.add_argument("--tool-shims", action="store_true", help="Prepend run-local SafeLoop PATH shims for common risky tools.")
+    watch.add_argument("--policy-profile", default=DEFAULT_POLICY_PROFILE, choices=policy_profile_choices(), help="Runtime tool firewall policy profile.")
     watch.add_argument("command", nargs=argparse.REMAINDER)
     v = sub.add_parser("verify-artifacts")
     v.add_argument("run_dir")
@@ -1092,6 +1095,7 @@ def main(argv: list[str] | None = None) -> int:
     firewall_route.add_argument("--target-kind", default="auto", choices=["auto", "local_file", "local_directory", "external", "unknown"])
     firewall_route.add_argument("--reason", required=True)
     firewall_route.add_argument("--actor", default="unknown")
+    firewall_route.add_argument("--policy-profile", default=DEFAULT_POLICY_PROFILE, choices=policy_profile_choices())
     firewall_route.add_argument("--dry-run", action="store_true", help="Classify the route without writing quarantine, outbox, or firewall artifacts.")
     firewall_route.add_argument("--strict", action="store_true", help="Exit non-zero when the selected route requires manual review.")
     firewall_route.add_argument("--json", action="store_true")
@@ -1105,6 +1109,7 @@ def main(argv: list[str] | None = None) -> int:
     firewall_exec.add_argument("--target-kind", default="auto", choices=["auto", "local_file", "local_directory", "external", "unknown"])
     firewall_exec.add_argument("--reason", required=True)
     firewall_exec.add_argument("--actor", default="unknown")
+    firewall_exec.add_argument("--policy-profile", default=DEFAULT_POLICY_PROFILE, choices=policy_profile_choices())
     firewall_exec.add_argument("--timeout-seconds", type=float, default=30.0)
     firewall_exec.add_argument("--json", action="store_true")
     firewall_exec_list = firewall_sub.add_parser("exec-list", help="List guarded runtime tool execution events.")
@@ -1252,6 +1257,7 @@ def main(argv: list[str] | None = None) -> int:
             args.debounce_ms,
             args.max_interval_sec,
             args.tool_shims,
+            args.policy_profile,
         )
         run_json = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
         print(f"Run id: {run_json['run_id']}")
@@ -1483,6 +1489,7 @@ def main(argv: list[str] | None = None) -> int:
                     actor=args.actor,
                     dry_run=args.dry_run,
                     source="cli",
+                    policy_profile=args.policy_profile,
                 )
                 if args.json:
                     print(json.dumps(event, indent=2, sort_keys=True))
@@ -1515,6 +1522,7 @@ def main(argv: list[str] | None = None) -> int:
                     reason=args.reason,
                     actor=args.actor,
                     timeout_seconds=args.timeout_seconds,
+                    policy_profile=args.policy_profile,
                 )
                 if args.json:
                     print(json.dumps(result, indent=2, sort_keys=True))

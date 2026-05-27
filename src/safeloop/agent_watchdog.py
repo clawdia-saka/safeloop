@@ -17,6 +17,7 @@ from typing import Any, TextIO
 
 from safeloop.action_span import verify_action_events
 from safeloop.local_anchor import create_local_anchor, verify_local_anchor
+from safeloop.runtime_tool_policy import DEFAULT_POLICY_PROFILE, normalize_policy_profile
 from safeloop.storage import exclusive_lock
 from safeloop.tool_shims import create_tool_shims
 from safeloop.watchdog_files import discover_repo_files
@@ -522,9 +523,11 @@ def watch_run(
     debounce_ms: int = 750,
     max_interval_sec: int = 0,
     tool_shims: bool = False,
+    policy_profile: str | None = DEFAULT_POLICY_PROFILE,
 ) -> tuple[int, Path]:
     del max_interval_sec  # Reserved for post-RC interval checkpoints.
     repo = repo.resolve()
+    profile_value = normalize_policy_profile(policy_profile)
     safe_slug = safe_task_slug(task_id)
     run_id = "run-" + datetime.now().strftime("%Y%m%d-%H%M%S-%f") + f"-{safe_slug}"
     run_root_path = (run_root or Path.home() / ".safeloop" / "runs")
@@ -550,6 +553,7 @@ def watch_run(
         "latest_event_hash": None,
         "final_event_hash": None,
         "capture_status": "running",
+        "policy_profile": profile_value,
         "tool_shims_enabled": bool(tool_shims),
         "tool_shims": {"enabled": False},
     }
@@ -568,6 +572,7 @@ def watch_run(
     child_env = os.environ.copy()
     child_env["SAFELOOP_RUN_DIR"] = str(run_dir)
     child_env["SAFELOOP_RUN_ID"] = run_id
+    child_env["SAFELOOP_POLICY_PROFILE"] = profile_value
     if tool_shims:
         original_path = child_env.get("PATH", "")
         shim_metadata = create_tool_shims(
@@ -575,6 +580,7 @@ def watch_run(
             workspace_root=repo,
             original_path=original_path,
             python_executable=sys.executable,
+            policy_profile=profile_value,
         )
         child_env["SAFELOOP_TOOL_SHIM_WORKSPACE_ROOT"] = str(repo)
         child_env["SAFELOOP_TOOL_SHIM_ORIGINAL_PATH"] = original_path

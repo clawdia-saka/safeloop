@@ -146,8 +146,11 @@ def test_watch_run_tool_shims_route_path_rm_to_quarantine_without_real_rm(tmp_pa
     item = list_quarantine(run_dir)["items"][0]
     assert item["original_path"] == "victim.txt"
     run_json = read_json(run_dir / "run.json")
+    assert run_json["policy_profile"] == "strict-local"
     assert run_json["tool_shims_enabled"] is True
     assert run_json["tool_shims"]["enabled"] is True
+    assert run_json["tool_shims"]["schema_version"] == "tool-shims.v2"
+    assert run_json["tool_shims"]["coverage_version"] == "v2"
     assert "rm" in run_json["tool_shims"]["tools"]
     assert "original_path" not in run_json["tool_shims"]
     assert run_json["tool_shims"]["original_path_sha256"].startswith("sha256:")

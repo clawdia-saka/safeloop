@@ -149,11 +149,12 @@ def check() -> tuple[int, list[str]]:
             "python -m pytest -q",
             "python scripts/public_readiness.py --check",
             "safeloop demo --output-dir .safeloop/ci-demo --json",
+            "safeloop operator-packet-verify \"$RUN_DIR\"",
             "actions/upload-artifact@v4",
             "safeloop-packet-demo",
             "python -m build",
         ]
-        packet_upload_present = all(marker in ci_text for marker in ci_markers[2:5])
+        packet_upload_present = all(marker in ci_text for marker in ci_markers[2:6])
         for marker in ci_markers:
             if marker not in ci_text:
                 failures.append(f"CI workflow missing marker: {marker}")
@@ -179,6 +180,7 @@ def check() -> tuple[int, list[str]]:
     messages.append("community-files=present" if not missing_community_files else "community-files=missing")
     messages.append("ci-workflow=present" if CI_WORKFLOW.exists() else "ci-workflow=missing")
     messages.append("packet-upload=present" if packet_upload_present else "packet-upload=missing")
+    messages.append("packet-verify=present" if packet_upload_present else "packet-verify=missing")
     messages.append("release-workflow=present" if RELEASE_WORKFLOW.exists() else "release-workflow=missing")
     messages.append("release-tag=not-created")
     messages.append("build-gate=pyproject-present")

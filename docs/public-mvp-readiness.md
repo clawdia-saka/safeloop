@@ -28,7 +28,7 @@ packet-upload=present
 release-tag=not-created
 ```
 
-The gate checks this packet for required release-boundary language, verifies the project version shape from `pyproject.toml`, confirms the local demo verifier commands are present, and rejects unqualified public overclaims.
+The gate checks this packet for required release-boundary language, verifies the project version shape from `pyproject.toml`, confirms the local demo verifier commands and CI operator-packet verification gate are present, and rejects unqualified public overclaims.
 
 ## Demo verifier presence
 
@@ -67,7 +67,7 @@ Exact rollback is only claimed for covered local file changes inside the demo re
 - Current reviewed version: `0.2.0`.
 - Build readiness boundary: this packet checks local metadata and verifier presence. A separate maintainer release flow may build distributions, sign artifacts, upload packages, or create tags.
 - Community readiness files: `LICENSE`, `SECURITY.md`, `CONTRIBUTING.md`, issue templates, PR template, CI, and release workflow are part of the public repo gate.
-- Release automation: `.github/workflows/ci.yml` runs tests, public readiness checks, a `safeloop demo --output-dir .safeloop/ci-demo --json` packet generation step, GitHub Action upload of the `safeloop-packet-demo` artifact, build, and Twine metadata validation. `.github/workflows/release.yml` publishes GitHub releases and PyPI packages from matching `vX.Y.Z` tags after maintainers configure PyPI Trusted Publishing.
+- Release automation: `.github/workflows/ci.yml` runs tests, public readiness checks, a `safeloop demo --output-dir .safeloop/ci-demo --json` packet generation step, `safeloop operator-packet-verify "$RUN_DIR"` against the generated manifest/source artifacts, GitHub Action upload of the `safeloop-packet-demo` artifact, build, and Twine metadata validation. `.github/workflows/release.yml` publishes GitHub releases and PyPI packages from matching `vX.Y.Z` tags after maintainers configure PyPI Trusted Publishing.
 - Local optional build command for maintainers:
 
 ```bash

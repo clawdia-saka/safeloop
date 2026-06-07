@@ -39,9 +39,14 @@ jobs:
       - name: Check public readiness packet
         run: python scripts/public_readiness.py --check
 
-      - name: Generate SafeLoop packet demo
+      - name: Generate and verify SafeLoop packet demo
         if: matrix.python-version == '3.12'
-        run: safeloop demo --output-dir .safeloop/ci-demo --json
+        run: |
+          set -euo pipefail
+          DEMO_JSON="$(safeloop demo --output-dir .safeloop/ci-demo --json)"
+          printf '%s\n' "$DEMO_JSON"
+          RUN_DIR="$(printf '%s\n' "$DEMO_JSON" | python -c 'import json, sys; print(json.load(sys.stdin)["run_dir"])')"
+          safeloop operator-packet-verify "$RUN_DIR"
 
       - name: Upload SafeLoop packet demo
         if: matrix.python-version == '3.12'

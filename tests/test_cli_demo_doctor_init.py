@@ -49,6 +49,7 @@ def test_doctor_json_reports_cli_and_github_action_packet_upload() -> None:
     assert report["checks"]["cli"]["status"] == "ok"
     assert report["checks"]["github_action_packet_upload"]["status"] == "ok"
     assert report["checks"]["github_action_packet_upload"]["artifact_name"] == "safeloop-packet-demo"
+    assert report["checks"]["github_action_packet_upload"]["verifier_command"] == "safeloop operator-packet-verify"
 
 
 def test_init_agent_codex_writes_local_config_and_agent_instructions(tmp_path: Path) -> None:

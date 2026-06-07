@@ -33,6 +33,7 @@ def test_public_readiness_doc_has_release_boundary_and_local_evidence_gate() -> 
     assert "safeloop verify-artifacts" in text
     assert "safeloop verify-anchor" in text
     assert "safeloop audit-control-plane-anchors" in text
+    assert "safeloop operator-packet-verify" in text
     assert "python scripts/public_readiness.py --check" in text
     assert "bash examples/full_demo.sh" in text
     assert "operator-packet.md" in text
@@ -66,6 +67,7 @@ def test_public_readiness_script_check_verifies_packet_and_build_metadata() -> N
     assert "version=0.2.0" in output
     assert "demo-verifier=present" in output
     assert "demo-verifier-help=ok" in output
+    assert "packet-verify=present" in output
     assert "full-demo=present" in output
     assert "release-tag=not-created" in output
 

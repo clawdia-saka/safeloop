@@ -131,20 +131,23 @@ def _doctor_report(repo: Path) -> dict:
         ci_text = ci.read_text(encoding="utf-8")
         packet_markers = [
             "safeloop demo --output-dir .safeloop/ci-demo --json",
+            "safeloop operator-packet-verify \"$RUN_DIR\"",
             "actions/upload-artifact@v4",
             "safeloop-packet-demo",
         ]
         missing = [marker for marker in packet_markers if marker not in ci_text]
         checks["github_action_packet_upload"] = {
             "status": "ok" if not missing else "warn",
-            "message": "CI uploads SafeLoop demo packet artifacts" if not missing else "CI packet upload markers missing: " + ", ".join(missing),
+            "message": "CI generates, verifies, and uploads SafeLoop demo packet artifacts" if not missing else "CI packet upload markers missing: " + ", ".join(missing),
             "artifact_name": "safeloop-packet-demo",
+            "verifier_command": "safeloop operator-packet-verify",
         }
     else:
         checks["github_action_packet_upload"] = {
             "status": "warn",
             "message": "missing .github/workflows/ci.yml",
             "artifact_name": "safeloop-packet-demo",
+            "verifier_command": "safeloop operator-packet-verify",
         }
     return {
         "schema_version": "safeloop.doctor.v1",

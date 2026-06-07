@@ -96,6 +96,19 @@ def snapshot_bytes(repo: Path) -> dict[str, bytes]:
     return {str(r): (repo / r).read_bytes() for r in rel_files(repo)}
 
 
+def snapshot_bytes_for_snapshot(repo: Path, snap: dict[str, str]) -> dict[str, bytes] | None:
+    captured: dict[str, bytes] = {}
+    for name, expected_digest in sorted(snap.items()):
+        path = _safe_repo_path(repo, name)
+        if not path.exists() or path.is_symlink() or not path.is_file():
+            return None
+        data = path.read_bytes()
+        if sha_bytes(data) != expected_digest:
+            return None
+        captured[name] = data
+    return captured
+
+
 def _source_evidence(repo: Path, files: list[str]) -> list[dict[str, Any]]:
     evidence: list[dict[str, Any]] = []
     for name in sorted(files):
@@ -108,6 +121,24 @@ def _source_evidence(repo: Path, files: list[str]) -> list[dict[str, Any]]:
                 "mtime_ns": st.st_mtime_ns,
             })
     return evidence
+
+
+def _source_evidence_snapshot(repo: Path, snap: dict[str, str]) -> dict[str, dict[str, Any]]:
+    evidence: dict[str, dict[str, Any]] = {}
+    for name, digest in sorted(snap.items()):
+        path = _safe_repo_path(repo, name)
+        if path.exists() and not path.is_symlink():
+            st = path.stat()
+            evidence[name] = {
+                "path": name,
+                "digest": digest,
+                "mtime_ns": st.st_mtime_ns,
+            }
+    return evidence
+
+
+def _source_evidence_from_captured(captured: dict[str, dict[str, Any]], files: list[str]) -> list[dict[str, Any]]:
+    return [dict(captured[name]) for name in sorted(files) if name in captured]
 
 
 def state_digest(snap: dict[str, str]) -> str:
@@ -215,6 +246,7 @@ def make_unified_diff_and_hunk_manifest(
     before: dict[str, str],
     after: dict[str, str],
     before_bytes: dict[str, bytes],
+    after_bytes: dict[str, bytes] | None = None,
 ) -> tuple[str, dict[str, Any]]:
     patch_lines: list[str] = []
     hunks: list[dict[str, Any]] = []
@@ -224,7 +256,12 @@ def make_unified_diff_and_hunk_manifest(
             continue
         op = _operation(name, before, after)
         old_data = before_bytes.get(name, b"") if op != "created" else b""
-        new_data = (repo / name).read_bytes() if op != "deleted" else b""
+        if op == "deleted":
+            new_data = b""
+        elif after_bytes is not None and name in after_bytes:
+            new_data = after_bytes[name]
+        else:
+            new_data = (repo / name).read_bytes()
         binary = _is_binary(old_data) or _is_binary(new_data)
         unsupported_reason = None
         old_text = _decode_text(old_data) if not binary else None
@@ -416,6 +453,8 @@ def create_checkpoint(
     before: dict[str, str],
     after: dict[str, str],
     before_bytes: dict[str, bytes] | None = None,
+    after_bytes: dict[str, bytes] | None = None,
+    after_source_evidence: dict[str, dict[str, Any]] | None = None,
 ) -> None:
     cp = run_dir / "checkpoints" / cid
     cp.mkdir(parents=True, exist_ok=True)
@@ -424,6 +463,8 @@ def create_checkpoint(
     deleted = [f for f in before if f not in after]
     if before_bytes is None:
         before_bytes = {}
+    if after_bytes is None:
+        after_bytes = snapshot_bytes(repo)
     before_blobs, restore_entries = _capture_before_blobs(cp, repo, before, modified + deleted, run_dir, before_bytes)
     checkpoint = {
         "schema_version": "checkpoint.v1",
@@ -439,7 +480,9 @@ def create_checkpoint(
     manifest = {
         "schema_version": "manifest.v1",
         "files": after,
-        "source_evidence": _source_evidence(repo, created + modified),
+        "source_evidence": _source_evidence_from_captured(after_source_evidence, created + modified)
+        if after_source_evidence is not None
+        else _source_evidence(repo, created + modified),
         "required_artifacts": sorted(REQUIRED_CHECKPOINT_ARTIFACTS),
     }
     restore = {
@@ -456,7 +499,7 @@ def create_checkpoint(
     }
     atomic_json(cp / "manifest.json", manifest)
     atomic_text(cp / "diff.patch", make_diff(before, after))
-    changes_patch, hunk_manifest = make_unified_diff_and_hunk_manifest(cid, repo, before, after, before_bytes)
+    changes_patch, hunk_manifest = make_unified_diff_and_hunk_manifest(cid, repo, before, after, before_bytes, after_bytes)
     atomic_text(cp / "changes.patch", changes_patch)
     atomic_json(cp / "hunk-manifest.json", hunk_manifest)
     atomic_json(cp / "restore-manifest.json", restore)
@@ -551,7 +594,7 @@ def watch_run(
     atomic_json(run_dir / "run.json", run)
 
     last_snap = snapshot(repo)
-    last_bytes = snapshot_bytes(repo)
+    last_bytes = snapshot_bytes_for_snapshot(repo, last_snap) or snapshot_bytes(repo)
     last_digest = state_digest(last_snap)
     create_run_start_baseline(run_dir, repo, run_id, task_id, last_snap)
     base = run_dir / "baseline"
@@ -579,35 +622,90 @@ def watch_run(
     debounce_sec = max(debounce_ms, 0) / 1000
     poll_sec = min(max(debounce_sec / 2, 0.02), 0.1)
     pending_snap: dict[str, str] | None = None
+    pending_bytes: dict[str, bytes] | None = None
+    pending_source_evidence: dict[str, dict[str, Any]] | None = None
     pending_since: float | None = None
 
-    def maybe_checkpoint(force: bool = False) -> None:
-        nonlocal last_snap, last_bytes, last_digest, checkpoint_count, parent, prev, seq, pending_snap, pending_since
-        current = snapshot(repo)
-        digest = state_digest(current)
-        if digest == last_digest:
-            pending_snap = None; pending_since = None
-            return
-        now_mono = time.monotonic()
-        if pending_snap != current:
-            pending_snap = current; pending_since = now_mono
-            if not force:
-                return
-        if not force and pending_since is not None and now_mono - pending_since < debounce_sec:
-            return
+    def remember_pending(snap: dict[str, str], observed_at: float) -> bool:
+        nonlocal pending_snap, pending_bytes, pending_source_evidence, pending_since
+        captured_bytes = snapshot_bytes_for_snapshot(repo, snap)
+        if captured_bytes is None:
+            clear_pending()
+            return False
+        pending_snap = snap
+        pending_bytes = captured_bytes
+        pending_source_evidence = _source_evidence_snapshot(repo, snap)
+        pending_since = observed_at
+        return True
+
+    def clear_pending() -> None:
+        nonlocal pending_snap, pending_bytes, pending_source_evidence, pending_since
+        pending_snap = None
+        pending_bytes = None
+        pending_source_evidence = None
+        pending_since = None
+
+    def emit_checkpoint(after: dict[str, str], after_bytes: dict[str, bytes] | None, after_source_evidence: dict[str, dict[str, Any]] | None) -> None:
+        nonlocal last_snap, last_bytes, last_digest, checkpoint_count, parent, prev, seq
         checkpoint_count += 1
         checkpoint_seq = allocate_checkpoint_seq(run_root_path, repo, task_id, run_id)
         cid = f"cp-{checkpoint_seq:04d}"
-        create_checkpoint(run_dir, repo, cid, checkpoint_seq, "monotonic-repo-task", parent, last_snap, current, last_bytes)
+        captured_after_bytes = after_bytes if after_bytes is not None else snapshot_bytes(repo)
+        captured_source_evidence = after_source_evidence if after_source_evidence is not None else _source_evidence_snapshot(repo, after)
+        create_checkpoint(
+            run_dir,
+            repo,
+            cid,
+            checkpoint_seq,
+            "monotonic-repo-task",
+            parent,
+            last_snap,
+            after,
+            last_bytes,
+            captured_after_bytes,
+            captured_source_evidence,
+        )
         cp = run_dir / "checkpoints" / cid
         digests = {name: sha_file(cp / name) for name in ["checkpoint.json", "manifest.json", "diff.patch", "changes.patch", "hunk-manifest.json", "restore-manifest.json", "summary.md"]}
         prev = append_event(timeline, seq, "checkpoint_created", {"checkpoint_id": cid, "parent_checkpoint_id": parent, "artifact_digests": digests}, prev)
         seq += 1
         parent = cid
-        last_snap = current
-        last_bytes = snapshot_bytes(repo)
-        last_digest = digest
-        pending_snap = None; pending_since = None
+        last_snap = after
+        last_bytes = captured_after_bytes
+        last_digest = state_digest(after)
+
+    def maybe_checkpoint(force: bool = False) -> None:
+        nonlocal pending_snap, pending_bytes, pending_source_evidence, pending_since
+        current = snapshot(repo)
+        digest = state_digest(current)
+        now_mono = time.monotonic()
+        if pending_snap is not None and pending_snap != current:
+            pending_aged = pending_since is not None and now_mono - pending_since >= debounce_sec
+            if pending_aged:
+                emit_checkpoint(pending_snap, pending_bytes, pending_source_evidence)
+                clear_pending()
+                if digest == last_digest:
+                    return
+            elif digest == last_digest:
+                clear_pending()
+                return
+            if not remember_pending(current, now_mono):
+                return
+            if not force:
+                return
+        elif digest == last_digest:
+            clear_pending()
+            return
+        elif pending_snap != current:
+            if not remember_pending(current, now_mono):
+                return
+            if not force:
+                return
+        if not force and pending_since is not None and now_mono - pending_since < debounce_sec:
+            return
+        if pending_snap is not None:
+            emit_checkpoint(pending_snap, pending_bytes, pending_source_evidence)
+            clear_pending()
 
     while proc.poll() is None:
         maybe_checkpoint(force=False)

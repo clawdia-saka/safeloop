@@ -5,6 +5,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import safeloop.agent_watchdog as aw
@@ -82,6 +83,114 @@ def test_watch_run_creates_multiple_monotonic_checkpoints_and_parent_binding(tmp
     assert read_json(checkpoints[1] / "checkpoint.json")["parent_checkpoint_id"] == "cp-0001"
     assert read_json(checkpoints[2] / "checkpoint.json")["parent_checkpoint_id"] == "cp-0002"
     assert read_json(run_dir / "run.json")["checkpoint_count"] == 3
+    assert verify_run(run_dir)["status"] == "valid"
+
+
+def test_watch_run_flushes_stable_pending_checkpoint_before_final_state(tmp_path: Path, monkeypatch) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    step2 = "step 1\nstep 2\n"
+    step3 = "step 1\nstep 2\nstep 3\n"
+    resume_step3 = tmp_path / "resume-step3"
+    (repo / "agent.py").write_text(
+        "from pathlib import Path\nimport time\n"
+        f"resume_step3 = Path({str(resume_step3)!r})\n"
+        "Path('notes.txt').write_text('step 1\\n')\n"
+        "time.sleep(0.25)\n"
+        "Path('notes.txt').write_text('step 1\\nstep 2\\n')\n"
+        "deadline = time.monotonic() + 5\n"
+        "while not resume_step3.exists() and time.monotonic() < deadline:\n"
+        "    time.sleep(0.005)\n"
+        "Path('notes.txt').write_text('step 1\\nstep 2\\nstep 3\\n')\n"
+    )
+    original_snapshot = aw.snapshot
+    saw_step2 = False
+    delayed_after_step2 = False
+
+    def delayed_snapshot(path: Path) -> dict[str, str]:
+        nonlocal saw_step2, delayed_after_step2
+        current = original_snapshot(path)
+        notes = path / "notes.txt"
+        text = notes.read_text() if notes.exists() else ""
+        if text == step2 and not saw_step2:
+            saw_step2 = True
+            return current
+        if saw_step2 and not delayed_after_step2:
+            delayed_after_step2 = True
+            resume_step3.write_text("go\n")
+            deadline = time.monotonic() + 1.0
+            while time.monotonic() < deadline:
+                if notes.exists() and notes.read_text() == step3:
+                    break
+                time.sleep(0.005)
+            time.sleep(0.05)
+            return original_snapshot(path)
+        return current
+
+    monkeypatch.setattr(aw, "snapshot", delayed_snapshot)
+
+    code, run_dir = aw.watch_run("pending-final", repo, [sys.executable, "agent.py"], tmp_path / "runs", debounce_ms=20)
+
+    assert code == 0
+    checkpoints = sorted((run_dir / "checkpoints").glob("cp-*"))
+    assert [cp.name for cp in checkpoints] == ["cp-0001", "cp-0002", "cp-0003"]
+    assert read_json(checkpoints[1] / "checkpoint.json")["parent_checkpoint_id"] == "cp-0001"
+    assert read_json(checkpoints[2] / "checkpoint.json")["parent_checkpoint_id"] == "cp-0002"
+    assert "+step 2" in (checkpoints[1] / "changes.patch").read_text()
+    assert "+step 3" in (checkpoints[2] / "changes.patch").read_text()
+    assert verify_run(run_dir)["status"] == "valid"
+
+
+def test_watch_run_flushes_stable_pending_checkpoint_before_revert_to_last_state(tmp_path: Path, monkeypatch) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    step1 = "step 1\n"
+    step2 = "step 1\nstep 2\n"
+    resume_revert = tmp_path / "resume-revert"
+    (repo / "agent.py").write_text(
+        "from pathlib import Path\nimport time\n"
+        f"resume_revert = Path({str(resume_revert)!r})\n"
+        "Path('notes.txt').write_text('step 1\\n')\n"
+        "time.sleep(0.25)\n"
+        "Path('notes.txt').write_text('step 1\\nstep 2\\n')\n"
+        "deadline = time.monotonic() + 5\n"
+        "while not resume_revert.exists() and time.monotonic() < deadline:\n"
+        "    time.sleep(0.005)\n"
+        "Path('notes.txt').write_text('step 1\\n')\n"
+    )
+    original_snapshot = aw.snapshot
+    saw_step2 = False
+    delayed_after_step2 = False
+
+    def delayed_snapshot(path: Path) -> dict[str, str]:
+        nonlocal saw_step2, delayed_after_step2
+        current = original_snapshot(path)
+        notes = path / "notes.txt"
+        text = notes.read_text() if notes.exists() else ""
+        if text == step2 and not saw_step2:
+            saw_step2 = True
+            return current
+        if saw_step2 and not delayed_after_step2:
+            delayed_after_step2 = True
+            resume_revert.write_text("go\n")
+            deadline = time.monotonic() + 1.0
+            while time.monotonic() < deadline:
+                if notes.exists() and notes.read_text() == step1:
+                    break
+                time.sleep(0.005)
+            time.sleep(0.05)
+            return original_snapshot(path)
+        return current
+
+    monkeypatch.setattr(aw, "snapshot", delayed_snapshot)
+
+    code, run_dir = aw.watch_run("pending-revert", repo, [sys.executable, "agent.py"], tmp_path / "runs", debounce_ms=20)
+
+    assert code == 0
+    checkpoints = sorted((run_dir / "checkpoints").glob("cp-*"))
+    assert [cp.name for cp in checkpoints] == ["cp-0001", "cp-0002", "cp-0003"]
+    assert "+step 2" in (checkpoints[1] / "changes.patch").read_text()
+    assert "-step 2" in (checkpoints[2] / "changes.patch").read_text()
     assert verify_run(run_dir)["status"] == "valid"
 
 

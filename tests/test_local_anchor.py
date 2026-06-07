@@ -101,3 +101,15 @@ def test_run_artifact_hashes_skips_symlink_artifacts_pointing_external(tmp_path)
     hashes = run_artifact_hashes(run_dir)
 
     assert "linked-artifact.txt" not in hashes
+
+
+def test_run_artifact_hashes_excludes_derived_operator_packet_reports(tmp_path):
+    run_dir = _minimal_run_dir(tmp_path)
+    for name in ["operator-packet.md", "operator-packet-v2.md", "operator-packet-manifest.json"]:
+        (run_dir / name).write_text("derived report\n", encoding="utf-8")
+
+    hashes = run_artifact_hashes(run_dir)
+
+    assert "operator-packet.md" not in hashes
+    assert "operator-packet-v2.md" not in hashes
+    assert "operator-packet-manifest.json" not in hashes

@@ -51,12 +51,15 @@ def journal_hash(path: Path) -> str:
 
 
 def run_artifact_hashes(run_dir: Path) -> dict[str, str]:
-    """Return hashes for all local run artifacts except verification/anchor output."""
+    """Return hashes for core local run artifacts, excluding derived reports."""
     hashes: dict[str, str] = {}
     for path in sorted(p for p in run_dir.rglob("*") if p.is_file() and not p.is_symlink()):
         rel = path.relative_to(run_dir).as_posix()
         if (
             rel == "local-anchor.json"
+            or rel == "operator-packet-manifest.json"
+            or rel == "operator-packet-v2.md"
+            or rel == "operator-packet.md"
             or rel == "rollback-plan.json"
             or rel == "rollback-result.json"
             or rel.startswith("verification/")

@@ -39,6 +39,7 @@ The public MVP demo boundary is local and verifier-backed. The packet requires t
 - `safeloop audit-control-plane-anchors --db <db> --anchors <anchors.jsonl> --output-dir <dir>` for local control-plane anchor audit evidence.
 - `safeloop demo` for a one-command local packet demo that writes `operator-packet-v2.md` and `operator-packet-manifest.json`.
 - `safeloop doctor` for local install, repo, and GitHub Action packet-upload readiness checks.
+- `safeloop doctor --strict` / `safeloop health` for a live local demo, artifact verification, operator-packet verification, and source-readiness smoke.
 - `safeloop init --agent codex` for local Codex-oriented SafeLoop setup files under `.safeloop/`.
 
 These commands support review and demos. They do not assert remote transparency, immutable timestamping, or hosted governance.

@@ -15,5 +15,7 @@ def test_readme_has_public_one_line_install_and_e2e_quickstart() -> None:
     assert 'safeloop rollback apply "$RUN_DIR" "$RUN_ID" --files note.txt' in readme
     assert 'safeloop demo' in readme
     assert 'safeloop doctor' in readme
+    assert 'safeloop doctor --strict' in readme
+    assert 'safeloop health --json' in readme
     assert 'safeloop init --agent codex' in readme
     assert 'External side effects are manual-review/compensation only' in readme

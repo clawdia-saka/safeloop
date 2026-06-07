@@ -44,6 +44,8 @@ REQUIRED_DOC_MARKERS = [
     "safeloop audit-control-plane-anchors",
     "safeloop demo",
     "safeloop doctor",
+    "safeloop doctor --strict",
+    "safeloop health",
     "safeloop init --agent codex",
     "python scripts/public_readiness.py --check",
     "bash examples/full_demo.sh",
@@ -81,7 +83,7 @@ def check() -> tuple[int, list[str]]:
 
     cli_text = CLI.read_text(encoding="utf-8")
     demo_verifiers = ["verify-artifacts", "verify-anchor", "audit-control-plane-anchors"]
-    readiness_commands = ["demo", "doctor", "init", "review", "explain", "policy-check", "rollback"]
+    readiness_commands = ["demo", "doctor", "health", "init", "review", "explain", "policy-check", "rollback"]
     missing_verifiers = [name for name in demo_verifiers if name not in cli_text]
     missing_commands = [
         name

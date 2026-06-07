@@ -104,6 +104,153 @@ def _status_from_checks(checks: dict[str, dict]) -> str:
     return "ok"
 
 
+def _trim_output(text: str, limit: int = 4000) -> str:
+    text = text.strip()
+    if len(text) <= limit:
+        return text
+    return text[-limit:]
+
+
+def _first_output_line(*texts: str) -> str:
+    for text in texts:
+        stripped = text.strip()
+        if stripped:
+            return stripped.splitlines()[0]
+    return "no output"
+
+
+def _run_health_subprocess(command: list[str], *, cwd: Path, timeout: int = 120) -> dict:
+    try:
+        proc = subprocess.run(
+            command,
+            cwd=cwd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+            timeout=timeout,
+        )
+    except Exception as exc:  # pragma: no cover - exercised through CLI integration tests
+        return {
+            "returncode": None,
+            "stdout": "",
+            "stderr": f"{type(exc).__name__}: {exc}",
+        }
+    return {
+        "returncode": proc.returncode,
+        "stdout": proc.stdout,
+        "stderr": proc.stderr,
+    }
+
+
+def _command_text(command: list[str]) -> str:
+    return " ".join(command)
+
+
+def _gate_from_subprocess(
+    command: list[str],
+    *,
+    cwd: Path,
+    ok_message: str,
+    timeout: int = 120,
+) -> dict:
+    result = _run_health_subprocess(command, cwd=cwd, timeout=timeout)
+    ok = result["returncode"] == 0
+    gate = {
+        "status": "ok" if ok else "error",
+        "message": ok_message
+        if ok
+        else f"exit {result['returncode']}: {_first_output_line(result['stderr'], result['stdout'])}",
+        "command": _command_text(command),
+        "returncode": result["returncode"],
+        "stdout": _trim_output(result["stdout"]),
+        "stderr": _trim_output(result["stderr"]),
+    }
+    return gate
+
+
+def _health_status(gates: dict[str, dict]) -> str:
+    return "errors" if any(gate["status"] == "error" for gate in gates.values()) else "ok"
+
+
+def _strict_health_report(repo: Path) -> dict:
+    repo = repo.resolve()
+    gates: dict[str, dict] = {}
+    run_dir: str | None = None
+    with tempfile.TemporaryDirectory(prefix="safeloop-health-") as workspace:
+        workspace_path = Path(workspace)
+        demo_cmd = [
+            sys.executable,
+            "-m",
+            "safeloop.cli",
+            "demo",
+            "--output-dir",
+            str(workspace_path / "demo"),
+            "--json",
+        ]
+        demo_result = _run_health_subprocess(demo_cmd, cwd=repo)
+        demo_ok = demo_result["returncode"] == 0
+        demo_gate = {
+            "status": "ok" if demo_ok else "error",
+            "message": "demo generated local run and operator packet"
+            if demo_ok
+            else f"exit {demo_result['returncode']}: {_first_output_line(demo_result['stderr'], demo_result['stdout'])}",
+            "command": _command_text(demo_cmd),
+            "returncode": demo_result["returncode"],
+            "stdout": _trim_output(demo_result["stdout"]),
+            "stderr": _trim_output(demo_result["stderr"]),
+        }
+        if demo_ok:
+            try:
+                demo_summary = json.loads(demo_result["stdout"])
+                run_dir = str(demo_summary["run_dir"])
+                demo_gate["run_dir"] = run_dir
+                demo_gate["manifest_status"] = demo_summary.get("manifest_status")
+                demo_gate["verification_status"] = demo_summary.get("verification_status")
+            except (KeyError, json.JSONDecodeError) as exc:
+                demo_gate["status"] = "error"
+                demo_gate["message"] = f"demo JSON missing run_dir: {exc}"
+        gates["demo"] = demo_gate
+
+        if gates["demo"]["status"] == "ok" and run_dir:
+            verify_cmd = [sys.executable, "-m", "safeloop.cli", "verify-artifacts", run_dir]
+            gates["verify_artifacts"] = _gate_from_subprocess(
+                verify_cmd,
+                cwd=repo,
+                ok_message="verify-artifacts accepted generated demo run",
+            )
+            packet_cmd = [sys.executable, "-m", "safeloop.cli", "operator-packet-verify", run_dir]
+            gates["operator_packet_verify"] = _gate_from_subprocess(
+                packet_cmd,
+                cwd=repo,
+                ok_message="operator-packet-verify accepted generated manifest and source artifacts",
+            )
+            readiness_script = repo / "scripts" / "public_readiness.py"
+            if readiness_script.exists():
+                readiness_cmd = [sys.executable, str(readiness_script), "--check"]
+                gates["public_readiness"] = _gate_from_subprocess(
+                    readiness_cmd,
+                    cwd=repo,
+                    ok_message="public readiness packet check passed",
+                )
+            else:
+                gates["public_readiness"] = {
+                    "status": "skipped",
+                    "message": "source checkout public_readiness.py not found",
+                    "command": f"{sys.executable} scripts/public_readiness.py --check",
+                    "returncode": None,
+                    "stdout": "",
+                    "stderr": "",
+                }
+    return {
+        "schema_version": "safeloop.health.v1",
+        "status": _health_status(gates),
+        "repo": str(repo),
+        "run_dir": run_dir,
+        "gates": gates,
+    }
+
+
 def _doctor_report(repo: Path) -> dict:
     repo = repo.resolve()
     checks: dict[str, dict] = {}
@@ -124,7 +271,16 @@ def _doctor_report(repo: Path) -> dict:
         "status": "ok" if (repo / ".git").exists() else "warn",
         "message": str(repo) if (repo / ".git").exists() else f"{repo} is not a git checkout",
     }
-    cli_commands = ["demo", "doctor", "init", "watch-run", "operator-packet", "operator-packet-verify", "rollback"]
+    cli_commands = [
+        "demo",
+        "doctor",
+        "health",
+        "init",
+        "watch-run",
+        "operator-packet",
+        "operator-packet-verify",
+        "rollback",
+    ]
     checks["cli"] = {"status": "ok", "commands": cli_commands, "message": "required CLI surfaces are installed"}
     ci = repo / ".github" / "workflows" / "ci.yml"
     if ci.exists():
@@ -164,6 +320,20 @@ def _print_doctor(report: dict) -> None:
         status = check["status"]
         message = check.get("message", "")
         print(f"[{status}] {name}: {message}")
+    if "strict" in report:
+        print("strict gates:")
+        for name, gate in report["strict"].get("gates", {}).items():
+            print(f"  [{gate['status']}] {name}: {gate.get('message', '')}")
+
+
+def _print_health(report: dict) -> None:
+    print("SafeLoop health")
+    print(f"status: {report['status']}")
+    print(f"repo: {report['repo']}")
+    if report.get("run_dir"):
+        print(f"run dir: {report['run_dir']}")
+    for name, gate in report["gates"].items():
+        print(f"[{gate['status']}] {name}: {gate.get('message', '')}")
 
 
 def _codex_agent_instructions() -> str:
@@ -172,6 +342,7 @@ def _codex_agent_instructions() -> str:
 Use SafeLoop for local evidence packets around long-running or risky agent work.
 
 - Run `safeloop doctor` before relying on packet upload or local rollback evidence.
+- Run `safeloop doctor --strict` or `safeloop health --json` for live demo, verify-artifacts, and operator-packet verification gates.
 - Run `safeloop demo` to produce a local sample run with `operator-packet-v2.md` and `operator-packet-manifest.json`.
 - For real work, wrap commands with `safeloop watch-run --task-id <task> --repo "$PWD" -- <command>`.
 - Generate review evidence with `safeloop operator-packet RUN_DIR --write-manifest`.
@@ -193,6 +364,7 @@ def _init_agent(repo: Path, *, agent: str, force: bool) -> dict:
         "packet_dir": ".safeloop/packets",
         "recommended_commands": [
             "safeloop doctor",
+            "safeloop doctor --strict",
             "safeloop demo",
             "safeloop operator-packet RUN_DIR --write-manifest",
         ],
@@ -369,6 +541,9 @@ def _run_demo(*, output_dir: str | None, force: bool) -> dict:
             },
         },
     )
+    verification = verify_run(run_dir)
+    if verification["status"] not in {"valid", "warning"}:
+        raise RuntimeError(f"demo post-rollback artifact verification failed: {verification['status']}")
     v1_packet = _write_demo_v1_packet(run_dir, demo_repo, external_log, run["run_id"], checkpoint_id)
     v2_packet = write_operator_packet_v2(
         run_dir,
@@ -903,7 +1078,11 @@ def main(argv: list[str] | None = None) -> int:
     demo.add_argument("--json", action="store_true", help="Print machine-readable demo summary.")
     doctor = sub.add_parser("doctor", help="Check local SafeLoop install, repo, and packet-upload readiness.")
     doctor.add_argument("--repo", default=".", help="Repository root to inspect. Defaults to current directory.")
+    doctor.add_argument("--strict", action="store_true", help="Run live demo, artifact verification, operator-packet verification, and source readiness gates.")
     doctor.add_argument("--json", action="store_true", help="Print machine-readable doctor report.")
+    health = sub.add_parser("health", help="Run strict live SafeLoop demo and packet verification gates.")
+    health.add_argument("--repo", default=".", help="Repository/source checkout root for optional readiness checks. Defaults to current directory.")
+    health.add_argument("--json", action="store_true", help="Print machine-readable health report.")
     init = sub.add_parser("init", help="Initialize SafeLoop local agent config.")
     init.add_argument("--agent", required=True, choices=["codex"], help="Agent profile to initialize.")
     init.add_argument("--repo", default=".", help="Repository root to initialize. Defaults to current directory.")
@@ -1052,10 +1231,27 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.cmd == "doctor":
         report = _doctor_report(Path(args.repo))
+        if args.strict:
+            strict = _strict_health_report(Path(args.repo))
+            report["strict"] = strict
+            report["checks"]["strict_health"] = {
+                "status": "ok" if strict["status"] == "ok" else "error",
+                "message": "strict live demo and packet verification passed"
+                if strict["status"] == "ok"
+                else "strict live demo or packet verification failed",
+            }
+            report["status"] = _status_from_checks(report["checks"])
         if args.json:
             print(json.dumps(report, indent=2, sort_keys=True))
         else:
             _print_doctor(report)
+        return 1 if report["status"] == "errors" else 0
+    if args.cmd == "health":
+        report = _strict_health_report(Path(args.repo))
+        if args.json:
+            print(json.dumps(report, indent=2, sort_keys=True))
+        else:
+            _print_health(report)
         return 1 if report["status"] == "errors" else 0
     if args.cmd == "init":
         try:

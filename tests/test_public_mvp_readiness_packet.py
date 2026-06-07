@@ -34,6 +34,8 @@ def test_public_readiness_doc_has_release_boundary_and_local_evidence_gate() -> 
     assert "safeloop verify-anchor" in text
     assert "safeloop audit-control-plane-anchors" in text
     assert "safeloop operator-packet-verify" in text
+    assert "safeloop doctor --strict" in text
+    assert "safeloop health" in text
     assert "python scripts/public_readiness.py --check" in text
     assert "bash examples/full_demo.sh" in text
     assert "operator-packet.md" in text

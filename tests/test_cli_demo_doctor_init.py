@@ -38,6 +38,11 @@ def test_demo_command_generates_operator_packet_manifest_and_summary(tmp_path: P
     assert (output_dir / "demo-summary.json").exists()
     assert summary["external_effects"]["exact_rollback"] is False
 
+    verify = run_cli("verify-artifacts", str(run_dir))
+    packet_verify = run_cli("operator-packet-verify", str(run_dir))
+    assert verify.returncode == 0, verify.stdout + verify.stderr
+    assert packet_verify.returncode == 0, packet_verify.stdout + packet_verify.stderr
+
 
 def test_doctor_json_reports_cli_and_github_action_packet_upload() -> None:
     result = run_cli("doctor", "--repo", str(ROOT), "--json")
@@ -50,6 +55,48 @@ def test_doctor_json_reports_cli_and_github_action_packet_upload() -> None:
     assert report["checks"]["github_action_packet_upload"]["status"] == "ok"
     assert report["checks"]["github_action_packet_upload"]["artifact_name"] == "safeloop-packet-demo"
     assert report["checks"]["github_action_packet_upload"]["verifier_command"] == "safeloop operator-packet-verify"
+
+
+def test_doctor_strict_json_runs_live_demo_verify_packet_and_readiness() -> None:
+    result = run_cli("doctor", "--repo", str(ROOT), "--strict", "--json", timeout=120)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    report = json.loads(result.stdout)
+    assert report["schema_version"] == "safeloop.doctor.v1"
+    assert report["status"] == "ok"
+    assert report["checks"]["strict_health"]["status"] == "ok"
+    strict = report["strict"]
+    assert strict["schema_version"] == "safeloop.health.v1"
+    assert strict["status"] == "ok"
+    assert strict["gates"]["demo"]["status"] == "ok"
+    assert strict["gates"]["verify_artifacts"]["status"] == "ok"
+    assert strict["gates"]["operator_packet_verify"]["status"] == "ok"
+    assert strict["gates"]["public_readiness"]["status"] == "ok"
+    assert Path(strict["run_dir"]).name.startswith("run-")
+
+
+def test_health_json_runs_strict_gates_without_source_checkout(tmp_path: Path) -> None:
+    result = run_cli("health", "--repo", str(tmp_path), "--json", timeout=120)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    report = json.loads(result.stdout)
+    assert report["schema_version"] == "safeloop.health.v1"
+    assert report["status"] == "ok"
+    assert report["gates"]["demo"]["status"] == "ok"
+    assert report["gates"]["verify_artifacts"]["status"] == "ok"
+    assert report["gates"]["operator_packet_verify"]["status"] == "ok"
+    assert report["gates"]["public_readiness"]["status"] == "skipped"
+
+
+def test_health_text_reports_failed_gate_with_nonzero_exit(tmp_path: Path) -> None:
+    bad_repo = tmp_path / "not-a-directory"
+    bad_repo.write_text("not a directory\n", encoding="utf-8")
+
+    result = run_cli("health", "--repo", str(bad_repo), timeout=120)
+
+    assert result.returncode != 0
+    assert "SafeLoop health" in result.stdout
+    assert "[error] demo:" in result.stdout
 
 
 def test_init_agent_codex_writes_local_config_and_agent_instructions(tmp_path: Path) -> None:

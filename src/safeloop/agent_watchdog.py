@@ -936,7 +936,17 @@ def verify_run(run_dir: Path, *, check_source_evidence: bool = True) -> dict[str
         issues.append(f"verification error: {exc}")
     status = "invalid" if issues else ("warning" if warnings else "valid")
     result = {"schema_version": "verify-artifacts-result.v1", "status": status, "issues": issues, "warnings": warnings, "checked_artifacts": checked, "latest_event_hash": prev, "verified_at": now(), "copy": "tamper-evident local artifacts"}
-    atomic_json(run_dir / "verification" / "verify-artifacts-result.json", result)
+    verification_path = run_dir / "verification" / "verify-artifacts-result.json"
+    try:
+        existing = json.loads(verification_path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, OSError, json.JSONDecodeError):
+        existing = None
+    if isinstance(existing, dict) and isinstance(existing.get("verified_at"), str):
+        stable_result = dict(result)
+        stable_result["verified_at"] = existing["verified_at"]
+        if existing == stable_result:
+            result = stable_result
+    atomic_json(verification_path, result)
     return result
 
 

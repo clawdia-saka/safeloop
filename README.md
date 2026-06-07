@@ -73,6 +73,15 @@ safeloop doctor
 safeloop init --agent codex
 ```
 
+Run a strict live health smoke before relying on demo packets in automation:
+
+```bash
+safeloop doctor --strict
+safeloop health --json
+```
+
+The strict path creates a temporary local demo workspace, verifies the generated run with `verify-artifacts`, verifies the operator-packet manifest with `operator-packet-verify`, and runs the public-readiness gate when invoked from a source checkout.
+
 Run the one-command local packet demo:
 
 ```bash

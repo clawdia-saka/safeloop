@@ -4,8 +4,6 @@ import json
 import subprocess
 from pathlib import Path
 
-import pytest
-
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -112,19 +110,115 @@ def test_external_usable_cli_to_operator_packet_separates_rollback_from_compensa
     assert "SafeLoop does not claim exact rollback for actions outside the local repo." in packet
 
 
-@pytest.mark.xfail(reason="Future #111-#115 integration placeholder; keep non-blocking until artifacts exist", strict=False)
-def test_future_external_usable_artifacts_are_linked_when_implemented(tmp_path: Path) -> None:
-    """Placeholder gates for future slices, not a failing requirement today.
+def test_external_usable_artifacts_link_effect_plan_result_packet_and_manifest(tmp_path: Path) -> None:
+    """#136: #111-#115 artifacts are now concrete, linked, and verifiable.
 
-    Expected later artifacts: compensation plan/result (#111/#112), external
-    adapter fake/demo contract (#113/#114), and packet integration (#115).
+    This remains local-only. It proves the external usable path connects the
+    external-effect registry, compensation plan, compensation result receipt,
+    operator packet rows, and operator packet manifest verification without
+    promoting external side effects to exact rollback.
     """
 
     run_dir = make_run_dir(tmp_path)
-    for artifact in [
-        "compensation-plan.json",
-        "compensation-result.json",
-        "fake-webhook-demo.json",
-        "adapter-contract.json",
-    ]:
-        assert (run_dir / artifact).exists()
+
+    record = run_cli(
+        "external",
+        "record",
+        str(run_dir),
+        "--kind",
+        "webhook",
+        "--target",
+        "https://example.test/hooks/safeloop-review",
+        "--action",
+        "sent",
+        "--evidence",
+        "logs/webhook-delivery.log",
+        "--quote-or-field",
+        "delivery_id=deterministic-e2e-001",
+        "--capability",
+        "manual",
+    )
+    assert record.returncode == 0, record.stdout + record.stderr
+
+    plan_cli = run_cli("compensate", str(run_dir), "--json")
+    assert plan_cli.returncode == 0, plan_cli.stdout + plan_cli.stderr
+    plan = json.loads(plan_cli.stdout)
+
+    result_cli = run_cli(
+        "compensate",
+        "result",
+        str(run_dir),
+        "--effect-id",
+        "ext-0001",
+        "--status",
+        "compensation_completed",
+        "--operator",
+        "ops@example.test",
+        "--evidence",
+        "receipts/webhook-compensation.json",
+        "--quote-or-field",
+        "receipt_id=receipt-001",
+        "--notes",
+        "Operator verified the downstream webhook mitigation.",
+        "--json",
+    )
+    assert result_cli.returncode == 0, result_cli.stdout + result_cli.stderr
+    result = json.loads(result_cli.stdout)
+
+    packet_cli = run_cli("operator-packet", str(run_dir), "--write-manifest")
+    assert packet_cli.returncode == 0, packet_cli.stdout + packet_cli.stderr
+    assert "manifest status: valid" in packet_cli.stdout
+
+    verify_cli = run_cli("operator-packet-verify", str(run_dir))
+    assert verify_cli.returncode == 0, verify_cli.stdout + verify_cli.stderr
+    assert "operator-packet verification: valid" in verify_cli.stdout
+
+    external_effects = [json.loads(line) for line in (run_dir / "external-effects.jsonl").read_text(encoding="utf-8").splitlines()]
+    packet = (run_dir / "operator-packet-v2.md").read_text(encoding="utf-8")
+    manifest = json.loads((run_dir / "operator-packet-manifest.json").read_text(encoding="utf-8"))
+
+    assert len(external_effects) == 1
+    external_effect = external_effects[0]
+    assert external_effect["schema_version"] == "external-side-effect.v1"
+    assert external_effect["effect_id"] == "ext-0001"
+    assert external_effect["run_id"] == "run-external-usable-e2e"
+    assert external_effect["kind"] == "webhook"
+    assert external_effect["target"] == "https://example.test/hooks/safeloop-review"
+    assert external_effect["action"] == "sent"
+    assert external_effect["status"] == "manual_review_required"
+    assert external_effect["exact_rollback"] is False
+    assert external_effect["compensation_capability"] == "manual"
+    assert external_effect["evidence"] == {"path": "logs/webhook-delivery.log", "quote_or_field": "delivery_id=deterministic-e2e-001"}
+    assert "created_at" in external_effect
+    assert plan["schema_version"] == "compensation-plan.v1"
+    assert plan["source"] == "external-effects.jsonl"
+    assert plan["exact_rollback"] is False
+    assert plan["external_execution"] is False
+    assert plan["network_calls"] is False
+    assert plan["items"][0]["effect_id"] == "ext-0001"
+    assert plan["items"][0]["evidence_ref"] == "external-effects.jsonl#ext-0001"
+    assert plan["items"][0]["exact_rollback"] is False
+
+    assert result["schema_version"] == "compensation-result.v1"
+    assert result["effect_id"] == "ext-0001"
+    assert result["status"] == "compensation_completed"
+    assert result["manual_operator_result"] is True
+    assert result["exact_rollback"] is False
+    assert result["local_rollback_applied"] is False
+    assert result["external_execution_by_safeloop"] is False
+    assert result["evidence"] == {"path": "receipts/webhook-compensation.json", "quote_or_field": "receipt_id=receipt-001"}
+
+    receipt_ref = "external-effects.jsonl; compensation-result.json; receipt: receipts/webhook-compensation.json"
+    item_ref = "webhook:https://example.test/hooks/safeloop-review"
+    assert f"| ext-0001 | webhook | https://example.test/hooks/safeloop-review | compensation_completed | false | {receipt_ref} |" in packet
+    assert f"| {item_ref} | external_side_effect | {item_ref} | compensation_completed | false | {receipt_ref} |" in packet
+    assert f"| {item_ref} | manual_review_item | {item_ref} | compensation_completed | false | {receipt_ref} |" in packet
+    assert f"| {item_ref} | compensation_item | {item_ref} | compensation_completed | false | {receipt_ref} |" in packet
+    assert f"| {item_ref} | manual | manual | false | planned: sent; result: compensation_completed | external-effects.jsonl; compensation-plan.json; compensation-result.json; receipt: receipts/webhook-compensation.json |" in packet
+    assert "recommended next action: compensation_complete_verify_receipt" in packet
+    assert "Exact rollback only applies to covered local file changes." in packet
+    assert "SafeLoop does not claim exact rollback for actions outside the local repo." in packet
+
+    assert manifest["verification"]["status"] == "valid"
+    source_paths = {source["path"] for source in manifest["source_artifacts"]}
+    assert {"external-effects.jsonl", "compensation-plan.json", "compensation-result.json"}.issubset(source_paths)

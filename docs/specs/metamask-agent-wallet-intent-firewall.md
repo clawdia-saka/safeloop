@@ -183,7 +183,7 @@ Rules:
 
 - Add policy schema for anti-churn, NAV, and raw transaction guards.
 - Evaluate recent ledger rows before signing.
-- Add reverse ETH->USDC then USDC->ETH fixture.
+- Add reverse ETH->USDC then USDC->ETH churn fixture.
 - Add cumulative-loss fixture.
 - Add raw transaction unknown-target fixture.
 

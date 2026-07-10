@@ -17,6 +17,7 @@ from safeloop.control_plane.lifecycle import (
     APPROVED,
     EXECUTED,
     EXPIRED,
+    FAILED,
     IN_FLIGHT,
     REJECTED,
     REQUESTED,
@@ -71,8 +72,8 @@ class SQLiteApprovalLifecycleStore:
             self._append_event(conn, signed, "REQUESTED", signed.requested_by, {"status": signed.status})
         return signed
 
-    def approve(self, approval_id: str, *, now: datetime) -> ApprovalRecord:
-        return self._transition(approval_id, APPROVED, now=now, allowed={REQUESTED}, event_type="APPROVED")
+    def approve(self, approval_id: str, *, now: datetime, approved_by: str | None = None) -> ApprovalRecord:
+        return self._transition(approval_id, APPROVED, now=now, allowed={REQUESTED}, event_type="APPROVED", actor=approved_by)
 
     def reject(self, approval_id: str, *, now: datetime) -> ApprovalRecord:
         return self._transition(approval_id, REJECTED, now=now, allowed={REQUESTED, APPROVED}, event_type="REJECTED")
@@ -139,6 +140,13 @@ class SQLiteApprovalLifecycleStore:
         self._assert_scope(stored, requested_by=requested_by, action=action, subject=subject)
         return self._store_transition(stored, EXECUTED, actor=requested_by, event_type="EXECUTED")
 
+    def fail_execution(self, presented: ApprovalRecord, *, requested_by: str, action: str, subject: str, now: datetime) -> ApprovalRecord:
+        stored = self._validate_presented(presented, now=now)
+        if stored.status != IN_FLIGHT:
+            raise ApprovalValidationError(f"approval status is not in-flight: {stored.status}")
+        self._assert_scope(stored, requested_by=requested_by, action=action, subject=subject)
+        return self._store_transition(stored, FAILED, actor=requested_by, event_type="FAILED")
+
     def execute_once(
         self,
         presented: ApprovalRecord,
@@ -165,7 +173,7 @@ class SQLiteApprovalLifecycleStore:
             rows = conn.execute(sql, params).fetchall()
         return [ApprovalEvent(row[0], row[1], row[2], row[3], row[4], row[5]) for row in rows]
 
-    def _transition(self, approval_id: str, status: str, *, now: datetime, allowed: set[str], event_type: str) -> ApprovalRecord:
+    def _transition(self, approval_id: str, status: str, *, now: datetime, allowed: set[str], event_type: str, actor: str | None = None) -> ApprovalRecord:
         stored = self.get(approval_id)
         if stored is None:
             raise ApprovalValidationError("unknown approval")
@@ -177,7 +185,7 @@ class SQLiteApprovalLifecycleStore:
             raise ApprovalValidationError(f"approval terminal: {expired.status}")
         if stored.status not in allowed:
             raise ApprovalValidationError(f"cannot transition status={stored.status}")
-        return self._store_transition(stored, status, actor=stored.requested_by, event_type=event_type)
+        return self._store_transition(stored, status, actor=actor or stored.requested_by, event_type=event_type)
 
     def _validate_presented(self, presented: ApprovalRecord, *, now: datetime) -> ApprovalRecord:
         stored = self.get(presented.approval_id)

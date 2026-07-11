@@ -3,10 +3,13 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
+import uuid
+from datetime import datetime, timezone
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
@@ -35,8 +38,9 @@ from safeloop.compensation import (
     create_compensation_result,
 )
 from safeloop.control_plane.anchor_audit import audit_control_plane_anchors
+from safeloop.control_plane.sqlite_lifecycle import SQLiteApprovalLifecycleStore
 from safeloop.external_effects import ExternalEffectValidationError, record_external_effect
-from safeloop.execution_api import ExecutionConfig, error_receipt, execute_request, load_request, sign_policy
+from safeloop.execution_api import ExecutionConfig, canonical_action_digest, error_receipt, execute_request, load_request, sign_policy
 from safeloop.html_artifacts import write_docs_packet_html, write_markdown_doc_html, write_readiness_html
 from safeloop.local_anchor import create_local_anchor, verify_local_anchor
 from safeloop.operator_packet import write_operator_packet_v2
@@ -1102,6 +1106,16 @@ def main(argv: list[str] | None = None) -> int:
     execute.add_argument("--signing-key-file", required=True)
     execute.add_argument("--policy-root", required=True)
     execute.add_argument("--json", action="store_true", required=True)
+
+    operator_execute = sub.add_parser("operator-execute", help="Operator-only: approve and execute a requester-authored immutable request.")
+    operator_execute.add_argument("--request", required=True)
+    operator_execute.add_argument("--expected-digest", required=True)
+    operator_execute.add_argument("--receipt", required=True)
+    operator_execute.add_argument("--approval-db", required=True)
+    operator_execute.add_argument("--signing-key-file", required=True)
+    operator_execute.add_argument("--policy-root", required=True)
+    operator_execute.add_argument("--approved-by", required=True)
+    operator_execute.add_argument("--json", action="store_true", required=True)
     sign_exec = sub.add_parser("sign-execution-policy", help="Operator-only: sign a policy into a trusted policy root.")
     sign_exec.add_argument("--input", required=True)
     sign_exec.add_argument("--policy-root", required=True)
@@ -1282,6 +1296,62 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"unchanged: {path}")
             print(f"packet dir: {result['packet_dir']}")
         return 0
+    if args.cmd == "operator-execute":
+        receipt_path = Path(args.receipt)
+        try:
+            if receipt_path.exists() or receipt_path.is_symlink():
+                raise ValueError("receipt path must not already exist or be a symlink")
+            if not receipt_path.parent.is_dir() or receipt_path.parent.is_symlink():
+                raise ValueError("receipt parent must be an existing non-symlink directory")
+            key_path = Path(args.signing_key_file)
+            if key_path.is_symlink() or not key_path.is_file():
+                raise ValueError("signing key file must be a regular non-symlink file")
+            signing_key = key_path.read_bytes()
+            if len(signing_key) < 32:
+                raise ValueError("signing key must contain at least 32 bytes")
+            request_path = Path(args.request)
+            if request_path.is_symlink() or not request_path.is_file():
+                raise ValueError("request must be a regular non-symlink file")
+            request = load_request(request_path)
+            if request.get("approval_id") is not None:
+                raise ValueError("operator request must not contain a caller-selected approval id")
+            if request.get("action_digest") != canonical_action_digest(request):
+                raise ValueError("request action digest mismatch")
+            if not re.fullmatch(r"sha256:[0-9a-f]{64}", args.expected_digest):
+                raise ValueError("expected digest is malformed")
+            if request["action_digest"] != args.expected_digest:
+                raise ValueError("operator-reviewed digest does not match request")
+            if not re.fullmatch(r"[A-Za-z0-9._:@/-]{1,128}", args.approved_by):
+                raise ValueError("approved-by is invalid")
+            if args.approved_by == request.get("requested_by"):
+                raise ValueError("approver must differ from requester")
+            store = SQLiteApprovalLifecycleStore(Path(args.approval_db), signing_key)
+            approval_id = f"ap-{uuid.uuid4()}"
+            now = datetime.now(timezone.utc)
+            store.request(
+                approval_id=approval_id,
+                requested_by=request["requested_by"],
+                action=f"execute:{request['mutation_class']}",
+                subject=request["action_digest"],
+                created_at=now,
+            )
+            store.approve(approval_id, now=now, approved_by=args.approved_by)
+            request["approval_id"] = approval_id
+            code, receipt = execute_request(
+                request,
+                ExecutionConfig(Path(args.approval_db), signing_key, Path(args.policy_root)),
+            )
+            atomic_json(receipt_path, receipt)
+            receipt_path.chmod(0o600)
+            print(json.dumps(receipt, sort_keys=True, separators=(",", ":")))
+            return code
+        except Exception as exc:
+            receipt = error_receipt(exc)
+            if not receipt_path.exists() and receipt_path.parent.is_dir() and not receipt_path.parent.is_symlink():
+                atomic_json(receipt_path, receipt)
+                receipt_path.chmod(0o600)
+            print(json.dumps(receipt, sort_keys=True, separators=(",", ":")))
+            return 1
     if args.cmd == "sign-execution-policy":
         try:
             root = Path(args.policy_root)

@@ -184,3 +184,44 @@ def test_operator_sign_policy_cli_refuses_overwrite_without_force(tmp_path: Path
     assert subprocess.run(cmd, text=True, capture_output=True).returncode == 0
     assert subprocess.run(cmd, text=True, capture_output=True).returncode != 0
     assert subprocess.run([*cmd, "--force"], text=True, capture_output=True).returncode == 0
+
+
+def test_operator_execute_keeps_signing_key_in_operator_process(tmp_path: Path) -> None:
+    key = tmp_path / "operator.key"; key.write_bytes(KEY)
+    repo = tmp_path / "repo"; repo.mkdir()
+    subprocess.run(["git", "init", "--quiet", str(repo)], check=True)
+    marker = repo / "operator-executed"
+    policy_path = policy(tmp_path)
+    value = request(
+        tmp_path,
+        repo,
+        policy_path,
+        mutation="repo_write",
+        argv=[sys.executable, "-c", f"open({str(marker)!r},'w').write('ok')"],
+    )
+    request_path = tmp_path / "request.json"
+    request_path.write_text(json.dumps(value))
+    receipt_path = tmp_path / "receipt.json"
+    completed = subprocess.run([
+        sys.executable, "-m", "safeloop.cli", "operator-execute",
+        "--request", str(request_path), "--expected-digest", value["action_digest"], "--receipt", str(receipt_path),
+        "--approval-db", str(tmp_path / "approvals.sqlite3"),
+        "--signing-key-file", str(key), "--policy-root", str(tmp_path / "policies"),
+        "--approved-by", "human-reviewer", "--json",
+    ], text=True, capture_output=True)
+    assert completed.returncode == 0, completed.stderr
+    receipt = json.loads(completed.stdout)
+    assert receipt["status"] == "verified"
+    assert receipt["binding"]["approval_status"] == "EXECUTED"
+    assert marker.read_text() == "ok"
+    assert json.loads(receipt_path.read_text()) == receipt
+    assert receipt_path.stat().st_mode & 0o777 == 0o600
+
+    replay = subprocess.run([
+        sys.executable, "-m", "safeloop.cli", "operator-execute",
+        "--request", str(request_path), "--expected-digest", value["action_digest"], "--receipt", str(receipt_path),
+        "--approval-db", str(tmp_path / "approvals.sqlite3"),
+        "--signing-key-file", str(key), "--policy-root", str(tmp_path / "policies"),
+        "--approved-by", "human-reviewer", "--json",
+    ], text=True, capture_output=True)
+    assert replay.returncode != 0

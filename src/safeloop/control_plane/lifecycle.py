@@ -20,8 +20,9 @@ REJECTED = "REJECTED"
 EXECUTED = "EXECUTED"
 EXPIRED = "EXPIRED"
 REVOKED = "REVOKED"
+FAILED = "FAILED"
 
-TERMINAL_STATUSES = frozenset({REJECTED, EXECUTED, EXPIRED, REVOKED})
+TERMINAL_STATUSES = frozenset({REJECTED, EXECUTED, EXPIRED, REVOKED, FAILED})
 EXECUTABLE_STATUSES = frozenset({APPROVED})
 
 
@@ -173,6 +174,16 @@ class ApprovalLifecycleStore:
         if stored.subject != subject:
             raise ApprovalValidationError("approval subject mismatch")
         return self._store_signed(replace(stored, status=EXECUTED))  # type: ignore[arg-type]
+
+    def fail_execution(self, presented: ApprovalRecord, *, requested_by: str, action: str, subject: str, now: datetime) -> ApprovalRecord:
+        stored = self._records.get(presented.approval_id)
+        if stored is None or stored != presented:
+            raise ApprovalValidationError("approval is stale or tampered")
+        if not verify_approval_record(stored, self._key) or stored.status != IN_FLIGHT:
+            raise ApprovalValidationError("approval is not trusted in-flight")
+        if stored.requested_by != requested_by or stored.action != action or stored.subject != subject:
+            raise ApprovalValidationError("approval execution scope mismatch")
+        return self._store_signed(replace(stored, status=FAILED))  # type: ignore[arg-type]
 
     def execute_once(
         self,

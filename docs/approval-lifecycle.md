@@ -20,6 +20,7 @@ Supported states:
 - `EXECUTED`
 - `EXPIRED`
 - `REVOKED`
+- `FAILED` (terminal execution failure after an `IN_FLIGHT` reservation; never replayable)
 
 Normal execution flow:
 

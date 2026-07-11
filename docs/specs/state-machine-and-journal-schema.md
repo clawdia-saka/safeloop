@@ -448,7 +448,7 @@ This means the journal file is an append-only local event log for all runs, whil
 
 Runtime journal state remains separate from control-plane approval lifecycle state. For mutating actions, `Runtime.run(...)` accepts a lifecycle-capable store such as `SQLiteApprovalLifecycleStore`; lookup-only `ControlPlaneRegistry` instances are rejected for enforcement.
 
-The SQLite lifecycle store persists current approval state in the control-plane `approvals` table and appends transition facts to `approval_events`. Its approval statuses are `REQUESTED`, `APPROVED`, `IN_FLIGHT`, `REJECTED`, `EXECUTED`, `EXPIRED`, and `REVOKED`. Runtime first execution reserves an `APPROVED` approval as `IN_FLIGHT`; successful completion marks it `EXECUTED`; resume validation requires the persisted approval to still be `IN_FLIGHT`.
+The SQLite lifecycle store persists current approval state in the control-plane `approvals` table and appends transition facts to `approval_events`. Its approval statuses are `REQUESTED`, `APPROVED`, `IN_FLIGHT`, `REJECTED`, `EXECUTED`, `EXPIRED`, `REVOKED`, and terminal `FAILED`. Runtime first execution reserves an `APPROVED` approval as `IN_FLIGHT`; successful completion marks it `EXECUTED`; execution failure consumes it as `FAILED`; resume validation requires the persisted approval to still be `IN_FLIGHT`.
 
 ## Rollback public readiness skeleton
 

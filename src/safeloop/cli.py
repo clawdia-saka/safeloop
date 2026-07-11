@@ -36,6 +36,7 @@ from safeloop.compensation import (
 )
 from safeloop.control_plane.anchor_audit import audit_control_plane_anchors
 from safeloop.external_effects import ExternalEffectValidationError, record_external_effect
+from safeloop.execution_api import ExecutionConfig, error_receipt, execute_request, load_request, sign_policy
 from safeloop.html_artifacts import write_docs_packet_html, write_markdown_doc_html, write_readiness_html
 from safeloop.local_anchor import create_local_anchor, verify_local_anchor
 from safeloop.operator_packet import write_operator_packet_v2
@@ -1095,6 +1096,18 @@ def main(argv: list[str] | None = None) -> int:
     w.add_argument("--debounce-ms", type=int, default=750)
     w.add_argument("--max-interval-sec", type=int, default=0)
     w.add_argument("command", nargs=argparse.REMAINDER)
+    execute = sub.add_parser("execute-request", help="Authorize and execute a strict machine-readable local request.")
+    execute.add_argument("--request", required=True)
+    execute.add_argument("--approval-db", required=True)
+    execute.add_argument("--signing-key-file", required=True)
+    execute.add_argument("--policy-root", required=True)
+    execute.add_argument("--json", action="store_true", required=True)
+    sign_exec = sub.add_parser("sign-execution-policy", help="Operator-only: sign a policy into a trusted policy root.")
+    sign_exec.add_argument("--input", required=True)
+    sign_exec.add_argument("--policy-root", required=True)
+    sign_exec.add_argument("--output", required=True, help="Relative output path beneath policy-root.")
+    sign_exec.add_argument("--signing-key-file", required=True)
+    sign_exec.add_argument("--force", action="store_true")
     watch = sub.add_parser("watch")
     watch.add_argument("--loop", action="store_true", help="Run local watchdog loop (0.0.4 alias for watch-run)")
     watch.add_argument("--task-id", required=True)
@@ -1269,6 +1282,57 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"unchanged: {path}")
             print(f"packet dir: {result['packet_dir']}")
         return 0
+    if args.cmd == "sign-execution-policy":
+        try:
+            root = Path(args.policy_root)
+            if not root.is_absolute() or root.is_symlink() or not root.is_dir():
+                raise ValueError("policy root must be an existing absolute non-symlink directory")
+            output = Path(args.output)
+            if output.is_absolute() or ".." in output.parts:
+                raise ValueError("output must be a safe relative path")
+            destination = (root / output).resolve()
+            if root.resolve() not in destination.parents or destination.is_symlink():
+                raise ValueError("output must resolve beneath policy root without a symlink")
+            unresolved = root / output
+            if any(parent.exists() and parent.is_symlink() for parent in (unresolved, *unresolved.parents)):
+                raise ValueError("output must not have a symlink ancestor")
+            if destination.exists() and not args.force:
+                raise FileExistsError("policy already exists; pass --force to overwrite")
+            key_path = Path(args.signing_key_file)
+            if key_path.is_symlink() or not key_path.is_file():
+                raise ValueError("signing key file must be a regular non-symlink file")
+            key = key_path.read_bytes()
+            if len(key) < 32:
+                raise ValueError("signing key must contain at least 32 bytes")
+            policy = json.loads(Path(args.input).read_text(encoding="utf-8"))
+            if not isinstance(policy, dict):
+                raise ValueError("policy input must be a JSON object")
+            unsigned_keys = {"schema_version", "policy_version", "policy_id", "mutation_classes"}
+            if set(policy) - {"signature"} != unsigned_keys or policy.get("schema_version") != "safeloop.execution-policy.v1":
+                raise ValueError("policy input does not match the execution policy schema")
+            atomic_json(destination, sign_policy(policy, key))
+            print(json.dumps({"status": "signed", "policy": str(destination)}, sort_keys=True, separators=(",", ":")))
+            return 0
+        except Exception as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+    if args.cmd == "execute-request":
+        try:
+            key_path = Path(args.signing_key_file)
+            if key_path.is_symlink() or not key_path.is_file():
+                raise ValueError("signing key file must be a regular non-symlink file")
+            signing_key = key_path.read_bytes()
+            if len(signing_key) < 32:
+                raise ValueError("signing key must contain at least 32 bytes")
+            code, receipt = execute_request(
+                load_request(Path(args.request)),
+                ExecutionConfig(Path(args.approval_db), signing_key, Path(args.policy_root)),
+            )
+            print(json.dumps(receipt, sort_keys=True, separators=(",", ":")))
+            return code
+        except Exception as exc:
+            print(json.dumps(error_receipt(exc), sort_keys=True, separators=(",", ":")))
+            return 1
     if args.cmd in {"watch-run", "watch"}:
         if args.cmd == "watch" and not args.loop:
             print("watch requires --loop", file=sys.stderr)

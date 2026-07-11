@@ -6,7 +6,7 @@ import sqlite3
 
 import pytest
 
-from safeloop.control_plane.lifecycle import APPROVED, EXECUTED, EXPIRED, IN_FLIGHT, ApprovalValidationError
+from safeloop.control_plane.lifecycle import APPROVED, EXECUTED, EXPIRED, FAILED, IN_FLIGHT, ApprovalValidationError
 from safeloop.control_plane.sqlite_lifecycle import SQLiteApprovalLifecycleStore
 
 KEY = b"sqlite-lifecycle-test-key"
@@ -47,6 +47,17 @@ def test_execute_once_consumes_approval(tmp_path) -> None:
     assert executed.status == EXECUTED
     with pytest.raises(ApprovalValidationError):
         s.execute_once(approved, requested_by="alice", action="deploy", subject="service-a", now=NOW)
+
+
+def test_failed_execution_is_terminal_and_preserves_no_replay(tmp_path) -> None:
+    s = store(tmp_path)
+    approved = s.approve(requested(s).approval_id, now=NOW)
+    in_flight = s.reserve_for_execution(approved, requested_by="alice", action="deploy", subject="service-a", now=NOW)
+    failed = s.fail_execution(in_flight, requested_by="alice", action="deploy", subject="service-a", now=NOW)
+    assert failed.status == FAILED
+    assert s.list_events("ap-1")[-1].event_type == "FAILED"
+    with pytest.raises(ApprovalValidationError):
+        s.reserve_for_execution(approved, requested_by="alice", action="deploy", subject="service-a", now=NOW)
 
 
 def test_replay_rejected_after_reservation(tmp_path) -> None:

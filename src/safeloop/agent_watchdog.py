@@ -6,13 +6,14 @@ import difflib
 import json
 import os
 import re
+import signal
 import subprocess
 import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import Thread
-from typing import Any, TextIO
+from typing import Any, Callable, TextIO
 
 from safeloop.action_span import verify_action_events
 from safeloop.local_anchor import create_local_anchor, verify_local_anchor
@@ -562,11 +563,15 @@ def watch_run(
     run_root: Path | None = None,
     debounce_ms: int = 750,
     max_interval_sec: int = 0,
+    timeout_sec: int | None = None,
+    pre_spawn: Callable[[Path], None] | None = None,
+    run_id: str | None = None,
 ) -> tuple[int, Path]:
     del max_interval_sec  # Reserved for post-RC interval checkpoints.
     repo = repo.resolve()
     safe_slug = safe_task_slug(task_id)
-    run_id = "run-" + datetime.now().strftime("%Y%m%d-%H%M%S-%f") + f"-{safe_slug}"
+    run_id = run_id or ("run-" + datetime.now().strftime("%Y%m%d-%H%M%S-%f") + f"-{safe_slug}")
+    safe_task_slug(run_id)
     run_root_path = (run_root or Path.home() / ".safeloop" / "runs")
     run_dir = safe_child_dir(run_root_path, run_id)
     run_dir.mkdir(parents=True)
@@ -602,6 +607,9 @@ def watch_run(
     seq = 2
     checkpoint_count = 0
     parent: str | None = None
+
+    if pre_spawn is not None:
+        pre_spawn(run_dir)
 
     child_env = os.environ.copy()
     child_env["SAFELOOP_RUN_DIR"] = str(run_dir)
@@ -707,22 +715,34 @@ def watch_run(
             emit_checkpoint(pending_snap, pending_bytes, pending_source_evidence)
             clear_pending()
 
+    deadline = time.monotonic() + timeout_sec if timeout_sec is not None else None
+    timed_out = False
     while proc.poll() is None:
+        if deadline is not None and time.monotonic() >= deadline:
+            timed_out = True
+            os.killpg(proc.pid, signal.SIGTERM)
+            try:
+                proc.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                os.killpg(proc.pid, signal.SIGKILL)
+                proc.wait()
+            break
         maybe_checkpoint(force=False)
         time.sleep(poll_sec)
     stdout_thread.join(timeout=2); stderr_thread.join(timeout=2)
     maybe_checkpoint(force=True)
 
-    process_result = {"schema_version": "process-result.v1", "exit_code": proc.returncode, "completed_at": now()}
+    exit_code = 124 if timed_out else int(proc.returncode or 0)
+    process_result = {"schema_version": "process-result.v1", "exit_code": exit_code, "completed_at": now(), "timed_out": timed_out}
     atomic_json(run_dir / "process-result.json", process_result)
-    prev = append_event(timeline, seq, "process_exited", {"exit_code": proc.returncode, "artifact_digests": {"process-result.json": sha_file(run_dir / "process-result.json")}}, prev)
+    prev = append_event(timeline, seq, "process_exited", {"exit_code": exit_code, "artifact_digests": {"process-result.json": sha_file(run_dir / "process-result.json")}}, prev)
     seq += 1
-    status = "completed" if proc.returncode == 0 else "failed"
+    status = "completed" if exit_code == 0 else "failed"
     prev = append_event(timeline, seq, "run_closed", {"status": status}, prev)
-    run.update({"ended_at": now(), "status": status, "exit_code": proc.returncode, "checkpoint_count": checkpoint_count, "latest_event_hash": prev, "final_event_hash": prev, "capture_status": "complete"})
+    run.update({"ended_at": now(), "status": status, "exit_code": exit_code, "checkpoint_count": checkpoint_count, "latest_event_hash": prev, "final_event_hash": prev, "capture_status": "complete"})
     atomic_json(run_dir / "run.json", run)
     create_local_anchor(run_dir)
-    return int(proc.returncode or 0), run_dir
+    return int(exit_code or 0), run_dir
 
 
 def timeline_events(run_dir: Path) -> list[dict[str, Any]]:

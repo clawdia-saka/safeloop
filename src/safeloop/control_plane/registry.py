@@ -22,6 +22,7 @@ ApprovalStatus = Literal[
     "EXECUTED",
     "EXPIRED",
     "REVOKED",
+    "FAILED",
 ]
 
 
@@ -290,7 +291,7 @@ def init_control_plane_registry(path: str | Path) -> None:
                 requested_by TEXT NOT NULL,
                 action TEXT NOT NULL,
                 subject TEXT NOT NULL,
-                status TEXT NOT NULL CHECK (status IN ('pending', 'approved', 'rejected', 'expired', 'REQUESTED', 'APPROVED', 'IN_FLIGHT', 'REJECTED', 'EXECUTED', 'EXPIRED', 'REVOKED')),
+                status TEXT NOT NULL CHECK (status IN ('pending', 'approved', 'rejected', 'expired', 'REQUESTED', 'APPROVED', 'IN_FLIGHT', 'REJECTED', 'EXECUTED', 'EXPIRED', 'REVOKED', 'FAILED')),
                 signed_payload TEXT NOT NULL,
                 signature TEXT NOT NULL,
                 created_at TEXT NOT NULL
@@ -365,7 +366,7 @@ def _migrate_approvals_status_constraint(conn: sqlite3.Connection) -> None:
     row = conn.execute(
         "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'approvals'"
     ).fetchone()
-    if row is None or "IN_FLIGHT" in (row[0] or ""):
+    if row is None or "'FAILED'" in (row[0] or ""):
         return
 
     conn.execute("PRAGMA foreign_keys = OFF")
@@ -376,7 +377,7 @@ def _migrate_approvals_status_constraint(conn: sqlite3.Connection) -> None:
             requested_by TEXT NOT NULL,
             action TEXT NOT NULL,
             subject TEXT NOT NULL,
-            status TEXT NOT NULL CHECK (status IN ('pending', 'approved', 'rejected', 'expired', 'REQUESTED', 'APPROVED', 'IN_FLIGHT', 'REJECTED', 'EXECUTED', 'EXPIRED', 'REVOKED')),
+            status TEXT NOT NULL CHECK (status IN ('pending', 'approved', 'rejected', 'expired', 'REQUESTED', 'APPROVED', 'IN_FLIGHT', 'REJECTED', 'EXECUTED', 'EXPIRED', 'REVOKED', 'FAILED')),
             signed_payload TEXT NOT NULL,
             signature TEXT NOT NULL,
             created_at TEXT NOT NULL

@@ -3,8 +3,8 @@
 SafeLoop remains the authorization, audit, execution-watch, artifact-verification, and anchor
 authority. QuorumRouter supplies a request; it does not supply an allow decision.
 
-Create an unsigned policy input, then have an operator sign it into a trusted root. Agents must
-not have access to the signing key:
+Create an unsigned policy input, then have an operator sign it into a trusted root. Signing-key
+bytes must never enter model prompts, action payloads, receipts, or spawned child environments:
 
 ```json
 {"schema_version":"safeloop.execution-policy.v1","policy_version":"2026-07-11","policy_id":"local-quorum","mutation_classes":{"read_only":{"allow":true,"require_approval":false},"repo_write":{"allow":true,"require_approval":true},"shell_write":{"allow":true,"require_approval":true}}}
@@ -20,29 +20,31 @@ Build the complete request object with a placeholder `action_digest`, then compu
 using `safeloop.execution_api.canonical_action_digest`. The digest excludes only
 `action_digest` and `approval_id`, allowing an approval id to be attached after authorization.
 
-For a write request, create and approve the durable signed approval with the existing lifecycle:
+For a write request, QuorumRouter writes the immutable request to an out-of-repo
+broker directory. It does not receive the signing-key path or bytes. A distinct
+operator reviews the digest and invokes the combined approval/execution command:
 
-```python
-from datetime import datetime, timezone
-from pathlib import Path
-from safeloop.control_plane.sqlite_lifecycle import SQLiteApprovalLifecycleStore
-
-key = Path("/absolute/private/safeloop-signing.key").read_bytes()
-store = SQLiteApprovalLifecycleStore("/absolute/private/control-plane.sqlite3", key)
-now = datetime.now(timezone.utc)
-store.request(
-    approval_id="approval-123", requested_by="quorum-agent",
-    action="execute:repo_write", subject="sha256:<request-action-digest>", created_at=now,
-)
-store.approve("approval-123", now=now, approved_by="human-operator")
+```bash
+safeloop operator-execute \
+  --request /absolute/broker/<id>.request.json \
+  --expected-digest sha256:<operator-reviewed-digest> \
+  --receipt /absolute/broker/<id>.receipt.json \
+  --approval-db /absolute/private/control-plane.sqlite3 \
+  --signing-key-file /absolute/private/safeloop-signing.key \
+  --policy-root /absolute/operator/policies \
+  --approved-by human-operator \
+  --json
 ```
 
-The approver must differ from `requested_by`. Use a random key of at least 32 bytes, store it in
-a permission-restricted local file, and never put it in the request or command line. The trusted
-SafeLoop executor reads it for verification; the spawned agent process does not receive the key
-or its path.
+The command rejects caller-selected approval ids, recomputes the canonical digest,
+creates a signed approval record, enforces a distinct approver, executes the exact
+request, verifies artifacts and the local anchor, and atomically writes a mode-0600
+receipt. The requester can only poll that receipt. Use a random key of at least 32
+bytes in a permission-restricted operator file. The QuorumRouter process must run
+without read access to that file.
 
-Execute:
+Low-level `execute-request` remains available for a trusted co-process that already
+owns the signing key. Do not expose this form to an agent/requester process:
 
 ```bash
 safeloop execute-request \

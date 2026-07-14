@@ -332,6 +332,13 @@ External side effects require compensation or manual review and are not exact ro
 are tamper-evident review aids, not tamper-proof guarantees. SafeLoop does not claim a remote
 transparency log unless one is explicitly implemented and configured.
 
+## License
+
+SafeLoop is MIT-licensed open source. Commercial and production use are
+permitted under the [MIT License](LICENSE). The grant applies retroactively to
+every version, commit, branch, and tag, including snapshots that predate the
+license file; see [LICENSE-HISTORY.md](LICENSE-HISTORY.md).
+
 ## Historical references
 
 These documents describe earlier release boundaries and remain useful for context, but SafeLoop 0.2.0 is the current source version described above:

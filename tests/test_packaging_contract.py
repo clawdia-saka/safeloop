@@ -17,7 +17,7 @@ def test_project_declares_runtime_dependencies_and_api_extra() -> None:
     assert project["requires-python"] == ">=3.11"
     assert project["readme"] == "README.md"
     assert project["license"] == "MIT"
-    assert project["license-files"] == ["LICENSE"]
+    assert project["license-files"] == ["LICENSE", "LICENSE-HISTORY.md"]
     assert "Local watchdog" in project["description"]
     assert "pydantic>=2,<3" in project["dependencies"]
     assert "fastapi>=0.110" in project["optional-dependencies"]["api"]

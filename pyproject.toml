@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 authors = [{ name = "Nous Research" }]
 license = "MIT"
-license-files = ["LICENSE"]
+license-files = ["LICENSE", "LICENSE-HISTORY.md"]
 keywords = ["ai-agents", "watchdog", "rollback", "audit", "cli"]
 classifiers = [
   "Development Status :: 3 - Alpha",

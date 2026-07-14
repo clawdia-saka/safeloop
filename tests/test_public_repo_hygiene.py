@@ -9,6 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def test_public_community_files_exist() -> None:
     required = [
         "LICENSE",
+        "LICENSE-HISTORY.md",
         "SECURITY.md",
         "CONTRIBUTING.md",
         "CODE_OF_CONDUCT.md",
@@ -26,10 +27,16 @@ def test_public_community_files_exist() -> None:
 
 def test_license_and_security_policy_are_public_ready() -> None:
     license_text = (ROOT / "LICENSE").read_text(encoding="utf-8")
+    license_history = (ROOT / "LICENSE-HISTORY.md").read_text(encoding="utf-8")
+    readme_text = (ROOT / "README.md").read_text(encoding="utf-8")
     security_text = (ROOT / "SECURITY.md").read_text(encoding="utf-8")
 
     assert "MIT License" in license_text
     assert "Copyright (c) 2026 Nous Research" in license_text
+    assert "every version, commit, branch, and tag" in license_history
+    assert "v0.1.4" in license_history
+    assert "commercial use, and production use" in license_history
+    assert "LICENSE-HISTORY.md" in readme_text
     assert "GitHub private vulnerability reporting" in security_text
     assert "not claim tamper-proof storage" in security_text
 
@@ -58,5 +65,5 @@ def test_pyproject_exposes_release_metadata() -> None:
     project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]
 
     assert project["license"] == "MIT"
-    assert project["license-files"] == ["LICENSE"]
+    assert project["license-files"] == ["LICENSE", "LICENSE-HISTORY.md"]
     assert "dev" in project["optional-dependencies"]

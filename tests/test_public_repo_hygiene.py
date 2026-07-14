@@ -29,14 +29,22 @@ def test_license_and_security_policy_are_public_ready() -> None:
     license_text = (ROOT / "LICENSE").read_text(encoding="utf-8")
     license_history = (ROOT / "LICENSE-HISTORY.md").read_text(encoding="utf-8")
     readme_text = (ROOT / "README.md").read_text(encoding="utf-8")
+    normalized_readme = " ".join(readme_text.split())
     security_text = (ROOT / "SECURITY.md").read_text(encoding="utf-8")
+    readiness_script = (ROOT / "scripts" / "public_readiness.py").read_text(encoding="utf-8")
 
     assert "MIT License" in license_text
+    assert "Permission is hereby granted, free of charge" in license_text
     assert "Copyright (c) 2026 Nous Research" in license_text
-    assert "every version, commit, branch, and tag" in license_history
+    assert "every version, commit, branch, and tag existing as of that date" in license_history
     assert "v0.1.4" in license_history
     assert "commercial use, and production use" in license_history
+    assert (
+        "The grant applies retroactively to every version, commit, branch, and tag "
+        "existing through July 14, 2026"
+    ) in normalized_readme
     assert "LICENSE-HISTORY.md" in readme_text
+    assert 'ROOT / "LICENSE-HISTORY.md"' in readiness_script
     assert "GitHub private vulnerability reporting" in security_text
     assert "not claim tamper-proof storage" in security_text
 

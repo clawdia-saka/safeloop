@@ -16,6 +16,7 @@ DEMO = ROOT / "examples" / "rollback_selective_demo.sh"
 FULL_DEMO = ROOT / "examples" / "full_demo.sh"
 COMMUNITY_FILES = [
     ROOT / "LICENSE",
+    ROOT / "LICENSE-HISTORY.md",
     ROOT / "SECURITY.md",
     ROOT / "CONTRIBUTING.md",
     ROOT / "CODE_OF_CONDUCT.md",

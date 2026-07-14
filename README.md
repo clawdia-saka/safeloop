@@ -336,8 +336,9 @@ transparency log unless one is explicitly implemented and configured.
 
 SafeLoop is MIT-licensed open source. Commercial and production use are
 permitted under the [MIT License](LICENSE). The grant applies retroactively to
-every version, commit, branch, and tag, including snapshots that predate the
-license file; see [LICENSE-HISTORY.md](LICENSE-HISTORY.md).
+every version, commit, branch, and tag existing through July 14, 2026, including
+snapshots that predate the license file; see
+[LICENSE-HISTORY.md](LICENSE-HISTORY.md).
 
 ## Historical references
 
